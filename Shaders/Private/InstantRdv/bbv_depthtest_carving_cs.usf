@@ -1,3 +1,7 @@
+// ファイル名: bbv_depthtest_carving_cs.usf
+// ファイル説明: Frustum候補Brickに対してFineVoxel(bitmask bit)単位でDepthTest Carvingを実行する。
+// 1thread=1u32 jobに分解し、WaveReadLaneAtで同一Brick座標計算を共有して処理を軽量化する。
+
 #include "/Engine/Public/Platform.ush"
 
 Texture2D<float> SceneDepthTexture;
@@ -12,85 +16,170 @@ uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
+uint BbvPerVoxelResolution;
 float3 ToroidalOffsetCells;
 float3 GridMinPositionWs;
 float CellSizeCm;
-float3 CameraPositionWs;
+float4x4 ViewMatrix;
 float4x4 ViewProjectionMatrix;
 float4x4 InvViewProjectionMatrix;
 
+bool IsValidDepth(float DeviceDepth)
+{
+    return (0.0 < DeviceDepth) && (DeviceDepth < 1.0);
+}
+
 int3 UnwrapLogicalBrickCoord(uint3 PhysicalCoord)
 {
-    int3 logical = int3(PhysicalCoord) - int3(ToroidalOffsetCells + 0.5);
-    logical.x = ((logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
-    logical.y = ((logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
-    logical.z = ((logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
-    return logical;
+    int3 Logical = int3(PhysicalCoord) - int3(ToroidalOffsetCells + 0.5);
+    Logical.x = ((Logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    Logical.y = ((Logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    Logical.z = ((Logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return Logical;
+}
+
+uint3 DecodeSubbrickMortonBitIndex(uint MortonBitIndex)
+{
+    uint3 Local;
+    Local.x = ((MortonBitIndex >> 0u) & 1u) | (((MortonBitIndex >> 3u) & 1u) << 1u);
+    Local.y = ((MortonBitIndex >> 1u) & 1u) | (((MortonBitIndex >> 4u) & 1u) << 1u);
+    Local.z = ((MortonBitIndex >> 2u) & 1u) | (((MortonBitIndex >> 5u) & 1u) << 1u);
+    return Local;
+}
+
+uint3 DecodeFineBitIndex(uint BitIndex)
+{
+    if (BbvPerVoxelResolution == 8u)
+    {
+        const uint SubbrickIndex = BitIndex / 64u;
+        const uint MortonBitIndex = BitIndex % 64u;
+        const uint3 SubbrickCoord = uint3(
+            SubbrickIndex & 1u,
+            (SubbrickIndex >> 1u) & 1u,
+            (SubbrickIndex >> 2u) & 1u);
+        const uint3 SubbrickLocal = DecodeSubbrickMortonBitIndex(MortonBitIndex);
+        return SubbrickCoord * 4u + SubbrickLocal;
+    }
+
+    const uint XY = BbvPerVoxelResolution * BbvPerVoxelResolution;
+    const uint Z = BitIndex / XY;
+    const uint Rem = BitIndex - Z * XY;
+    const uint Y = Rem / BbvPerVoxelResolution;
+    const uint X = Rem - Y * BbvPerVoxelResolution;
+    return uint3(X, Y, Z);
 }
 
 float3 ReconstructWorldPos(float2 Uv, float DeviceDepth)
 {
-    const float2 ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
-    float4 world = mul(float4(ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
-    world.xyz /= max(abs(world.w), 1e-6);
-    return world.xyz;
+    const float2 Ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    World.xyz /= max(abs(World.w), 1e-6);
+    return World.xyz;
 }
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    const uint JobIndex = DispatchThreadId.x;
-    if (JobIndex >= FrustumBrickCounter[0])
+    // 1. Active Brick List を (Brick, U32Offset) ジョブへ展開する。
+    const uint ActiveBrickCount = FrustumBrickCounter[0];
+    const uint U32PerBrick = BitmaskWordsPerBrick;
+    const uint TotalU32Jobs = ActiveBrickCount * U32PerBrick;
+    if (DispatchThreadId.x >= TotalU32Jobs)
     {
         return;
     }
 
-    const uint BrickIndex = FrustumBrickList[JobIndex];
+    const uint BrickListIndex = DispatchThreadId.x / U32PerBrick;
+    const uint U32Offset = DispatchThreadId.x - BrickListIndex * U32PerBrick;
+    const uint LaneBrickIndex = FrustumBrickList[BrickListIndex];
 
-    const uint SliceStride = GridResolutionX * GridResolutionY;
-    const uint PhysicalZ = BrickIndex / SliceStride;
-    const uint Rem = BrickIndex - PhysicalZ * SliceStride;
-    const uint PhysicalY = Rem / GridResolutionX;
-    const uint PhysicalX = Rem - PhysicalY * GridResolutionX;
-    const uint3 PhysicalCoord = uint3(PhysicalX, PhysicalY, PhysicalZ);
-    const int3 LogicalCoord = UnwrapLogicalBrickCoord(PhysicalCoord);
+    // 2. 同一Brick担当laneで座標計算を共有する（Wave最適化）。
+    const uint LaneIndex = WaveGetLaneIndex();
+    const uint SlotFirstLane = (LaneIndex / U32PerBrick) * U32PerBrick;
+    const uint BrickIndex = WaveReadLaneAt(LaneBrickIndex, SlotFirstLane);
 
-    const float3 BrickCenterWs = GridMinPositionWs + (float3(LogicalCoord) + 0.5) * CellSizeCm;
-    const float4 ClipPos = mul(float4(BrickCenterWs, 1.0), ViewProjectionMatrix);
-    if (ClipPos.w <= 1e-6)
+    int3 LogicalCoord = int3(0, 0, 0);
+    if (LaneIndex == SlotFirstLane)
+    {
+        const uint SliceStride = GridResolutionX * GridResolutionY;
+        const uint PhysicalZ = BrickIndex / SliceStride;
+        const uint Rem = BrickIndex - PhysicalZ * SliceStride;
+        const uint PhysicalY = Rem / GridResolutionX;
+        const uint PhysicalX = Rem - PhysicalY * GridResolutionX;
+        LogicalCoord = UnwrapLogicalBrickCoord(uint3(PhysicalX, PhysicalY, PhysicalZ));
+    }
+    LogicalCoord.x = WaveReadLaneAt(LogicalCoord.x, SlotFirstLane);
+    LogicalCoord.y = WaveReadLaneAt(LogicalCoord.y, SlotFirstLane);
+    LogicalCoord.z = WaveReadLaneAt(LogicalCoord.z, SlotFirstLane);
+
+    // 3. このlane担当u32ブロックを取り出し、立っているbitのみ走査する。
+    const float3 BrickOriginWs = GridMinPositionWs + float3(LogicalCoord) * CellSizeCm;
+    const float3 BitCellStepWs = CellSizeCm / max(float(BbvPerVoxelResolution), 1.0);
+    const uint WordAddress = BrickIndex * BitmaskWordsPerBrick + U32Offset;
+
+    uint BitBlock = RWBitmaskBrickVoxel[WordAddress];
+    if (WaveActiveCountBits(BitBlock != 0u) == 0u)
     {
         return;
     }
 
-    const float2 Ndc = ClipPos.xy / ClipPos.w;
-    const float2 SampleUv = float2(Ndc.x * 0.5 + 0.5, 1.0 - (Ndc.y * 0.5 + 0.5));
-    if (any(SampleUv < 0.0) || any(SampleUv > 1.0))
-    {
-        return;
-    }
-
-    const uint2 DepthCoord = uint2(
-        min(uint(SampleUv.x * DepthSizeX), DepthSizeX - 1u),
-        min(uint(SampleUv.y * DepthSizeY), DepthSizeY - 1u));
-    const float DeviceDepth = SceneDepthTexture.Load(int3(DepthCoord, 0));
-    if (DeviceDepth >= 1.0)
-    {
-        return;
-    }
-
-    const float3 SurfacePosWs = ReconstructWorldPos(SampleUv, DeviceDepth);
-    const float DistToBrick = distance(CameraPositionWs, BrickCenterWs);
-    const float DistToSurface = distance(CameraPositionWs, SurfacePosWs);
-    const float CarveBias = CellSizeCm * 0.75;
-    if (DistToSurface + CarveBias >= DistToBrick)
-    {
-        return;
-    }
-
-    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
+    uint RemainMask = BitBlock;
+    uint ScanMask = BitBlock;
     [loop]
-    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+    while (ScanMask != 0u)
     {
-        RWBitmaskBrickVoxel[WordStart + WordOffset] = 0u;
+        const uint BitInU32 = firstbitlow(ScanMask);
+        const uint BitValue = (1u << BitInU32);
+        ScanMask &= (ScanMask - 1u);
+
+        const uint BitIndex = U32Offset * 32u + BitInU32;
+        const uint3 BitCellPos = DecodeFineBitIndex(BitIndex);
+        const float3 BitCellCenterWs = BrickOriginWs + (float3(BitCellPos) + 0.5) * BitCellStepWs;
+        const float3 BitCellCenterVs = mul(float4(BitCellCenterWs, 1.0), ViewMatrix).xyz;
+        const float4 BitCellCenterCs = mul(float4(BitCellCenterWs, 1.0), ViewProjectionMatrix);
+        if (abs(BitCellCenterCs.w) <= 1e-6)
+        {
+            continue;
+        }
+
+        const float3 Ndc = BitCellCenterCs.xyz / BitCellCenterCs.w;
+        if (Ndc.z < 0.0 || Ndc.z > 1.0)
+        {
+            continue;
+        }
+        const float2 Uv = float2(Ndc.x * 0.5 + 0.5, -Ndc.y * 0.5 + 0.5);
+        if (any(Uv < 0.0) || any(Uv > 1.0))
+        {
+            continue;
+        }
+
+        const uint2 DepthCoord = uint2(
+            min(uint(Uv.x * DepthSizeX), DepthSizeX - 1u),
+            min(uint(Uv.y * DepthSizeY), DepthSizeY - 1u));
+        const float SurfaceDepth = SceneDepthTexture.Load(int3(DepthCoord, 0));
+        if (!IsValidDepth(SurfaceDepth))
+        {
+            // MainView no-depth は空間側なので除去する。
+            RemainMask &= ~BitValue;
+            continue;
+        }
+
+        const float3 SurfacePosWs = ReconstructWorldPos(Uv, SurfaceDepth);
+        const float3 SurfacePosVs = mul(float4(SurfacePosWs, 1.0), ViewMatrix).xyz;
+        const float SurfaceViewZ = SurfacePosVs.z;
+
+        // セル中心ではなく外接球のカメラ側最近点で前後判定する。
+        const float CenterLenSq = dot(BitCellCenterVs, BitCellCenterVs);
+        const float3 CenterDir = (CenterLenSq > 1e-10) ? (BitCellCenterVs * rsqrt(CenterLenSq)) : float3(0.0, 0.0, 1.0);
+        const float BitCellSphereRadius = 0.5 * length(BitCellStepWs);
+        const float3 BitCellNearestVs = BitCellCenterVs - CenterDir * BitCellSphereRadius;
+        const float BitCellNearestViewZ = BitCellNearestVs.z;
+        if (BitCellNearestViewZ < SurfaceViewZ)
+        {
+            RemainMask &= ~BitValue;
+        }
     }
+
+    // 4. lane担当u32を書き戻す。
+    RWBitmaskBrickVoxel[WordAddress] = RemainMask;
 }

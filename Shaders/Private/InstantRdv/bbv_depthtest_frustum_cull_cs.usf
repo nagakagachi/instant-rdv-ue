@@ -1,3 +1,7 @@
+// ファイル名: bbv_depthtest_frustum_cull_cs.usf
+// ファイル説明: Removal対象のBrick候補をFrustum内かつ占有あり条件で収集する。
+// WavePrefixCountBits で候補を圧縮し、global counterへのatomicを1 wave 1回へ集約する。
+
 #include "/Engine/Public/Platform.ush"
 
 StructuredBuffer<uint> BitmaskBrickVoxel;
@@ -6,33 +10,79 @@ RWStructuredBuffer<uint> RWFrustumBrickList;
 
 uint BrickCount;
 uint BitmaskWordsPerBrick;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+float3 ToroidalOffsetCells;
+float3 GridMinPositionWs;
+float CellSizeCm;
+float4x4 ViewProjectionMatrix;
+
+int3 UnwrapLogicalBrickCoord(uint3 PhysicalCoord)
+{
+    int3 Logical = int3(PhysicalCoord) - int3(ToroidalOffsetCells + 0.5);
+    Logical.x = ((Logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    Logical.y = ((Logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    Logical.z = ((Logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return Logical;
+}
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    const uint BrickIndex = DispatchThreadId.x;
-    if (BrickIndex >= BrickCount)
+    // 1. このlaneが有効候補Brickを持つか判定する。
+    bool bHasCandidate = false;
+    uint CandidateBrickIndex = 0u;
+
+    if (DispatchThreadId.x < BrickCount)
     {
-        return;
+        const uint BrickIndex = DispatchThreadId.x;
+        const uint SliceStride = GridResolutionX * GridResolutionY;
+        const uint PhysicalZ = BrickIndex / SliceStride;
+        const uint Rem = BrickIndex - PhysicalZ * SliceStride;
+        const uint PhysicalY = Rem / GridResolutionX;
+        const uint PhysicalX = Rem - PhysicalY * GridResolutionX;
+        const uint3 PhysicalCoord = uint3(PhysicalX, PhysicalY, PhysicalZ);
+        const int3 LogicalCoord = UnwrapLogicalBrickCoord(PhysicalCoord);
+
+        const float3 BrickCenterWs = GridMinPositionWs + (float3(LogicalCoord) + 0.5) * CellSizeCm;
+        const float4 BrickCenterCs = mul(float4(BrickCenterWs, 1.0), ViewProjectionMatrix);
+        if (abs(BrickCenterCs.w) > 1e-6)
+        {
+            const float3 Ndc = BrickCenterCs.xyz / BrickCenterCs.w;
+            const bool bInsideFrustum = (abs(Ndc.x) <= 1.0) && (abs(Ndc.y) <= 1.0);
+            if (bInsideFrustum)
+            {
+                const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
+                uint OccupiedBits = 0u;
+                [loop]
+                for (uint WordOffset = 0u; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+                {
+                    OccupiedBits |= BitmaskBrickVoxel[WordStart + WordOffset];
+                }
+                bHasCandidate = (OccupiedBits != 0u);
+                CandidateBrickIndex = BrickIndex;
+            }
+        }
     }
 
-    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
-    uint AnyOccupied = 0u;
-    [loop]
-    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
-    {
-        AnyOccupied |= BitmaskBrickVoxel[WordStart + WordOffset];
-    }
+    // 2. wave内候補をコンパクションし、1 wave 1回のatomicでlist予約する。
+    const uint LaneLocalOffset = WavePrefixCountBits(bHasCandidate);
+    const uint WaveCandidateCount = WaveActiveCountBits(bHasCandidate);
 
-    if (AnyOccupied == 0u)
+    uint WaveReservedBegin = 0u;
+    if (WaveIsFirstLane() && (WaveCandidateCount != 0u))
     {
-        return;
+        InterlockedAdd(RWFrustumBrickCounter[0], WaveCandidateCount, WaveReservedBegin);
     }
+    const uint WaveBaseIndex = WaveReadLaneFirst(WaveReservedBegin);
 
-    uint WriteIndex = 0u;
-    InterlockedAdd(RWFrustumBrickCounter[0], 1u, WriteIndex);
-    if (WriteIndex < BrickCount)
+    if (bHasCandidate)
     {
-        RWFrustumBrickList[WriteIndex] = BrickIndex;
+        const uint WriteIndex = WaveBaseIndex + LaneLocalOffset;
+        if (WriteIndex < BrickCount)
+        {
+            RWFrustumBrickList[WriteIndex] = CandidateBrickIndex;
+        }
     }
 }

@@ -1,3 +1,7 @@
+// ファイル名: bbv_depthtest_injection_apply_cs.usf
+// ファイル説明: MainView Depth から BBV Occupancy を更新する Injection パス。
+// Wave 単位で同一書き込み先を統合し、AtomicOr 競合を低減する。
+
 #include "/Engine/Public/Platform.ush"
 
 Texture2D<float> SceneDepthTexture;
@@ -14,48 +18,100 @@ uint BbvPerVoxelResolution;
 float3 ToroidalOffsetCells;
 float3 GridMinPositionWs;
 float CellSizeCm;
+float DepthtestInjectionWorldOffsetCm;
+float3 CameraPositionWs;
 float4x4 InvViewProjectionMatrix;
 
 #include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
 
 float3 ReconstructWorldPos(uint2 PixelCoord, float DeviceDepth)
 {
-    const float2 uv = (float2(PixelCoord) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
-    const float2 ndc = float2(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
-    float4 world = mul(float4(ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
-    world.xyz /= max(abs(world.w), 1e-6);
-    return world.xyz;
+    const float2 Uv = (float2(PixelCoord) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
+    const float2 Ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    World.xyz /= max(abs(World.w), 1e-6);
+    return World.xyz;
+}
+
+bool IsValidDepth(float DeviceDepth)
+{
+    // Reverse-Z / non-Reverse-Z の両方で無限遠を除外する。
+    return (0.0 < DeviceDepth) && (DeviceDepth < 1.0);
+}
+
+bool BallotAny(uint4 BallotMask)
+{
+    return (BallotMask.x | BallotMask.y | BallotMask.z | BallotMask.w) != 0u;
+}
+
+uint FirstLaneFromBallot(uint4 BallotMask)
+{
+    if (BallotMask.x != 0u) { return firstbitlow(BallotMask.x) + 0u; }
+    if (BallotMask.y != 0u) { return firstbitlow(BallotMask.y) + 32u; }
+    if (BallotMask.z != 0u) { return firstbitlow(BallotMask.z) + 64u; }
+    return firstbitlow(BallotMask.w) + 96u;
 }
 
 [numthreads(8, 8, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    if (DispatchThreadId.x >= DepthSizeX || DispatchThreadId.y >= DepthSizeY)
+    // 1. 入力深度から注入候補セルと書き込み情報を計算する。
+    bool bHasInjection = false;
+    uint TargetWordAddress = 0u;
+    uint TargetBitMask = 0u;
+
+    if (DispatchThreadId.x < DepthSizeX && DispatchThreadId.y < DepthSizeY)
     {
-        return;
+        const float DeviceDepth = SceneDepthTexture.Load(int3(DispatchThreadId.xy, 0));
+        if (IsValidDepth(DeviceDepth))
+        {
+            float3 WorldPos = ReconstructWorldPos(DispatchThreadId.xy, DeviceDepth);
+
+            // 表面注入直後にRemovalへ消されにくくするため、視線奥へ微小オフセットする。
+            const float3 ToSurface = WorldPos - CameraPositionWs;
+            const float ToSurfaceLenSq = dot(ToSurface, ToSurface);
+            const float3 ViewDir = (ToSurfaceLenSq > 1e-10) ? (ToSurface * rsqrt(ToSurfaceLenSq)) : float3(0.0, 0.0, 1.0);
+            WorldPos += ViewDir * DepthtestInjectionWorldOffsetCm;
+
+            const float3 GridPos = (WorldPos - GridMinPositionWs) / max(CellSizeCm, 0.001);
+            const int3 LogicalBrickCoord = int3(floor(GridPos));
+            if (all(LogicalBrickCoord >= 0) &&
+                LogicalBrickCoord.x < int(GridResolutionX) &&
+                LogicalBrickCoord.y < int(GridResolutionY) &&
+                LogicalBrickCoord.z < int(GridResolutionZ))
+            {
+                const uint3 BrickCoord = WrapBrickCoord(LogicalBrickCoord);
+                const uint BrickIndex = FlattenBrickCoord(BrickCoord);
+                const float3 BrickLocal = frac(GridPos);
+                const uint3 FineCoord = min(
+                    uint3(BrickLocal * BbvPerVoxelResolution),
+                    uint3(BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1));
+
+                const uint BitIndex = CalcFineBitIndex(FineCoord);
+                const uint WordOffset = (BitIndex / 32u);
+                TargetWordAddress = BrickIndex * BitmaskWordsPerBrick + WordOffset;
+                TargetBitMask = 1u << (BitIndex & 31u);
+                bHasInjection = true;
+            }
+        }
     }
 
-    const float DeviceDepth = SceneDepthTexture.Load(int3(DispatchThreadId.xy, 0));
-    if (DeviceDepth >= 1.0f)
+    // 2. Wave 内で同一 (WordAddress) を統合して AtomicOr 回数を削減する。
+    uint4 PendingLanes = WaveActiveBallot(bHasInjection);
+    while (BallotAny(PendingLanes))
     {
-        return;
+        const uint LeaderLane = FirstLaneFromBallot(PendingLanes);
+        const uint LeaderAddress = WaveReadLaneAt(TargetWordAddress, LeaderLane);
+
+        const bool bSameTarget = bHasInjection && (TargetWordAddress == LeaderAddress);
+        const uint4 SameTargetLanes = WaveActiveBallot(bSameTarget);
+        const uint MergedBitMask = WaveActiveBitOr(bSameTarget ? TargetBitMask : 0u);
+
+        if (WaveGetLaneIndex() == LeaderLane)
+        {
+            InterlockedOr(RWBitmaskBrickVoxel[LeaderAddress], MergedBitMask);
+        }
+
+        PendingLanes &= ~SameTargetLanes;
     }
-
-    const float3 WorldPos = ReconstructWorldPos(DispatchThreadId.xy, DeviceDepth);
-    const float3 GridPos = (WorldPos - GridMinPositionWs) / max(CellSizeCm, 0.001);
-    const int3 LogicalBrickCoord = int3(floor(GridPos));
-    if (any(LogicalBrickCoord < 0) || LogicalBrickCoord.x >= int(GridResolutionX) || LogicalBrickCoord.y >= int(GridResolutionY) || LogicalBrickCoord.z >= int(GridResolutionZ))
-    {
-        return;
-    }
-
-    const uint3 BrickCoord = WrapBrickCoord(LogicalBrickCoord);
-    const uint BrickIndex = FlattenBrickCoord(BrickCoord);
-
-    const float3 BrickLocal = frac(GridPos);
-    const uint3 FineCoord = min(uint3(BrickLocal * BbvPerVoxelResolution), uint3(BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1));
-    const uint BitIndex = CalcFineBitIndex(FineCoord);
-    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (BitIndex / 32u);
-    const uint WordMask = 1u << (BitIndex & 31u);
-    InterlockedOr(RWBitmaskBrickVoxel[WordIndex], WordMask);
 }

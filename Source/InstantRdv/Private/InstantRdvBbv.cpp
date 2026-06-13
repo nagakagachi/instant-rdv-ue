@@ -26,6 +26,12 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvReset(
     TEXT("Force BBV buffer reinitialization.\n0: Keep persistent BBV state\n1: Clear BBV state this frame"),
     ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionWorldOffsetCm(
+    TEXT("r.InstantRdv.Bbv.DepthtestInjectionWorldOffsetCm"),
+    3.0f,
+    TEXT("Depthtest Injectionで、再構築サーフェス位置を視線方向へ押し込む距離(cm)。"),
+    ECVF_RenderThreadSafe);
+
 class FInstantRdvBbvBeginUpdateCS final : public FGlobalShader
 {
 public:
@@ -74,6 +80,8 @@ public:
         SHADER_PARAMETER(FVector3f, ToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, GridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
+        SHADER_PARAMETER(float, DepthtestInjectionWorldOffsetCm)
+        SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
         SHADER_PARAMETER_SAMPLER(SamplerState, SceneDepthSampler)
@@ -90,6 +98,13 @@ public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, BrickCount)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
+        SHADER_PARAMETER(uint32, GridResolutionX)
+        SHADER_PARAMETER(uint32, GridResolutionY)
+        SHADER_PARAMETER(uint32, GridResolutionZ)
+        SHADER_PARAMETER(FVector3f, ToroidalOffsetCells)
+        SHADER_PARAMETER(FVector3f, GridMinPositionWs)
+        SHADER_PARAMETER(float, CellSizeCm)
+        SHADER_PARAMETER(FMatrix44f, ViewProjectionMatrix)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFrustumBrickCounter)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFrustumBrickList)
@@ -104,6 +119,8 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrustumBrickCounter)
+        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
+        SHADER_PARAMETER(uint32, ThreadGroupSizeX)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RWFrustumBrickIndirectArg)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -121,10 +138,11 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
+        SHADER_PARAMETER(uint32, BbvPerVoxelResolution)
         SHADER_PARAMETER(FVector3f, ToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, GridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
-        SHADER_PARAMETER(FVector3f, CameraPositionWs)
+        SHADER_PARAMETER(FMatrix44f, ViewMatrix)
         SHADER_PARAMETER(FMatrix44f, ViewProjectionMatrix)
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
@@ -420,6 +438,8 @@ void FInstantRdvBbv::Execute(
         Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
         Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
         Parameters->CellSizeCm = Config.BbvVoxelSizeCm;
+        Parameters->DepthtestInjectionWorldOffsetCm = CVarInstantRdvBbvDepthtestInjectionWorldOffsetCm.GetValueOnRenderThread();
+        Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
         Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
         Parameters->SceneDepthTexture = SceneDepthTexture;
         Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
@@ -454,6 +474,13 @@ void FInstantRdvBbv::Execute(
             FInstantRdvBbvDepthFrustumCullCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthFrustumCullCS::FParameters>();
             Parameters->BrickCount = BrickCount;
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
+            Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
+            Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+            Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
+            Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
+            Parameters->CellSizeCm = Config.BbvVoxelSizeCm;
+            Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
             Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
             Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
@@ -462,13 +489,19 @@ void FInstantRdvBbv::Execute(
             FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthFrustumCull"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
         }
 
-        // frustum cull の結果カウンタから、DispatchIndirect 用 args を毎フレーム再構築する。
-        FrustumBrickIndirectArgBuffer = FComputeShaderUtils::AddIndirectArgsSetupCsPass1D(
-            GraphBuilder,
-            View.GetFeatureLevel(),
-            FrustumBrickCounterBuffer,
-            TEXT("InstantRdv.BbvFrustumBrickIndirectArg"),
-            1u);
+        // Frustum候補数から、Carving(1thread=1u32 job)向けのDispatchIndirect引数を生成する。
+        FrustumBrickIndirectArgBuffer = GraphBuilder.CreateBuffer(
+            FRDGBufferDesc::CreateIndirectDesc<FRHIDispatchIndirectParameters>(1),
+            TEXT("InstantRdv.BbvFrustumBrickIndirectArg"));
+        {
+            FInstantRdvBbvDepthCarvingIndirectArgBuildCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthCarvingIndirectArgBuildCS::FParameters>();
+            Parameters->FrustumBrickCounter = GraphBuilder.CreateSRV(FrustumBrickCounterBuffer);
+            Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
+            Parameters->ThreadGroupSizeX = 64u;
+            Parameters->RWFrustumBrickIndirectArg = GraphBuilder.CreateUAV(FRDGBufferUAVDesc(FrustumBrickIndirectArgBuffer, PF_R32_UINT));
+            TShaderMapRef<FInstantRdvBbvDepthCarvingIndirectArgBuildCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+            FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthCarvingIndirectArgBuild"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(1, 1, 1));
+        }
 
         {
             FInstantRdvBbvDepthCarvingCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthCarvingCS::FParameters>();
@@ -478,10 +511,11 @@ void FInstantRdvBbv::Execute(
             Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
+            Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
             Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
             Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
             Parameters->CellSizeCm = Config.BbvVoxelSizeCm;
-            Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
+            Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetViewMatrix());
             Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
             Parameters->SceneDepthTexture = SceneDepthTexture;

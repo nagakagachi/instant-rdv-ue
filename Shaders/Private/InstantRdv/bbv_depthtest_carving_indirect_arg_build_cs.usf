@@ -2,12 +2,16 @@
 
 StructuredBuffer<uint> FrustumBrickCounter;
 RWBuffer<uint> RWFrustumBrickIndirectArg;
+uint BitmaskWordsPerBrick;
+uint ThreadGroupSizeX;
 
 [numthreads(1, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint FrustumCount = FrustumBrickCounter[0];
-    RWFrustumBrickIndirectArg[0] = FrustumCount;
+    const uint TotalJobs = FrustumCount * BitmaskWordsPerBrick;
+    const uint DispatchGroupX = (TotalJobs + ThreadGroupSizeX - 1u) / max(ThreadGroupSizeX, 1u);
+    RWFrustumBrickIndirectArg[0] = DispatchGroupX;
     RWFrustumBrickIndirectArg[1] = 1u;
     RWFrustumBrickIndirectArg[2] = 1u;
 }
