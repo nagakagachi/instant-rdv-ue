@@ -1,0 +1,9 @@
+#include "/Engine/Public/Platform.ush"
+
+RWStructuredBuffer<uint> RWFrustumBrickCounter;
+
+[numthreads(1, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    RWFrustumBrickCounter[0] = 0u;
+}

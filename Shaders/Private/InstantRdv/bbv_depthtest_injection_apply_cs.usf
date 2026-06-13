@@ -1,0 +1,91 @@
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float> SceneDepthTexture;
+SamplerState SceneDepthSampler;
+RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
+
+uint DepthSizeX;
+uint DepthSizeY;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+uint BitmaskWordsPerBrick;
+uint BbvPerVoxelResolution;
+float3 ToroidalOffsetCells;
+float3 GridMinPositionWs;
+float CellSizeCm;
+float4x4 InvViewProjectionMatrix;
+
+uint3 WrapBrickCoord(int3 LogicalCoord)
+{
+    int3 wrapped = LogicalCoord + int3(ToroidalOffsetCells + 0.5);
+    wrapped.x = ((wrapped.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    wrapped.y = ((wrapped.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    wrapped.z = ((wrapped.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return uint3(wrapped);
+}
+
+uint CalcSubbrickMortonBitIndex(uint3 p)
+{
+    return ((p.x >> 0u) & 1u) << 0u
+         | ((p.y >> 0u) & 1u) << 1u
+         | ((p.z >> 0u) & 1u) << 2u
+         | ((p.x >> 1u) & 1u) << 3u
+         | ((p.y >> 1u) & 1u) << 4u
+         | ((p.z >> 1u) & 1u) << 5u;
+}
+
+uint CalcFineBitIndex(uint3 FineCoord)
+{
+    if (BbvPerVoxelResolution == 8u)
+    {
+        const uint3 SubbrickCoord = FineCoord / 4u;
+        const uint3 SubbrickLocal = FineCoord % 4u;
+        const uint SubbrickIndex = SubbrickCoord.x + SubbrickCoord.y * 2u + SubbrickCoord.z * 4u;
+        return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
+    }
+
+    return FineCoord.x + FineCoord.y * BbvPerVoxelResolution + FineCoord.z * BbvPerVoxelResolution * BbvPerVoxelResolution;
+}
+
+float3 ReconstructWorldPos(uint2 PixelCoord, float DeviceDepth)
+{
+    const float2 uv = (float2(PixelCoord) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
+    const float2 ndc = float2(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
+    float4 world = mul(float4(ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    world.xyz /= max(abs(world.w), 1e-6);
+    return world.xyz;
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (DispatchThreadId.x >= DepthSizeX || DispatchThreadId.y >= DepthSizeY)
+    {
+        return;
+    }
+
+    const float DeviceDepth = SceneDepthTexture.Load(int3(DispatchThreadId.xy, 0));
+    if (DeviceDepth >= 1.0f)
+    {
+        return;
+    }
+
+    const float3 WorldPos = ReconstructWorldPos(DispatchThreadId.xy, DeviceDepth);
+    const float3 GridPos = (WorldPos - GridMinPositionWs) / max(CellSizeCm, 0.001);
+    const int3 LogicalBrickCoord = int3(floor(GridPos));
+    if (any(LogicalBrickCoord < 0) || LogicalBrickCoord.x >= int(GridResolutionX) || LogicalBrickCoord.y >= int(GridResolutionY) || LogicalBrickCoord.z >= int(GridResolutionZ))
+    {
+        return;
+    }
+
+    const uint3 BrickCoord = WrapBrickCoord(LogicalBrickCoord);
+    const uint BrickIndex = BrickCoord.x + BrickCoord.y * GridResolutionX + BrickCoord.z * GridResolutionX * GridResolutionY;
+
+    const float3 BrickLocal = frac(GridPos);
+    const uint3 FineCoord = min(uint3(BrickLocal * BbvPerVoxelResolution), uint3(BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1));
+    const uint BitIndex = CalcFineBitIndex(FineCoord);
+    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (BitIndex / 32u);
+    const uint WordMask = 1u << (BitIndex & 31u);
+    InterlockedOr(RWBitmaskBrickVoxel[WordIndex], WordMask);
+}

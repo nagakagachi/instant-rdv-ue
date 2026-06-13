@@ -1,0 +1,42 @@
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BrickData;
+RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
+
+uint BrickCount;
+uint BitmaskWordsPerBrick;
+uint OptionalDataU32Count;
+uint BbvPerVoxelResolution;
+uint FrameCount;
+uint UpdateSkipCount;
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint PerFrameCount = max((BrickCount + UpdateSkipCount) / (UpdateSkipCount + 1u), 1u);
+    const uint LocalIndex = DispatchThreadId.x;
+    if (LocalIndex >= PerFrameCount)
+    {
+        return;
+    }
+
+    const uint StartBrick = FrameCount % (UpdateSkipCount + 1u);
+    const uint BrickIndex = StartBrick + LocalIndex * (UpdateSkipCount + 1u);
+    if (BrickIndex >= BrickCount)
+    {
+        return;
+    }
+
+    const uint OptionalStart = BrickIndex * OptionalDataU32Count;
+    const uint OccupiedVoxelCount = BrickData[BrickIndex * 4u + 0u];
+    const uint Denominator = max(BbvPerVoxelResolution * BbvPerVoxelResolution * BbvPerVoxelResolution, 1u);
+    const uint OccupancyByte = min((OccupiedVoxelCount * 255u) / Denominator, 255u);
+    const uint EncodedOptionalWord = OccupancyByte | (OccupiedVoxelCount << 8u);
+
+    [loop]
+    for (uint WordOffset = 0; WordOffset < OptionalDataU32Count; ++WordOffset)
+    {
+        RWBitmaskBrickVoxelOptionData[OptionalStart + WordOffset] = EncodedOptionalWord;
+    }
+}

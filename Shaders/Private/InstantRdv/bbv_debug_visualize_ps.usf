@@ -1,0 +1,524 @@
+#include "/Engine/Private/Common.ush"
+
+Texture2D<float> SceneDepthTexture;
+Texture2D SceneColorTexture;
+SamplerState PointClampSampler;
+
+StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BrickData;
+
+float4x4 InvViewProjectionMatrix;
+float3 CameraPositionWs;
+uint DepthSizeX;
+uint DepthSizeY;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+uint BitmaskWordsPerBrick;
+uint BbvPerVoxelResolution;
+float3 ToroidalOffsetCells;
+float CellSizeCm;
+float3 GridMinPositionWs;
+float MaxTraceDistanceCm;
+int DebugMode;
+
+float3 HashColor(uint Value)
+{
+    const uint n = Value * 1664525u + 1013904223u;
+    const float r = frac(float((n >>  0) & 255u) / 255.0 + 0.13);
+    const float g = frac(float((n >>  8) & 255u) / 255.0 + 0.37);
+    const float b = frac(float((n >> 16) & 255u) / 255.0 + 0.73);
+    return float3(r, g, b);
+}
+
+uint HashInt3(int3 V)
+{
+    const uint x = asuint(V.x * 73856093);
+    const uint y = asuint(V.y * 19349663);
+    const uint z = asuint(V.z * 83492791);
+    return x ^ y ^ z;
+}
+
+uint FlattenBrickCoord(uint3 BrickCoord)
+{
+    return BrickCoord.x + BrickCoord.y * GridResolutionX + BrickCoord.z * GridResolutionX * GridResolutionY;
+}
+
+uint3 WrapBrickCoord(int3 LogicalCoord)
+{
+    int3 wrapped = LogicalCoord + int3(ToroidalOffsetCells + 0.5);
+    wrapped.x = ((wrapped.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    wrapped.y = ((wrapped.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    wrapped.z = ((wrapped.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return uint3(wrapped);
+}
+
+bool AnyVoxelInBrick(uint BrickIndex)
+{
+    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
+    [loop]
+    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+    {
+        if (BitmaskBrickVoxel[WordStart + WordOffset] != 0u)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint CalcSubbrickMortonBitIndex(uint3 p)
+{
+    return ((p.x >> 0u) & 1u) << 0u
+         | ((p.y >> 0u) & 1u) << 1u
+         | ((p.z >> 0u) & 1u) << 2u
+         | ((p.x >> 1u) & 1u) << 3u
+         | ((p.y >> 1u) & 1u) << 4u
+         | ((p.z >> 1u) & 1u) << 5u;
+}
+
+uint CalcFineBitIndex(uint3 FineCoord)
+{
+    if (BbvPerVoxelResolution == 8u)
+    {
+        const uint3 SubbrickCoord = FineCoord / 4u;
+        const uint3 SubbrickLocal = FineCoord % 4u;
+        const uint SubbrickIndex = SubbrickCoord.x + SubbrickCoord.y * 2u + SubbrickCoord.z * 4u;
+        return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
+    }
+
+    return FineCoord.x + FineCoord.y * BbvPerVoxelResolution + FineCoord.z * BbvPerVoxelResolution * BbvPerVoxelResolution;
+}
+
+bool IsFineVoxelOccupied(int3 LogicalFineCoord)
+{
+    const int FineRes = int(BbvPerVoxelResolution);
+    const int3 LogicalBrickCoord = LogicalFineCoord / FineRes;
+    const int3 LocalFineCoord = LogicalFineCoord - LogicalBrickCoord * FineRes;
+
+    const uint3 PhysicalBrickCoord = WrapBrickCoord(LogicalBrickCoord);
+    const uint BrickIndex = FlattenBrickCoord(PhysicalBrickCoord);
+
+    const uint3 FineCoord = uint3(LocalFineCoord);
+    const uint BitIndex = CalcFineBitIndex(FineCoord);
+    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (BitIndex / 32u);
+    const uint WordMask = 1u << (BitIndex & 31u);
+    return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
+}
+
+float3 ReconstructRayDirection(float2 Uv)
+{
+    const float2 ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 world0 = mul(float4(ndc, 0.0, 1.0), InvViewProjectionMatrix);
+    float4 world1 = mul(float4(ndc, 1.0, 1.0), InvViewProjectionMatrix);
+    world0.xyz /= max(abs(world0.w), 1e-6);
+    world1.xyz /= max(abs(world1.w), 1e-6);
+
+    // Reverse-Z / non-Reverse-Z の両方で常に前方レイになるよう、
+    // カメラから遠い側を far として選ぶ。
+    const float d0 = dot(world0.xyz - CameraPositionWs, world0.xyz - CameraPositionWs);
+    const float d1 = dot(world1.xyz - CameraPositionWs, world1.xyz - CameraPositionWs);
+    const float3 rayNear = (d0 < d1) ? world0.xyz : world1.xyz;
+    const float3 rayFar = (d0 < d1) ? world1.xyz : world0.xyz;
+    return normalize(rayFar - rayNear);
+}
+
+float3 SafeInv(float3 Value)
+{
+    const float3 inv = 1.0 / Value;
+    return select(abs(Value) < 1e-6, float3(1e6, 1e6, 1e6), inv);
+}
+
+bool3 CalcStepMask(float3 SideDistance)
+{
+    bool3 mask;
+    mask.x = (SideDistance.x < SideDistance.y) && (SideDistance.x < SideDistance.z);
+    mask.y = (!mask.x) && (SideDistance.y < SideDistance.z);
+    mask.z = (!mask.x) && (!mask.y);
+    return mask;
+}
+
+bool IntersectAabb(
+    out float OutTBegin,
+    out float OutTEnd,
+    float3 AabbMin,
+    float3 AabbMax,
+    float3 RayOrigin,
+    float3 RayDir,
+    float3 RayDirInv,
+    float MaxRayT)
+{
+    OutTBegin = 0.0;
+    OutTEnd = MaxRayT;
+
+    const float3 tToMin = (AabbMin - RayOrigin) * RayDirInv;
+    const float3 tToMax = (AabbMax - RayOrigin) * RayDirInv;
+    const float tNear = max(max(min(tToMin.x, tToMax.x), min(tToMin.y, tToMax.y)), min(tToMin.z, tToMax.z));
+    const float tFar = min(min(max(tToMin.x, tToMax.x), max(tToMin.y, tToMax.y)), max(tToMin.z, tToMax.z));
+    if (tFar <= tNear || MaxRayT < tNear)
+    {
+        return false;
+    }
+
+    OutTBegin = max(OutTBegin, tNear);
+    OutTEnd = min(OutTEnd, tFar);
+    return true;
+}
+
+bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint OutBitIndex)
+{
+    OutBitIndex = 0u;
+    const int FineRes = int(BbvPerVoxelResolution);
+    if (any(LocalFineCoord < 0) || any(LocalFineCoord >= FineRes))
+    {
+        return false;
+    }
+
+    const uint3 FineCoord = uint3(LocalFineCoord);
+    OutBitIndex = CalcFineBitIndex(FineCoord);
+    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (OutBitIndex / 32u);
+    const uint WordMask = 1u << (OutBitIndex & 31u);
+    return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
+}
+
+float CalcTraceSampleT(float CurrT, float EndT)
+{
+    const float kTraceEpsilon = 1e-4;
+    return min(CurrT + kTraceEpsilon, max(CurrT, EndT - kTraceEpsilon));
+}
+
+int3 CalcTraceGridCoordFromT(float3 RayOrigin, float3 RayDir, float SampleT, int3 GridResolution)
+{
+    const float3 SamplePos = RayOrigin + RayDir * SampleT;
+    const int3 Coord = int3(floor(SamplePos));
+    return clamp(Coord, int3(0, 0, 0), GridResolution - 1);
+}
+
+float3 CalcTraceGridNextBoundaryT(float3 RayOrigin, float3 RayDirInv, float3 RayStepOffset, int3 CellCoord, int3 GridResolution)
+{
+    const int3 CellCoordMin = CellCoord;
+    const int3 CellCoordMax = min(CellCoordMin + int3(1, 1, 1), GridResolution);
+    const float3 NextBoundary = select(RayStepOffset > 0.0, float3(CellCoordMax), float3(CellCoordMin));
+    return (NextBoundary - RayOrigin) * RayDirInv;
+}
+
+bool TraceBbvBrickRayReference(
+    float3 RayOriginWs,
+    float3 RayDirWs,
+    float MaxDistanceCm,
+    out float OutHitDistanceCm,
+    out int3 OutLogicalBrickCoord,
+    out uint OutBrickIndex)
+{
+    OutHitDistanceCm = -1.0;
+    OutLogicalBrickCoord = int3(-1, -1, -1);
+    OutBrickIndex = 0u;
+
+    const float CellSize = max(CellSizeCm, 0.001);
+    const float CellSizeInv = 1.0 / CellSize;
+    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
+    const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
+    const float3 RayDir = RayDirWs;
+    const float3 RayDirInv = SafeInv(RayDir);
+    const int3 RayStep = int3(sign(RayDir));
+    const float3 RayStepOffset = step(0.0, RayDir);
+
+    float RayBeginT = 0.0;
+    float RayEndT = 0.0;
+    if (!IntersectAabb(RayBeginT, RayEndT, float3(0.0, 0.0, 0.0), float3(GridResI), RayOrigin, RayDir, RayDirInv, MaxDistanceCm * CellSizeInv))
+    {
+        return false;
+    }
+
+    const float3 ClampedStart = RayOrigin + RayDir * RayBeginT;
+    const float3 ClampedEnd = RayOrigin + RayDir * RayEndT;
+    const float TraceEndT = RayEndT - RayBeginT;
+    if (TraceEndT <= 0.0)
+    {
+        return false;
+    }
+
+    const int3 TraceCellMin = min(int3(floor(ClampedStart)), int3(floor(ClampedEnd)));
+    const int3 TraceCellMax = max(int3(floor(ClampedStart)), int3(floor(ClampedEnd))) + 1;
+    const int3 BrickCoordMin = clamp(TraceCellMin, int3(0, 0, 0), GridResI);
+    const int3 BrickCoordMax = clamp(TraceCellMax, int3(0, 0, 0), GridResI);
+    if (any(BrickCoordMax <= BrickCoordMin))
+    {
+        return false;
+    }
+
+    const int3 BrickExtent = BrickCoordMax - BrickCoordMin;
+    const int MaxBrickIterationCount = max(1, BrickExtent.x + BrickExtent.y + BrickExtent.z) + 2;
+
+    const float kTraceEpsilon = 1e-4;
+    float BrickCurrT = 0.0;
+    const float BrickSampleT = CalcTraceSampleT(BrickCurrT, TraceEndT);
+    int3 MapPos = clamp(CalcTraceGridCoordFromT(ClampedStart, RayDir, BrickSampleT, GridResI), BrickCoordMin, BrickCoordMax - 1);
+    float3 BrickNextT = CalcTraceGridNextBoundaryT(ClampedStart, RayDirInv, RayStepOffset, MapPos, GridResI);
+
+    [loop]
+    for (int BrickIter = 0; BrickIter < MaxBrickIterationCount && BrickCurrT <= TraceEndT; ++BrickIter)
+    {
+        const float BrickBeginT = BrickCurrT;
+        const float BrickEndT = min(min(min(BrickNextT.x, BrickNextT.y), BrickNextT.z), TraceEndT);
+
+        const uint3 PhysicalCoord = WrapBrickCoord(MapPos);
+        const uint BrickIndex = FlattenBrickCoord(PhysicalCoord);
+        const bool bBrickOccupied = (BrickData[BrickIndex * 4u + 0u] != 0u);
+        if (bBrickOccupied)
+        {
+            OutHitDistanceCm = (BrickBeginT + RayBeginT) * CellSize;
+            OutLogicalBrickCoord = MapPos;
+            OutBrickIndex = BrickIndex;
+            return true;
+        }
+
+        const bool3 BrickStepMask = CalcStepMask(BrickNextT);
+        const int3 MapPosDelta = select(BrickStepMask, RayStep, 0);
+        MapPos += MapPosDelta;
+        BrickCurrT = max(BrickCurrT + kTraceEpsilon, BrickEndT + kTraceEpsilon);
+        if ((any(MapPos < BrickCoordMin) || any(MapPos >= BrickCoordMax)) || all(MapPosDelta == 0))
+        {
+            break;
+        }
+        BrickNextT = CalcTraceGridNextBoundaryT(ClampedStart, RayDirInv, RayStepOffset, MapPos, GridResI);
+    }
+
+    return false;
+}
+
+bool TraceBbvRay(
+    float3 RayOriginWs,
+    float3 RayDirWs,
+    float MaxDistanceCm,
+    bool bBrickOnly,
+    bool bAllowBitmaskFallback,
+    out float OutHitDistanceCm,
+    out int3 OutLogicalBrickCoord,
+    out int3 OutLogicalFineCoord,
+    out uint OutBrickIndex,
+    out uint OutBitIndex)
+{
+    OutHitDistanceCm = -1.0;
+    OutLogicalBrickCoord = int3(-1, -1, -1);
+    OutLogicalFineCoord = int3(-1, -1, -1);
+    OutBrickIndex = 0u;
+    OutBitIndex = 0u;
+
+    const float CellSize = max(CellSizeCm, 0.001);
+    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
+    const float3 GridResF = float3(GridResolutionX, GridResolutionY, GridResolutionZ);
+    const float3 RayOriginGrid = (RayOriginWs - GridMinPositionWs) / CellSize;
+    const float3 RayDirGrid = RayDirWs / CellSize;
+    const float3 RayDirGridInv = SafeInv(RayDirGrid);
+
+    float tBegin = 0.0;
+    float tEnd = 0.0;
+    if (!IntersectAabb(tBegin, tEnd, float3(0.0, 0.0, 0.0), GridResF, RayOriginGrid, RayDirGrid, RayDirGridInv, MaxDistanceCm))
+    {
+        return false;
+    }
+
+    const float kTraceEpsilon = 1e-4;
+    float brickCurrT = tBegin;
+    const float brickSampleT = min(brickCurrT + kTraceEpsilon, max(brickCurrT, tEnd - kTraceEpsilon));
+    int3 mapPos = clamp(int3(floor(RayOriginGrid + RayDirGrid * brickSampleT)), int3(0, 0, 0), GridResI - 1);
+    const float3 rayStepOffset = step(0.0, RayDirGrid);
+    const int3 rayStep = int3(sign(RayDirGrid));
+    const int maxBrickIter = GridResI.x + GridResI.y + GridResI.z + 8;
+
+    [loop]
+    for (int brickIter = 0; brickIter < maxBrickIter && brickCurrT <= tEnd; ++brickIter)
+    {
+        const float3 nextBoundary = select(rayStepOffset > 0.0, float3(mapPos + 1), float3(mapPos));
+        float3 brickNextT = (nextBoundary - RayOriginGrid) * RayDirGridInv;
+        const float brickEndT = min(min(min(brickNextT.x, brickNextT.y), brickNextT.z), tEnd);
+
+        const uint3 physicalCoord = WrapBrickCoord(mapPos);
+        const uint brickIndex = FlattenBrickCoord(physicalCoord);
+        bool bBrickOccupied = (BrickData[brickIndex * 4u + 0u] != 0u);
+        if (!bBrickOccupied && bAllowBitmaskFallback)
+        {
+            bBrickOccupied = AnyVoxelInBrick(brickIndex);
+        }
+
+        if (bBrickOccupied)
+        {
+            if (bBrickOnly)
+            {
+                OutHitDistanceCm = max(brickCurrT, 0.0);
+                OutLogicalBrickCoord = mapPos;
+                OutBrickIndex = brickIndex;
+                return true;
+            }
+
+            const float detailBeginT = max(brickCurrT, tBegin);
+            const float3 brickEntryPos = RayOriginGrid + RayDirGrid * detailBeginT;
+            const float3 localRayPos = (brickEntryPos - float3(mapPos)) * float(BbvPerVoxelResolution);
+            const float3 localRayDir = RayDirGrid * float(BbvPerVoxelResolution);
+            const float3 localInvDir = SafeInv(localRayDir);
+            const float3 localStepOffset = step(0.0, localRayDir);
+            const int3 localStep = int3(sign(localRayDir));
+            const int FineRes = int(BbvPerVoxelResolution);
+
+            int3 finePos = int3(floor(clamp(localRayPos, float3(0.0001, 0.0001, 0.0001), float3(FineRes - 0.0001, FineRes - 0.0001, FineRes - 0.0001))));
+            float3 sideDist = ((floor(localRayPos) - localRayPos) + localStepOffset) * localInvDir;
+
+            [loop]
+            for (int fineIter = 0; fineIter < FineRes * 3 + 8; ++fineIter)
+            {
+                uint fineBitIndex = 0u;
+                if (IsFineVoxelOccupiedInBrick(brickIndex, finePos, fineBitIndex))
+                {
+                    const float fineResF = float(BbvPerVoxelResolution);
+                    const float3 fineMin = float3(mapPos) + float3(finePos) / fineResF;
+                    const float3 fineMax = float3(mapPos) + float3(finePos + 1) / fineResF;
+                    float fineBeginT = 0.0;
+                    float fineEndT = 0.0;
+                    if (IntersectAabb(fineBeginT, fineEndT, fineMin, fineMax, RayOriginGrid, RayDirGrid, RayDirGridInv, MaxDistanceCm))
+                    {
+                        OutHitDistanceCm = max(fineBeginT, 0.0);
+                    }
+                    else
+                    {
+                        OutHitDistanceCm = max(brickCurrT, 0.0);
+                    }
+                    OutLogicalBrickCoord = mapPos;
+                    OutLogicalFineCoord = mapPos * FineRes + finePos;
+                    OutBrickIndex = brickIndex;
+                    OutBitIndex = fineBitIndex;
+                    return true;
+                }
+
+                bool3 fineStepMask = CalcStepMask(sideDist);
+                sideDist += select(fineStepMask, abs(localInvDir), 0.0);
+                finePos += select(fineStepMask, localStep, 0);
+                if (any(finePos < 0) || any(finePos >= FineRes))
+                {
+                    break;
+                }
+            }
+        }
+
+        bool3 brickStepMask = CalcStepMask(brickNextT);
+        int3 mapPosDelta = select(brickStepMask, rayStep, 0);
+        mapPos += mapPosDelta;
+        brickCurrT = max(brickCurrT + kTraceEpsilon, brickEndT + kTraceEpsilon);
+        if ((any(mapPos < 0) || any(mapPos >= GridResI)) || all(mapPosDelta == 0))
+        {
+            break;
+        }
+    }
+
+    return false;
+}
+
+struct VsOutput
+{
+    float4 UVAndScreenPos : TEXCOORD0;
+    float4 OutPosition : SV_POSITION;
+};
+
+struct PsOut
+{
+    float4 Color : SV_TARGET0;
+};
+
+PsOut MainPS(VsOutput Input)
+{
+    PsOut Output = (PsOut)0;
+
+    const float2 Uv = Input.UVAndScreenPos.xy;
+    const uint2 PixelCoord = uint2(
+        min(uint(saturate(Uv.x) * DepthSizeX), DepthSizeX - 1u),
+        min(uint(saturate(Uv.y) * DepthSizeY), DepthSizeY - 1u));
+    const float2 RayUv = (float2(PixelCoord) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
+
+    const float4 BaseColor = SceneColorTexture.Load(int3(PixelCoord, 0));
+
+    if (DebugMode == 1)
+    {
+        const uint FineDimX = GridResolutionX * BbvPerVoxelResolution;
+        const uint FineDimY = GridResolutionY * BbvPerVoxelResolution;
+        const uint FineDimZ = GridResolutionZ * BbvPerVoxelResolution;
+
+        const uint FineX = min((uint)(Uv.x * FineDimX), FineDimX - 1u);
+        const uint FineY = min((uint)((1.0 - Uv.y) * FineDimY), FineDimY - 1u);
+
+        uint OccupiedZCount = 0u;
+        [loop]
+        for (uint FineZ = 0u; FineZ < FineDimZ; ++FineZ)
+        {
+            if (IsFineVoxelOccupied(int3(FineX, FineY, FineZ)))
+            {
+                OccupiedZCount += 1u;
+            }
+        }
+
+        const float Occupancy = (FineDimZ > 0u) ? (float(OccupiedZCount) / float(FineDimZ)) : 0.0;
+        const float3 Heat = lerp(float3(0.0, 0.02, 0.08), float3(1.0, 0.92, 0.2), saturate(Occupancy));
+        Output.Color = float4(lerp(BaseColor.rgb, Heat, 0.9), BaseColor.a);
+        return Output;
+    }
+
+    if (DebugMode != 2 && DebugMode != 3)
+    {
+        Output.Color = BaseColor;
+        return Output;
+    }
+
+    const float3 RayDirWs = ReconstructRayDirection(RayUv);
+    const float maxTraceDistanceCm = MaxTraceDistanceCm;
+    float HitDistanceCm = -1.0;
+    int3 HitLogicalBrickCoord = int3(-1, -1, -1);
+    int3 HitLogicalFineCoord = int3(-1, -1, -1);
+    uint HitBrickIndex = 0u;
+    uint HitBitIndex = 0u;
+    bool bHit = false;
+    if (DebugMode == 2)
+    {
+        bHit = TraceBbvBrickRayReference(
+            CameraPositionWs,
+            RayDirWs,
+            maxTraceDistanceCm,
+            HitDistanceCm,
+            HitLogicalBrickCoord,
+            HitBrickIndex);
+    }
+    else
+    {
+        bHit = TraceBbvRay(
+            CameraPositionWs,
+            RayDirWs,
+            maxTraceDistanceCm,
+            false,
+            false,
+            HitDistanceCm,
+            HitLogicalBrickCoord,
+            HitLogicalFineCoord,
+            HitBrickIndex,
+            HitBitIndex);
+    }
+
+    if (!bHit)
+    {
+        Output.Color = BaseColor;
+        return Output;
+    }
+
+    const float3 HitPosWs = CameraPositionWs + RayDirWs * HitDistanceCm;
+    float3 HitColor = float3(0.0, 0.0, 0.0);
+    if (DebugMode == 2)
+    {
+        const int3 WorldBrickCoord = int3(floor(HitPosWs / max(CellSizeCm, 0.001)));
+        HitColor = HashColor(HashInt3(WorldBrickCoord));
+    }
+    else
+    {
+        const float FineCellSizeCm = CellSizeCm / max(float(BbvPerVoxelResolution), 1.0);
+        const int3 WorldFineCoord = int3(floor(HitPosWs / max(FineCellSizeCm, 0.001)));
+        HitColor = HashColor(HashInt3(WorldFineCoord));
+    }
+    Output.Color = float4(lerp(BaseColor.rgb, HitColor, 0.8), BaseColor.a);
+    return Output;
+}

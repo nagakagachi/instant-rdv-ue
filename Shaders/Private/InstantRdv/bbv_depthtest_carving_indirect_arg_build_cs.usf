@@ -1,0 +1,13 @@
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint> FrustumBrickCounter;
+RWBuffer<uint> RWFrustumBrickIndirectArg;
+
+[numthreads(1, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint FrustumCount = FrustumBrickCounter[0];
+    RWFrustumBrickIndirectArg[0] = FrustumCount;
+    RWFrustumBrickIndirectArg[1] = 1u;
+    RWFrustumBrickIndirectArg[2] = 1u;
+}

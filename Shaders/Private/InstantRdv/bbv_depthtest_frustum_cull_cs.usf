@@ -1,0 +1,38 @@
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint> BitmaskBrickVoxel;
+RWStructuredBuffer<uint> RWFrustumBrickCounter;
+RWStructuredBuffer<uint> RWFrustumBrickList;
+
+uint BrickCount;
+uint BitmaskWordsPerBrick;
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint BrickIndex = DispatchThreadId.x;
+    if (BrickIndex >= BrickCount)
+    {
+        return;
+    }
+
+    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
+    uint AnyOccupied = 0u;
+    [loop]
+    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+    {
+        AnyOccupied |= BitmaskBrickVoxel[WordStart + WordOffset];
+    }
+
+    if (AnyOccupied == 0u)
+    {
+        return;
+    }
+
+    uint WriteIndex = 0u;
+    InterlockedAdd(RWFrustumBrickCounter[0], 1u, WriteIndex);
+    if (WriteIndex < BrickCount)
+    {
+        RWFrustumBrickList[WriteIndex] = BrickIndex;
+    }
+}

@@ -1,0 +1,39 @@
+#include "/Engine/Public/Platform.ush"
+
+RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
+RWStructuredBuffer<uint> RWBrickData;
+RWStructuredBuffer<uint> RWHiBrickData;
+RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
+
+uint BitmaskElementCount;
+uint BrickDataElementCount;
+uint HiBrickDataElementCount;
+uint OptionalDataElementCount;
+uint DispatchLinearWidth;
+uint DispatchThreadCount;
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint Index = DispatchThreadId.x + DispatchThreadId.y * DispatchLinearWidth;
+
+    for (uint It = Index; It < BitmaskElementCount; It += DispatchThreadCount)
+    {
+        RWBitmaskBrickVoxel[It] = 0;
+    }
+
+    for (uint It = Index; It < BrickDataElementCount; It += DispatchThreadCount)
+    {
+        RWBrickData[It] = 0;
+    }
+
+    for (uint It = Index; It < HiBrickDataElementCount; It += DispatchThreadCount)
+    {
+        RWHiBrickData[It] = 0;
+    }
+
+    for (uint It = Index; It < OptionalDataElementCount; It += DispatchThreadCount)
+    {
+        RWBitmaskBrickVoxelOptionData[It] = 0;
+    }
+}

@@ -1,0 +1,96 @@
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float> SceneDepthTexture;
+SamplerState SceneDepthSampler;
+StructuredBuffer<uint> FrustumBrickCounter;
+StructuredBuffer<uint> FrustumBrickList;
+RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
+
+uint DepthSizeX;
+uint DepthSizeY;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+uint BitmaskWordsPerBrick;
+float3 ToroidalOffsetCells;
+float3 GridMinPositionWs;
+float CellSizeCm;
+float3 CameraPositionWs;
+float4x4 ViewProjectionMatrix;
+float4x4 InvViewProjectionMatrix;
+
+int3 UnwrapLogicalBrickCoord(uint3 PhysicalCoord)
+{
+    int3 logical = int3(PhysicalCoord) - int3(ToroidalOffsetCells + 0.5);
+    logical.x = ((logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    logical.y = ((logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    logical.z = ((logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return logical;
+}
+
+float3 ReconstructWorldPos(float2 Uv, float DeviceDepth)
+{
+    const float2 ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 world = mul(float4(ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    world.xyz /= max(abs(world.w), 1e-6);
+    return world.xyz;
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint JobIndex = DispatchThreadId.x;
+    if (JobIndex >= FrustumBrickCounter[0])
+    {
+        return;
+    }
+
+    const uint BrickIndex = FrustumBrickList[JobIndex];
+
+    const uint SliceStride = GridResolutionX * GridResolutionY;
+    const uint PhysicalZ = BrickIndex / SliceStride;
+    const uint Rem = BrickIndex - PhysicalZ * SliceStride;
+    const uint PhysicalY = Rem / GridResolutionX;
+    const uint PhysicalX = Rem - PhysicalY * GridResolutionX;
+    const uint3 PhysicalCoord = uint3(PhysicalX, PhysicalY, PhysicalZ);
+    const int3 LogicalCoord = UnwrapLogicalBrickCoord(PhysicalCoord);
+
+    const float3 BrickCenterWs = GridMinPositionWs + (float3(LogicalCoord) + 0.5) * CellSizeCm;
+    const float4 ClipPos = mul(float4(BrickCenterWs, 1.0), ViewProjectionMatrix);
+    if (ClipPos.w <= 1e-6)
+    {
+        return;
+    }
+
+    const float2 Ndc = ClipPos.xy / ClipPos.w;
+    const float2 SampleUv = float2(Ndc.x * 0.5 + 0.5, 1.0 - (Ndc.y * 0.5 + 0.5));
+    if (any(SampleUv < 0.0) || any(SampleUv > 1.0))
+    {
+        return;
+    }
+
+    const uint2 DepthCoord = uint2(
+        min(uint(SampleUv.x * DepthSizeX), DepthSizeX - 1u),
+        min(uint(SampleUv.y * DepthSizeY), DepthSizeY - 1u));
+    const float DeviceDepth = SceneDepthTexture.Load(int3(DepthCoord, 0));
+    if (DeviceDepth >= 1.0)
+    {
+        return;
+    }
+
+    const float3 SurfacePosWs = ReconstructWorldPos(SampleUv, DeviceDepth);
+    const float DistToBrick = distance(CameraPositionWs, BrickCenterWs);
+    const float DistToSurface = distance(CameraPositionWs, SurfacePosWs);
+    const float CarveBias = CellSizeCm * 0.75;
+    if (DistToSurface + CarveBias >= DistToBrick)
+    {
+        return;
+    }
+
+    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
+    [loop]
+    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+    {
+        RWBitmaskBrickVoxel[WordStart + WordOffset] = 0u;
+    }
+}

@@ -1,0 +1,65 @@
+#include "/Engine/Public/Platform.ush"
+
+RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
+RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
+
+uint BrickCount;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+uint BitmaskWordsPerBrick;
+int4 GridMoveDeltaCells;
+float3 ToroidalOffsetCells;
+uint OptionalDataU32Count;
+
+uint3 WrapBrickCoord(int3 LogicalCoord)
+{
+    int3 wrapped = LogicalCoord + int3(ToroidalOffsetCells + 0.5);
+    wrapped.x = ((wrapped.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    wrapped.y = ((wrapped.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    wrapped.z = ((wrapped.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return uint3(wrapped);
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint LogicalBrickIndex = DispatchThreadId.x;
+    if (LogicalBrickIndex >= BrickCount)
+    {
+        return;
+    }
+
+    const uint SliceStride = GridResolutionX * GridResolutionY;
+    const uint LogicalZ = LogicalBrickIndex / SliceStride;
+    const uint Rem = LogicalBrickIndex - LogicalZ * SliceStride;
+    const uint LogicalY = Rem / GridResolutionX;
+    const uint LogicalX = Rem - LogicalY * GridResolutionX;
+    const int3 LogicalCoord = int3(LogicalX, LogicalY, LogicalZ);
+
+    const int3 PrevLogicalCoord = LogicalCoord - GridMoveDeltaCells.xyz;
+    const bool bWasInside =
+        (PrevLogicalCoord.x >= 0 && PrevLogicalCoord.x < int(GridResolutionX)) &&
+        (PrevLogicalCoord.y >= 0 && PrevLogicalCoord.y < int(GridResolutionY)) &&
+        (PrevLogicalCoord.z >= 0 && PrevLogicalCoord.z < int(GridResolutionZ));
+
+    if (bWasInside)
+    {
+        return;
+    }
+
+    const uint3 PhysicalCoord = WrapBrickCoord(LogicalCoord);
+    const uint PhysicalBrickIndex = PhysicalCoord.x + PhysicalCoord.y * GridResolutionX + PhysicalCoord.z * GridResolutionX * GridResolutionY;
+    const uint WordStart = PhysicalBrickIndex * BitmaskWordsPerBrick;
+    const uint OptionalStart = PhysicalBrickIndex * OptionalDataU32Count;
+    [loop]
+    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+    {
+        const uint ElementIndex = WordStart + WordOffset;
+        RWBitmaskBrickVoxel[ElementIndex] = 0u;
+        if (WordOffset < OptionalDataU32Count)
+        {
+            RWBitmaskBrickVoxelOptionData[OptionalStart + WordOffset] = 0u;
+        }
+    }
+}
