@@ -26,11 +26,15 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvReset(
     TEXT("Force BBV buffer reinitialization.\n0: Keep persistent BBV state\n1: Clear BBV state this frame"),
     ECVF_RenderThreadSafe);
 
-static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionWorldOffsetCm(
-    TEXT("r.InstantRdv.Bbv.DepthtestInjectionWorldOffsetCm"),
-    3.0f,
-    TEXT("Depthtest Injectionで、再構築サーフェス位置を視線方向へ押し込む距離(cm)。"),
+static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionOffsetFineCells(
+    TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"),
+    2.0f,
+    TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / BbvPerVoxelResolution) で算出。"),
     ECVF_RenderThreadSafe);
+// 移植ミス再発防止:
+// - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
+// - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/BbvPerVoxelResolution で換算する。
+// - CVarの意味は「ワールド距離」ではなく「fine cell数」を維持すること。
 
 class FInstantRdvBbvBeginUpdateCS final : public FGlobalShader
 {
@@ -80,7 +84,7 @@ public:
         SHADER_PARAMETER(FVector3f, ToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, GridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
-        SHADER_PARAMETER(float, DepthtestInjectionWorldOffsetCm)
+        SHADER_PARAMETER(float, DepthtestInjectionWorldOffsetWs)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
@@ -438,7 +442,10 @@ void FInstantRdvBbv::Execute(
         Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
         Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
         Parameters->CellSizeCm = Config.BbvVoxelSizeCm;
-        Parameters->DepthtestInjectionWorldOffsetCm = CVarInstantRdvBbvDepthtestInjectionWorldOffsetCm.GetValueOnRenderThread();
+        // 参照実装と同じく「fine cell 数」からワールド距離を算出する。
+        const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
+        const float FineCellSizeCm = Config.BbvVoxelSizeCm / FMath::Max(static_cast<float>(Config.BbvPerVoxelResolution), 1.0f);
+        Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
         Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
         Parameters->SceneDepthTexture = SceneDepthTexture;

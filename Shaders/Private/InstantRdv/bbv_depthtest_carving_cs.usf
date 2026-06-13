@@ -1,6 +1,10 @@
 // ファイル名: bbv_depthtest_carving_cs.usf
 // ファイル説明: Frustum候補Brickに対してFineVoxel(bitmask bit)単位でDepthTest Carvingを実行する。
 // 1thread=1u32 jobに分解し、WaveReadLaneAtで同一Brick座標計算を共有して処理を軽量化する。
+// 移植ミス再発防止:
+// - Removalは Injection のような固定押し込みオフセットを持たない。
+//   ここで独自オフセットを足すと、手前側だけ削る参照判定と一致しなくなる。
+// - 判定は bitcell 最近点(外接球)と depth 復元面の前後比較で行い、中心点判定へ戻さない。
 
 #include "/Engine/Public/Platform.ush"
 
