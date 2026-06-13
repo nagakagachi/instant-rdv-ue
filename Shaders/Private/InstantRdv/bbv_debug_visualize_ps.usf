@@ -22,6 +22,9 @@ float3 GridMinPositionWs;
 float MaxTraceDistanceCm;
 int DebugMode;
 
+// 本番用途（GI 等）でも共有する BBV レイトレコアを利用する。
+#include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
+
 float3 HashColor(uint Value)
 {
     const uint n = Value * 1664525u + 1013904223u;
@@ -37,57 +40,6 @@ uint HashInt3(int3 V)
     const uint y = asuint(V.y * 19349663);
     const uint z = asuint(V.z * 83492791);
     return x ^ y ^ z;
-}
-
-uint FlattenBrickCoord(uint3 BrickCoord)
-{
-    return BrickCoord.x + BrickCoord.y * GridResolutionX + BrickCoord.z * GridResolutionX * GridResolutionY;
-}
-
-uint3 WrapBrickCoord(int3 LogicalCoord)
-{
-    int3 wrapped = LogicalCoord + int3(ToroidalOffsetCells + 0.5);
-    wrapped.x = ((wrapped.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
-    wrapped.y = ((wrapped.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
-    wrapped.z = ((wrapped.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
-    return uint3(wrapped);
-}
-
-bool AnyVoxelInBrick(uint BrickIndex)
-{
-    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
-    [loop]
-    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
-    {
-        if (BitmaskBrickVoxel[WordStart + WordOffset] != 0u)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-uint CalcSubbrickMortonBitIndex(uint3 p)
-{
-    return ((p.x >> 0u) & 1u) << 0u
-         | ((p.y >> 0u) & 1u) << 1u
-         | ((p.z >> 0u) & 1u) << 2u
-         | ((p.x >> 1u) & 1u) << 3u
-         | ((p.y >> 1u) & 1u) << 4u
-         | ((p.z >> 1u) & 1u) << 5u;
-}
-
-uint CalcFineBitIndex(uint3 FineCoord)
-{
-    if (BbvPerVoxelResolution == 8u)
-    {
-        const uint3 SubbrickCoord = FineCoord / 4u;
-        const uint3 SubbrickLocal = FineCoord % 4u;
-        const uint SubbrickIndex = SubbrickCoord.x + SubbrickCoord.y * 2u + SubbrickCoord.z * 4u;
-        return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
-    }
-
-    return FineCoord.x + FineCoord.y * BbvPerVoxelResolution + FineCoord.z * BbvPerVoxelResolution * BbvPerVoxelResolution;
 }
 
 bool IsFineVoxelOccupied(int3 LogicalFineCoord)
@@ -123,118 +75,9 @@ float3 ReconstructRayDirection(float2 Uv)
     return normalize(rayFar - rayNear);
 }
 
-float3 SafeInv(float3 Value)
-{
-    const float3 inv = 1.0 / Value;
-    return select(abs(Value) < 1e-6, float3(1e6, 1e6, 1e6), inv);
-}
-
-bool3 CalcStepMask(float3 SideDistance)
-{
-    bool3 mask;
-    mask.x = (SideDistance.x < SideDistance.y) && (SideDistance.x < SideDistance.z);
-    mask.y = (!mask.x) && (SideDistance.y < SideDistance.z);
-    mask.z = (!mask.x) && (!mask.y);
-    return mask;
-}
-
-bool IntersectAabb(
-    out float OutTBegin,
-    out float OutTEnd,
-    float3 AabbMin,
-    float3 AabbMax,
-    float3 RayOrigin,
-    float3 RayDir,
-    float3 RayDirInv,
-    float MaxRayT)
-{
-    OutTBegin = 0.0;
-    OutTEnd = MaxRayT;
-
-    const float3 tToMin = (AabbMin - RayOrigin) * RayDirInv;
-    const float3 tToMax = (AabbMax - RayOrigin) * RayDirInv;
-    const float tNear = max(max(min(tToMin.x, tToMax.x), min(tToMin.y, tToMax.y)), min(tToMin.z, tToMax.z));
-    const float tFar = min(min(max(tToMin.x, tToMax.x), max(tToMin.y, tToMax.y)), max(tToMin.z, tToMax.z));
-    if (tFar <= tNear || MaxRayT < tNear)
-    {
-        return false;
-    }
-
-    OutTBegin = max(OutTBegin, tNear);
-    OutTEnd = min(OutTEnd, tFar);
-    return true;
-}
-
-bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint OutBitIndex)
-{
-    OutBitIndex = 0u;
-    const int FineRes = int(BbvPerVoxelResolution);
-    if (any(LocalFineCoord < 0) || any(LocalFineCoord >= FineRes))
-    {
-        return false;
-    }
-
-    const uint3 FineCoord = uint3(LocalFineCoord);
-    OutBitIndex = CalcFineBitIndex(FineCoord);
-    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (OutBitIndex / 32u);
-    const uint WordMask = 1u << (OutBitIndex & 31u);
-    return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
-}
-
-float CalcTraceSampleT(float CurrT, float EndT)
-{
-    const float kTraceEpsilon = 1e-4;
-    return min(CurrT + kTraceEpsilon, max(CurrT, EndT - kTraceEpsilon));
-}
-
-int3 CalcTraceGridCoordFromT(float3 RayOrigin, float3 RayDir, float SampleT, int3 GridResolution)
-{
-    const float3 SamplePos = RayOrigin + RayDir * SampleT;
-    const int3 Coord = int3(floor(SamplePos));
-    return clamp(Coord, int3(0, 0, 0), GridResolution - 1);
-}
-
-float3 CalcTraceGridNextBoundaryT(float3 RayOrigin, float3 RayDirInv, float3 RayStepOffset, int3 CellCoord, int3 GridResolution)
-{
-    const int3 CellCoordMin = CellCoord;
-    const int3 CellCoordMax = min(CellCoordMin + int3(1, 1, 1), GridResolution);
-    const float3 NextBoundary = select(RayStepOffset > 0.0, float3(CellCoordMax), float3(CellCoordMin));
-    return (NextBoundary - RayOrigin) * RayDirInv;
-}
-
-int3 TraceBitmaskBrickReference(
-    float3 RayPos,
-    float3 RayDir,
-    float3 RayDirSign,
-    float3 InvDir,
-    inout bool3 StepMask,
-    int3 TraceCoordMin,
-    int3 TraceCoordMax,
-    uint BrickIndex)
-{
-    RayPos = clamp(RayPos, float3(TraceCoordMin) + 0.0001, float3(TraceCoordMax) - 0.0001);
-    float3 SideDist = ((floor(RayPos) - RayPos) + step(0.0, RayDir)) * InvDir;
-    int3 MapPos = int3(floor(RayPos));
-    int3 RaySign = int3(RayDirSign);
-
-    [loop]
-    while (all(MapPos >= TraceCoordMin) && all(MapPos < TraceCoordMax))
-    {
-        uint FineBitIndex = 0u;
-        if (IsFineVoxelOccupiedInBrick(BrickIndex, MapPos, FineBitIndex))
-        {
-            return MapPos;
-        }
-
-        StepMask = CalcStepMask(SideDist);
-        SideDist += select(StepMask, abs(InvDir), 0.0);
-        const int3 MapPosDelta = select(StepMask, RaySign, 0);
-        MapPos += MapPosDelta;
-    }
-
-    return int3(-1, -1, -1);
-}
-
+// デバッグ表示用の薄いアダプタ。
+// 本体ロジックは bbv_trace_util.ush の TraceBbvRayReference に集約し、
+// ここでは可視化モードに合わせて引数を固定するだけにする。
 bool TraceBbvVoxelRayReference(
     float3 RayOriginWs,
     float3 RayDirWs,
@@ -245,112 +88,19 @@ bool TraceBbvVoxelRayReference(
     out uint OutBrickIndex,
     out uint OutBitIndex)
 {
-    OutHitDistanceCm = -1.0;
-    OutLogicalBrickCoord = int3(-1, -1, -1);
-    OutLogicalFineCoord = int3(-1, -1, -1);
-    OutBrickIndex = 0u;
-    OutBitIndex = 0u;
-
-    const float CellSize = max(CellSizeCm, 0.001);
-    const float CellSizeInv = 1.0 / CellSize;
-    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
-
-    const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
-    const float3 RayDir = RayDirWs;
-    const float3 RayDirInv = SafeInv(RayDir);
-    const float3 RayDirSign = sign(RayDir);
-    const int3 RayStep = int3(RayDirSign);
-    const float3 RayStepOffset = step(0.0, RayDir);
-    const float3 RayComponentValidity = abs(RayDirSign);
-
-    float RayTraceBeginT = 0.0;
-    float RayTraceEndT = 0.0;
-    if (!IntersectAabb(RayTraceBeginT, RayTraceEndT, float3(0.0, 0.0, 0.0), float3(GridResI), RayOrigin, RayDir, RayDirInv, MaxDistanceCm * CellSizeInv))
-    {
-        return false;
-    }
-
-    const float3 ClampedStartPos = RayOrigin + RayDir * RayTraceBeginT;
-    const float3 ClampedEndPos = RayOrigin + RayDir * RayTraceEndT;
-    const float TraceTEnd = RayTraceEndT - RayTraceBeginT;
-    if (TraceTEnd <= 0.0)
-    {
-        return false;
-    }
-
-    const int3 TraceCellMin = min(int3(floor(ClampedStartPos)), int3(floor(ClampedEndPos)));
-    const int3 TraceCellMax = max(int3(floor(ClampedStartPos)), int3(floor(ClampedEndPos))) + 1;
-    const int3 BrickCoordMin = clamp(TraceCellMin, int3(0, 0, 0), GridResI);
-    const int3 BrickCoordMax = clamp(TraceCellMax, int3(0, 0, 0), GridResI);
-    if (any(BrickCoordMax <= BrickCoordMin))
-    {
-        return false;
-    }
-
-    const int3 BrickExtent = BrickCoordMax - BrickCoordMin;
-    const int MaxBrickIterationCount = max(1, BrickExtent.x + BrickExtent.y + BrickExtent.z) + 2;
-    const float kTraceEpsilon = 1e-4;
-
-    float BrickCurrT = 0.0;
-    const float BrickSampleT = CalcTraceSampleT(BrickCurrT, TraceTEnd);
-    int3 MapPos = clamp(CalcTraceGridCoordFromT(ClampedStartPos, RayDir, BrickSampleT, GridResI), BrickCoordMin, BrickCoordMax - 1);
-    float3 BrickNextT = CalcTraceGridNextBoundaryT(ClampedStartPos, RayDirInv, RayStepOffset, MapPos, GridResI);
-
-    [loop]
-    for (int BrickIter = 0; BrickIter < MaxBrickIterationCount && BrickCurrT <= TraceTEnd; ++BrickIter)
-    {
-        const float BrickBeginT = BrickCurrT;
-        const float BrickEndT = min(min(min(BrickNextT.x, BrickNextT.y), BrickNextT.z), TraceTEnd);
-
-        const uint3 PhysicalCoord = WrapBrickCoord(MapPos);
-        const uint BrickIndex = FlattenBrickCoord(PhysicalCoord);
-        const bool bBrickOccupied = (BrickData[BrickIndex * 4u + 0u] != 0u);
-        if (bBrickOccupied)
-        {
-            const float DetailBeginT = BrickBeginT;
-            const float3 BrickEntryPos = ClampedStartPos + RayDir * DetailBeginT;
-            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(BbvPerVoxelResolution);
-
-            bool3 DetailStepMask = bool3(false, false, false);
-            const int FineRes = int(BbvPerVoxelResolution);
-            const int3 SubMapPos = TraceBitmaskBrickReference(
-                PosInBrick,
-                RayDir,
-                RayDirSign,
-                RayDirInv,
-                DetailStepMask,
-                int3(0, 0, 0),
-                int3(FineRes, FineRes, FineRes),
-                BrickIndex);
-            if (SubMapPos.x >= 0)
-            {
-                const float3 FinalPos = float3(MapPos * FineRes + SubMapPos);
-                const float3 StartPos = ClampedStartPos * float(FineRes);
-                const float3 Mini = ((FinalPos - StartPos) + 0.5 * RayComponentValidity - 0.5 * RayDirSign) * RayDirInv;
-                const float HitT = max(0.0, max(max(Mini.x, Mini.y), Mini.z) / float(FineRes));
-                OutHitDistanceCm = (HitT + RayTraceBeginT) * CellSize;
-                OutLogicalBrickCoord = MapPos;
-                OutLogicalFineCoord = MapPos * FineRes + SubMapPos;
-                OutBrickIndex = BrickIndex;
-                OutBitIndex = CalcFineBitIndex(uint3(SubMapPos));
-                return true;
-            }
-        }
-
-        const bool3 BrickStepMask = CalcStepMask(BrickNextT);
-        const int3 MapPosDelta = select(BrickStepMask, RayStep, 0);
-        MapPos += MapPosDelta;
-        BrickCurrT = max(BrickCurrT + kTraceEpsilon, BrickEndT + kTraceEpsilon);
-        if ((any(MapPos < BrickCoordMin) || any(MapPos >= BrickCoordMax)) || all(MapPosDelta == 0))
-        {
-            break;
-        }
-        BrickNextT = CalcTraceGridNextBoundaryT(ClampedStartPos, RayDirInv, RayStepOffset, MapPos, GridResI);
-    }
-
-    return false;
+    return TraceBbvRayReference(
+        RayOriginWs,
+        RayDirWs,
+        MaxDistanceCm,
+        false,
+        OutHitDistanceCm,
+        OutLogicalBrickCoord,
+        OutLogicalFineCoord,
+        OutBrickIndex,
+        OutBitIndex);
 }
 
+// デバッグ表示用の薄いアダプタ（Brick ヒット専用）。
 bool TraceBbvBrickRayReference(
     float3 RayOriginWs,
     float3 RayDirWs,
@@ -359,207 +109,18 @@ bool TraceBbvBrickRayReference(
     out int3 OutLogicalBrickCoord,
     out uint OutBrickIndex)
 {
-    OutHitDistanceCm = -1.0;
-    OutLogicalBrickCoord = int3(-1, -1, -1);
-    OutBrickIndex = 0u;
-
-    const float CellSize = max(CellSizeCm, 0.001);
-    const float CellSizeInv = 1.0 / CellSize;
-    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
-    const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
-    const float3 RayDir = RayDirWs;
-    const float3 RayDirInv = SafeInv(RayDir);
-    const int3 RayStep = int3(sign(RayDir));
-    const float3 RayStepOffset = step(0.0, RayDir);
-
-    float RayBeginT = 0.0;
-    float RayEndT = 0.0;
-    if (!IntersectAabb(RayBeginT, RayEndT, float3(0.0, 0.0, 0.0), float3(GridResI), RayOrigin, RayDir, RayDirInv, MaxDistanceCm * CellSizeInv))
-    {
-        return false;
-    }
-
-    const float3 ClampedStart = RayOrigin + RayDir * RayBeginT;
-    const float3 ClampedEnd = RayOrigin + RayDir * RayEndT;
-    const float TraceEndT = RayEndT - RayBeginT;
-    if (TraceEndT <= 0.0)
-    {
-        return false;
-    }
-
-    const int3 TraceCellMin = min(int3(floor(ClampedStart)), int3(floor(ClampedEnd)));
-    const int3 TraceCellMax = max(int3(floor(ClampedStart)), int3(floor(ClampedEnd))) + 1;
-    const int3 BrickCoordMin = clamp(TraceCellMin, int3(0, 0, 0), GridResI);
-    const int3 BrickCoordMax = clamp(TraceCellMax, int3(0, 0, 0), GridResI);
-    if (any(BrickCoordMax <= BrickCoordMin))
-    {
-        return false;
-    }
-
-    const int3 BrickExtent = BrickCoordMax - BrickCoordMin;
-    const int MaxBrickIterationCount = max(1, BrickExtent.x + BrickExtent.y + BrickExtent.z) + 2;
-    const float kTraceEpsilon = 1e-4;
-
-    float BrickCurrT = 0.0;
-    const float BrickSampleT = CalcTraceSampleT(BrickCurrT, TraceEndT);
-    int3 MapPos = clamp(CalcTraceGridCoordFromT(ClampedStart, RayDir, BrickSampleT, GridResI), BrickCoordMin, BrickCoordMax - 1);
-    float3 BrickNextT = CalcTraceGridNextBoundaryT(ClampedStart, RayDirInv, RayStepOffset, MapPos, GridResI);
-
-    [loop]
-    for (int BrickIter = 0; BrickIter < MaxBrickIterationCount && BrickCurrT <= TraceEndT; ++BrickIter)
-    {
-        const float BrickBeginT = BrickCurrT;
-        const float BrickEndT = min(min(min(BrickNextT.x, BrickNextT.y), BrickNextT.z), TraceEndT);
-
-        const uint3 PhysicalCoord = WrapBrickCoord(MapPos);
-        const uint BrickIndex = FlattenBrickCoord(PhysicalCoord);
-        const bool bBrickOccupied = (BrickData[BrickIndex * 4u + 0u] != 0u);
-        if (bBrickOccupied)
-        {
-            OutHitDistanceCm = (BrickBeginT + RayBeginT) * CellSize;
-            OutLogicalBrickCoord = MapPos;
-            OutBrickIndex = BrickIndex;
-            return true;
-        }
-
-        const bool3 BrickStepMask = CalcStepMask(BrickNextT);
-        const int3 MapPosDelta = select(BrickStepMask, RayStep, 0);
-        MapPos += MapPosDelta;
-        BrickCurrT = max(BrickCurrT + kTraceEpsilon, BrickEndT + kTraceEpsilon);
-        if ((any(MapPos < BrickCoordMin) || any(MapPos >= BrickCoordMax)) || all(MapPosDelta == 0))
-        {
-            break;
-        }
-        BrickNextT = CalcTraceGridNextBoundaryT(ClampedStart, RayDirInv, RayStepOffset, MapPos, GridResI);
-    }
-
-    return false;
-}
-
-bool TraceBbvRay(
-    float3 RayOriginWs,
-    float3 RayDirWs,
-    float MaxDistanceCm,
-    bool bBrickOnly,
-    bool bAllowBitmaskFallback,
-    out float OutHitDistanceCm,
-    out int3 OutLogicalBrickCoord,
-    out int3 OutLogicalFineCoord,
-    out uint OutBrickIndex,
-    out uint OutBitIndex)
-{
-    OutHitDistanceCm = -1.0;
-    OutLogicalBrickCoord = int3(-1, -1, -1);
-    OutLogicalFineCoord = int3(-1, -1, -1);
-    OutBrickIndex = 0u;
-    OutBitIndex = 0u;
-
-    const float CellSize = max(CellSizeCm, 0.001);
-    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
-    const float3 GridResF = float3(GridResolutionX, GridResolutionY, GridResolutionZ);
-    const float3 RayOriginGrid = (RayOriginWs - GridMinPositionWs) / CellSize;
-    const float3 RayDirGrid = RayDirWs / CellSize;
-    const float3 RayDirGridInv = SafeInv(RayDirGrid);
-
-    float tBegin = 0.0;
-    float tEnd = 0.0;
-    if (!IntersectAabb(tBegin, tEnd, float3(0.0, 0.0, 0.0), GridResF, RayOriginGrid, RayDirGrid, RayDirGridInv, MaxDistanceCm))
-    {
-        return false;
-    }
-
-    const float kTraceEpsilon = 1e-4;
-    float brickCurrT = tBegin;
-    const float brickSampleT = min(brickCurrT + kTraceEpsilon, max(brickCurrT, tEnd - kTraceEpsilon));
-    int3 mapPos = clamp(int3(floor(RayOriginGrid + RayDirGrid * brickSampleT)), int3(0, 0, 0), GridResI - 1);
-    const float3 rayStepOffset = step(0.0, RayDirGrid);
-    const int3 rayStep = int3(sign(RayDirGrid));
-    const int maxBrickIter = GridResI.x + GridResI.y + GridResI.z + 8;
-
-    [loop]
-    for (int brickIter = 0; brickIter < maxBrickIter && brickCurrT <= tEnd; ++brickIter)
-    {
-        const float3 nextBoundary = select(rayStepOffset > 0.0, float3(mapPos + 1), float3(mapPos));
-        float3 brickNextT = (nextBoundary - RayOriginGrid) * RayDirGridInv;
-        const float brickEndT = min(min(min(brickNextT.x, brickNextT.y), brickNextT.z), tEnd);
-
-        const uint3 physicalCoord = WrapBrickCoord(mapPos);
-        const uint brickIndex = FlattenBrickCoord(physicalCoord);
-        bool bBrickOccupied = (BrickData[brickIndex * 4u + 0u] != 0u);
-        if (!bBrickOccupied && bAllowBitmaskFallback)
-        {
-            bBrickOccupied = AnyVoxelInBrick(brickIndex);
-        }
-
-        if (bBrickOccupied)
-        {
-            if (bBrickOnly)
-            {
-                OutHitDistanceCm = max(brickCurrT, 0.0);
-                OutLogicalBrickCoord = mapPos;
-                OutBrickIndex = brickIndex;
-                return true;
-            }
-
-            const float detailBeginT = max(brickCurrT, tBegin);
-            const float3 brickEntryPos = RayOriginGrid + RayDirGrid * detailBeginT;
-            const float3 localRayPos = (brickEntryPos - float3(mapPos)) * float(BbvPerVoxelResolution);
-            const float3 localRayDir = RayDirGrid * float(BbvPerVoxelResolution);
-            const float3 localInvDir = SafeInv(localRayDir);
-            const float3 localStepOffset = step(0.0, localRayDir);
-            const int3 localStep = int3(sign(localRayDir));
-            const int FineRes = int(BbvPerVoxelResolution);
-
-            int3 finePos = int3(floor(clamp(localRayPos, float3(0.0001, 0.0001, 0.0001), float3(FineRes - 0.0001, FineRes - 0.0001, FineRes - 0.0001))));
-            float3 sideDist = ((floor(localRayPos) - localRayPos) + localStepOffset) * localInvDir;
-
-            [loop]
-            for (int fineIter = 0; fineIter < FineRes * 3 + 8; ++fineIter)
-            {
-                uint fineBitIndex = 0u;
-                if (IsFineVoxelOccupiedInBrick(brickIndex, finePos, fineBitIndex))
-                {
-                    const float fineResF = float(BbvPerVoxelResolution);
-                    const float3 fineMin = float3(mapPos) + float3(finePos) / fineResF;
-                    const float3 fineMax = float3(mapPos) + float3(finePos + 1) / fineResF;
-                    float fineBeginT = 0.0;
-                    float fineEndT = 0.0;
-                    if (IntersectAabb(fineBeginT, fineEndT, fineMin, fineMax, RayOriginGrid, RayDirGrid, RayDirGridInv, MaxDistanceCm))
-                    {
-                        OutHitDistanceCm = max(fineBeginT, 0.0);
-                    }
-                    else
-                    {
-                        OutHitDistanceCm = max(brickCurrT, 0.0);
-                    }
-                    OutLogicalBrickCoord = mapPos;
-                    OutLogicalFineCoord = mapPos * FineRes + finePos;
-                    OutBrickIndex = brickIndex;
-                    OutBitIndex = fineBitIndex;
-                    return true;
-                }
-
-                bool3 fineStepMask = CalcStepMask(sideDist);
-                sideDist += select(fineStepMask, abs(localInvDir), 0.0);
-                finePos += select(fineStepMask, localStep, 0);
-                if (any(finePos < 0) || any(finePos >= FineRes))
-                {
-                    break;
-                }
-            }
-        }
-
-        bool3 brickStepMask = CalcStepMask(brickNextT);
-        int3 mapPosDelta = select(brickStepMask, rayStep, 0);
-        mapPos += mapPosDelta;
-        brickCurrT = max(brickCurrT + kTraceEpsilon, brickEndT + kTraceEpsilon);
-        if ((any(mapPos < 0) || any(mapPos >= GridResI)) || all(mapPosDelta == 0))
-        {
-            break;
-        }
-    }
-
-    return false;
+    int3 DummyFineCoord = int3(-1, -1, -1);
+    uint DummyBitIndex = 0u;
+    return TraceBbvRayReference(
+        RayOriginWs,
+        RayDirWs,
+        MaxDistanceCm,
+        true,
+        OutHitDistanceCm,
+        OutLogicalBrickCoord,
+        DummyFineCoord,
+        OutBrickIndex,
+        DummyBitIndex);
 }
 
 struct VsOutput
@@ -624,6 +185,7 @@ PsOut MainPS(VsOutput Input)
     uint HitBrickIndex = 0u;
     uint HitBitIndex = 0u;
     bool bHit = false;
+    // DebugMode 2/3 は同一のコアトレースを共有し、差分は IsBrickMode のみ。
     if (DebugMode == 2)
     {
         bHit = TraceBbvBrickRayReference(
@@ -654,6 +216,8 @@ PsOut MainPS(VsOutput Input)
     }
 
     float3 HitColor = float3(0.0, 0.0, 0.0);
+    // ハッシュ色は浮動小数ヒット位置ではなく安定した論理座標から生成し、
+    // カメラ微小移動時の色点滅を抑制する。
     if (DebugMode == 2)
     {
         const int3 GridOriginBrickCoord = int3(floor(GridMinPositionWs / max(CellSizeCm, 0.001)));

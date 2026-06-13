@@ -14,6 +14,11 @@
 namespace
 {
 static constexpr uint32 kBbvElementUpdateSkipCount = 3;
+// 移植時の重要注意（RDG/RHI）:
+// - 再生成したバッファは QueueBufferExtraction 前に必ず produced 状態へする（Clear など）。
+//   produced でない抽出は RDG validation で落ちる。
+// - Indirect dispatch は args バッファ生成だけでなく、消費パス側で IndirectArgs access を明示する。
+//   片側だけだと実行時 validation で失敗する。
 
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvReset(
     TEXT("r.InstantRdv.Bbv.Reset"),
@@ -127,6 +132,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrustumBrickCounter)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrustumBrickList)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBitmaskBrickVoxel)
+        // Indirect dispatch では消費側パラメータに IndirectArgs access 宣言が必須。
         RDG_BUFFER_ACCESS(FrustumBrickIndirectArgBuffer, ERHIAccess::IndirectArgs)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -308,7 +314,8 @@ void FInstantRdvBbv::Execute(
         HiBrickDataBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), HiBrickDataElementCount), TEXT("InstantRdv.BbvHiBrickDataBuffer"));
         OptionalDataBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), OptionalDataElementCount), TEXT("InstantRdv.BbvOptionalDataBuffer"));
 
-        // Newly created pooled buffers must be produced at least once before extraction.
+        // 再生成直後の pooled buffer は produced 扱いではないため、
+        // extraction 前に明示的に書き込み（clear）して RDG validation を満たす。
         AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BitmaskBuffer), 0u);
         AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BrickDataBuffer), 0u);
         AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(HiBrickDataBuffer), 0u);
@@ -455,6 +462,7 @@ void FInstantRdvBbv::Execute(
             FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthFrustumCull"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
         }
 
+        // frustum cull の結果カウンタから、DispatchIndirect 用 args を毎フレーム再構築する。
         FrustumBrickIndirectArgBuffer = FComputeShaderUtils::AddIndirectArgsSetupCsPass1D(
             GraphBuilder,
             View.GetFeatureLevel(),

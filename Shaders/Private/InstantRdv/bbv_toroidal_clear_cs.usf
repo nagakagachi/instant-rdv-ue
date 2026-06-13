@@ -12,14 +12,7 @@ int4 GridMoveDeltaCells;
 float3 ToroidalOffsetCells;
 uint OptionalDataU32Count;
 
-uint3 WrapBrickCoord(int3 LogicalCoord)
-{
-    int3 wrapped = LogicalCoord + int3(ToroidalOffsetCells + 0.5);
-    wrapped.x = ((wrapped.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
-    wrapped.y = ((wrapped.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
-    wrapped.z = ((wrapped.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
-    return uint3(wrapped);
-}
+#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
@@ -49,7 +42,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     const uint3 PhysicalCoord = WrapBrickCoord(LogicalCoord);
-    const uint PhysicalBrickIndex = PhysicalCoord.x + PhysicalCoord.y * GridResolutionX + PhysicalCoord.z * GridResolutionX * GridResolutionY;
+    const uint PhysicalBrickIndex = FlattenBrickCoord(PhysicalCoord);
     const uint WordStart = PhysicalBrickIndex * BitmaskWordsPerBrick;
     const uint OptionalStart = PhysicalBrickIndex * OptionalDataU32Count;
     [loop]

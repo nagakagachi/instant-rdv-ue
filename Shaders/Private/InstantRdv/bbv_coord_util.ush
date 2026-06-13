@@ -1,0 +1,45 @@
+// BBV の座標変換・インデックス計算の共通ユーティリティ。
+// デバッグ/更新系シェーダの両方から再利用する。
+//
+// 移植時の注意:
+// - 座標は「論理座標 -> トロイダル wrap 後の物理座標」でアクセスする。
+//   先に flatten すると、更新と追跡で別セルを参照して破綻する。
+// - Fine Voxel の bit 順序は BbvPerVoxelResolution=8 時に subbrick morton を使う。
+//   単純な線形 index に戻すと Injection/Trace の対応が崩れる。
+
+uint FlattenBrickCoord(uint3 BrickCoord)
+{
+    return BrickCoord.x + BrickCoord.y * GridResolutionX + BrickCoord.z * GridResolutionX * GridResolutionY;
+}
+
+uint3 WrapBrickCoord(int3 LogicalCoord)
+{
+    int3 Wrapped = LogicalCoord + int3(ToroidalOffsetCells + 0.5);
+    Wrapped.x = ((Wrapped.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
+    Wrapped.y = ((Wrapped.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
+    Wrapped.z = ((Wrapped.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
+    return uint3(Wrapped);
+}
+
+uint CalcSubbrickMortonBitIndex(uint3 P)
+{
+    return ((P.x >> 0u) & 1u) << 0u
+         | ((P.y >> 0u) & 1u) << 1u
+         | ((P.z >> 0u) & 1u) << 2u
+         | ((P.x >> 1u) & 1u) << 3u
+         | ((P.y >> 1u) & 1u) << 4u
+         | ((P.z >> 1u) & 1u) << 5u;
+}
+
+uint CalcFineBitIndex(uint3 FineCoord)
+{
+    if (BbvPerVoxelResolution == 8u)
+    {
+        const uint3 SubbrickCoord = FineCoord / 4u;
+        const uint3 SubbrickLocal = FineCoord % 4u;
+        const uint SubbrickIndex = SubbrickCoord.x + SubbrickCoord.y * 2u + SubbrickCoord.z * 4u;
+        return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
+    }
+
+    return FineCoord.x + FineCoord.y * BbvPerVoxelResolution + FineCoord.z * BbvPerVoxelResolution * BbvPerVoxelResolution;
+}

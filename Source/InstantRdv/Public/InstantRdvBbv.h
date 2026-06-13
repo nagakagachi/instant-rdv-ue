@@ -16,6 +16,8 @@ struct FInstantRdvBbvConfig
     uint32 ProbeCascadeCount = 5;
 
     uint32 BbvPerVoxelResolution = 8;
+    // BrickData は 1 Brick あたり 4 uint を前提に各シェーダがアクセスする。
+    // ここを 1 などに変更すると、occupied count や各種属性の参照先が壊れる。
     uint32 BrickDataU32Count = 4;
     uint32 HiBrickDataU32Count = 1;
     uint32 OptionalDataU32Count = 4;

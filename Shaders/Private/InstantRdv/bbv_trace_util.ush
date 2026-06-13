@@ -1,0 +1,269 @@
+// BBV レイトレースの本番共通ユーティリティ。
+// GI 含む本番経路で再利用できるよう、Brick/FineVoxel 追跡のコア処理を集約する。
+//
+// 移植時の注意:
+// - レイトレ本体はこのファイルに一本化し、デバッグ側は薄いアダプタのみを持つ。
+//   複製実装を作ると、修正漏れで Brick/Voxel の挙動が簡単に分岐する。
+// - PixelCoord/UV 由来のレイ生成と、ここでの座標系（GridMin/CellSize）を必ず対で検証する。
+//   どちらか一方がずれると全画面同色ヒットや角度依存ノイズを誘発する。
+// - ハッシュ色など可視化用途でも、判定座標は浮動小数位置ではなく論理セル座標を基準にする。
+//   これを守らないとカメラ微動で色が点滅し、診断結果が不安定になる。
+
+#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
+
+float3 SafeInv(float3 Value)
+{
+    // 0 除算を避けるため、極小成分には十分大きい近似逆数を使う。
+    const float3 Inv = 1.0 / Value;
+    return select(abs(Value) < 1e-6, float3(1e6, 1e6, 1e6), Inv);
+}
+
+bool3 CalcStepMask(float3 SideDistance)
+{
+    // DDA の次境界判定。最小の軸のみ 1 ステップ進める。
+    bool3 Mask;
+    Mask.x = (SideDistance.x < SideDistance.y) && (SideDistance.x < SideDistance.z);
+    Mask.y = (!Mask.x) && (SideDistance.y < SideDistance.z);
+    Mask.z = (!Mask.x) && (!Mask.y);
+    return Mask;
+}
+
+bool IntersectAabb(
+    out float OutTBegin,
+    out float OutTEnd,
+    float3 AabbMin,
+    float3 AabbMax,
+    float3 RayOrigin,
+    float3 RayDir,
+    float3 RayDirInv,
+    float MaxRayT)
+{
+    // Ray と AABB の交差区間 [tNear, tFar] を求め、許容範囲へクランプする。
+    OutTBegin = 0.0;
+    OutTEnd = MaxRayT;
+
+    const float3 TToMin = (AabbMin - RayOrigin) * RayDirInv;
+    const float3 TToMax = (AabbMax - RayOrigin) * RayDirInv;
+    const float TNear = max(max(min(TToMin.x, TToMax.x), min(TToMin.y, TToMax.y)), min(TToMin.z, TToMax.z));
+    const float TFar = min(min(max(TToMin.x, TToMax.x), max(TToMin.y, TToMax.y)), max(TToMin.z, TToMax.z));
+    if (TFar <= TNear || MaxRayT < TNear)
+    {
+        return false;
+    }
+
+    OutTBegin = max(OutTBegin, TNear);
+    OutTEnd = min(OutTEnd, TFar);
+    return true;
+}
+
+bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint OutBitIndex)
+{
+    // Brick 内ローカル座標を bit index に変換し、該当ビットの占有状態を返す。
+    OutBitIndex = 0u;
+    const int FineRes = int(BbvPerVoxelResolution);
+    if (any(LocalFineCoord < 0) || any(LocalFineCoord >= FineRes))
+    {
+        return false;
+    }
+
+    const uint3 FineCoord = uint3(LocalFineCoord);
+    OutBitIndex = CalcFineBitIndex(FineCoord);
+    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (OutBitIndex / 32u);
+    const uint WordMask = 1u << (OutBitIndex & 31u);
+    return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
+}
+
+float CalcTraceSampleT(float CurrT, float EndT)
+{
+    // 境界ジャストの丸め誤差を避けるため、微小オフセット付きのサンプル時刻を返す。
+    const float kTraceEpsilon = 1e-4;
+    return min(CurrT + kTraceEpsilon, max(CurrT, EndT - kTraceEpsilon));
+}
+
+int3 CalcTraceGridCoordFromT(float3 RayOrigin, float3 RayDir, float SampleT, int3 GridResolution)
+{
+    // レイ上の時刻 t をグリッド整数座標へ変換し、範囲内に収める。
+    const float3 SamplePos = RayOrigin + RayDir * SampleT;
+    const int3 Coord = int3(floor(SamplePos));
+    return clamp(Coord, int3(0, 0, 0), GridResolution - 1);
+}
+
+float3 CalcTraceGridNextBoundaryT(float3 RayOrigin, float3 RayDirInv, float3 RayStepOffset, int3 CellCoord, int3 GridResolution)
+{
+    // 現在セルから次のセル境界へ到達する t を軸ごとに計算する。
+    const int3 CellCoordMin = CellCoord;
+    const int3 CellCoordMax = min(CellCoordMin + int3(1, 1, 1), GridResolution);
+    const float3 NextBoundary = select(RayStepOffset > 0.0, float3(CellCoordMax), float3(CellCoordMin));
+    return (NextBoundary - RayOrigin) * RayDirInv;
+}
+
+int3 TraceBitmaskBrickReference(
+    float3 RayPos,
+    float3 RayDir,
+    float3 RayDirSign,
+    float3 InvDir,
+    inout bool3 StepMask,
+    int3 TraceCoordMin,
+    int3 TraceCoordMax,
+    uint BrickIndex)
+{
+    // Brick 局所空間で DDA を回し、最初に占有された Fine Voxel を返す。
+    RayPos = clamp(RayPos, float3(TraceCoordMin) + 0.0001, float3(TraceCoordMax) - 0.0001);
+    float3 SideDist = ((floor(RayPos) - RayPos) + step(0.0, RayDir)) * InvDir;
+    int3 MapPos = int3(floor(RayPos));
+    int3 RaySign = int3(RayDirSign);
+
+    [loop]
+    while (all(MapPos >= TraceCoordMin) && all(MapPos < TraceCoordMax))
+    {
+        uint FineBitIndex = 0u;
+        if (IsFineVoxelOccupiedInBrick(BrickIndex, MapPos, FineBitIndex))
+        {
+            return MapPos;
+        }
+
+        StepMask = CalcStepMask(SideDist);
+        SideDist += select(StepMask, abs(InvDir), 0.0);
+        const int3 MapPosDelta = select(StepMask, RaySign, 0);
+        MapPos += MapPosDelta;
+    }
+
+    return int3(-1, -1, -1);
+}
+
+// BBV レイトレースの共通コア。
+// - IsBrickMode=true  : 最初に占有された Brick（8x8x8 Voxel）で停止。
+// - IsBrickMode=false : Brick 内の bitmask 追跡へ進み、Fine Voxel ヒットまで探索。
+bool TraceBbvRayReference(
+    float3 RayOriginWs,
+    float3 RayDirWs,
+    float MaxDistanceCm,
+    const bool IsBrickMode,
+    out float OutHitDistanceCm,
+    out int3 OutLogicalBrickCoord,
+    out int3 OutLogicalFineCoord,
+    out uint OutBrickIndex,
+    out uint OutBitIndex)
+{
+    // 呼び出し側が未初期化値を扱わないよう、失敗時デフォルトを先に設定する。
+    OutHitDistanceCm = -1.0;
+    OutLogicalBrickCoord = int3(-1, -1, -1);
+    OutLogicalFineCoord = int3(-1, -1, -1);
+    OutBrickIndex = 0u;
+    OutBitIndex = 0u;
+
+    const float CellSize = max(CellSizeCm, 0.001);
+    const float CellSizeInv = 1.0 / CellSize;
+    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
+
+    const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
+    const float3 RayDir = RayDirWs;
+    const float3 RayDirInv = SafeInv(RayDir);
+    const float3 RayDirSign = sign(RayDir);
+    const int3 RayStep = int3(RayDirSign);
+    const float3 RayStepOffset = step(0.0, RayDir);
+    const float3 RayComponentValidity = abs(RayDirSign);
+
+    // まずグリッド全体 AABB との交差を取り、不要なレイを早期除外する。
+    float RayTraceBeginT = 0.0;
+    float RayTraceEndT = 0.0;
+    if (!IntersectAabb(RayTraceBeginT, RayTraceEndT, float3(0.0, 0.0, 0.0), float3(GridResI), RayOrigin, RayDir, RayDirInv, MaxDistanceCm * CellSizeInv))
+    {
+        return false;
+    }
+
+    const float3 ClampedStartPos = RayOrigin + RayDir * RayTraceBeginT;
+    const float3 ClampedEndPos = RayOrigin + RayDir * RayTraceEndT;
+    const float TraceTEnd = RayTraceEndT - RayTraceBeginT;
+    if (TraceTEnd <= 0.0)
+    {
+        return false;
+    }
+
+    // 実際に走査すべき論理 Brick 範囲を、レイ区間から最小限で切り出す。
+    const int3 TraceCellMin = min(int3(floor(ClampedStartPos)), int3(floor(ClampedEndPos)));
+    const int3 TraceCellMax = max(int3(floor(ClampedStartPos)), int3(floor(ClampedEndPos))) + 1;
+    const int3 BrickCoordMin = clamp(TraceCellMin, int3(0, 0, 0), GridResI);
+    const int3 BrickCoordMax = clamp(TraceCellMax, int3(0, 0, 0), GridResI);
+    if (any(BrickCoordMax <= BrickCoordMin))
+    {
+        return false;
+    }
+
+    const int3 BrickExtent = BrickCoordMax - BrickCoordMin;
+    const int MaxBrickIterationCount = max(1, BrickExtent.x + BrickExtent.y + BrickExtent.z) + 2;
+    const float kTraceEpsilon = 1e-4;
+
+    float BrickCurrT = 0.0;
+    const float BrickSampleT = CalcTraceSampleT(BrickCurrT, TraceTEnd);
+    int3 MapPos = clamp(CalcTraceGridCoordFromT(ClampedStartPos, RayDir, BrickSampleT, GridResI), BrickCoordMin, BrickCoordMax - 1);
+    float3 BrickNextT = CalcTraceGridNextBoundaryT(ClampedStartPos, RayDirInv, RayStepOffset, MapPos, GridResI);
+
+    // 論理座標（wrap 前）での Brick 単位 DDA 走査。
+    [loop]
+    for (int BrickIter = 0; BrickIter < MaxBrickIterationCount && BrickCurrT <= TraceTEnd; ++BrickIter)
+    {
+        const float BrickBeginT = BrickCurrT;
+        const float BrickEndT = min(min(min(BrickNextT.x, BrickNextT.y), BrickNextT.z), TraceTEnd);
+
+        // 論理座標をトロイダル物理座標へ写像して実データへアクセスする。
+        const uint3 PhysicalCoord = WrapBrickCoord(MapPos);
+        const uint BrickIndex = FlattenBrickCoord(PhysicalCoord);
+        const bool bBrickOccupied = (BrickData[BrickIndex * 4u + 0u] != 0u);
+        if (bBrickOccupied)
+        {
+            if (IsBrickMode)
+            {
+                // Brick モードは最初の占有 Brick 到達時点をそのままヒット距離に使う。
+                OutHitDistanceCm = (BrickBeginT + RayTraceBeginT) * CellSize;
+                OutLogicalBrickCoord = MapPos;
+                OutBrickIndex = BrickIndex;
+                return true;
+            }
+
+            // Voxel モードでは同じ進入点を使い、参照実装準拠の Brick 内追跡を実行。
+            const float DetailBeginT = BrickBeginT;
+            const float3 BrickEntryPos = ClampedStartPos + RayDir * DetailBeginT;
+            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(BbvPerVoxelResolution);
+
+            bool3 DetailStepMask = bool3(false, false, false);
+            const int FineRes = int(BbvPerVoxelResolution);
+            const int3 SubMapPos = TraceBitmaskBrickReference(
+                PosInBrick,
+                RayDir,
+                RayDirSign,
+                RayDirInv,
+                DetailStepMask,
+                int3(0, 0, 0),
+                int3(FineRes, FineRes, FineRes),
+                BrickIndex);
+            if (SubMapPos.x >= 0)
+            {
+                const float3 FinalPos = float3(MapPos * FineRes + SubMapPos);
+                const float3 StartPos = ClampedStartPos * float(FineRes);
+                // Fine Voxel の面交差から安定したヒット時刻を再構成する。
+                const float3 Mini = ((FinalPos - StartPos) + 0.5 * RayComponentValidity - 0.5 * RayDirSign) * RayDirInv;
+                const float HitT = max(0.0, max(max(Mini.x, Mini.y), Mini.z) / float(FineRes));
+                OutHitDistanceCm = (HitT + RayTraceBeginT) * CellSize;
+                OutLogicalBrickCoord = MapPos;
+                OutLogicalFineCoord = MapPos * FineRes + SubMapPos;
+                OutBrickIndex = BrickIndex;
+                OutBitIndex = CalcFineBitIndex(uint3(SubMapPos));
+                return true;
+            }
+        }
+
+        // 次に越える境界軸だけ 1 セル進め、DDA を継続する。
+        const bool3 BrickStepMask = CalcStepMask(BrickNextT);
+        const int3 MapPosDelta = select(BrickStepMask, RayStep, 0);
+        MapPos += MapPosDelta;
+        BrickCurrT = max(BrickCurrT + kTraceEpsilon, BrickEndT + kTraceEpsilon);
+        if ((any(MapPos < BrickCoordMin) || any(MapPos >= BrickCoordMax)) || all(MapPosDelta == 0))
+        {
+            break;
+        }
+        BrickNextT = CalcTraceGridNextBoundaryT(ClampedStartPos, RayDirInv, RayStepOffset, MapPos, GridResI);
+    }
+
+    return false;
+}
