@@ -2,6 +2,7 @@
 
 #include "HAL/IConsoleManager.h"
 #include "InstantRdvBbv.h"
+#include "PostProcess/PostProcessMaterialInputs.h"
 #include "PostProcess/PostProcessInputs.h"
 #include "SceneRendering.h"
 
@@ -30,7 +31,8 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvDebugMode(
     TEXT("0: Off\n")
     TEXT("1: XY fine-voxel Z-count map (no raytrace)\n")
     TEXT("2: Brick raytrace debug\n")
-    TEXT("3: Voxel raytrace debug"),
+    TEXT("3: Voxel raytrace debug\n")
+    TEXT("4: Voxel radiance debug"),
     ECVF_RenderThreadSafe);
 
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewInjection(
@@ -57,12 +59,36 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewUpdate(
     TEXT("1: Enable by individual pass toggles"),
     ECVF_RenderThreadSafe);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvGeometryUpdateTiming(
-    TEXT("r.InstantRdv.Bbv.GeometryUpdateTiming"),
-    0,
-    TEXT("BBV Geometry更新（Injection/Removal）の実行タイミング。\n")
-    TEXT("0: PreRenderBasePass_RenderThread（既定）\n")
-    TEXT("1: PrePostProcessPass_RenderThread（従来互換）"),
+static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceUpdate(
+    TEXT("r.InstantRdv.Bbv.RadianceUpdate"),
+    1,
+    TEXT("BBV Radiance更新（Injection + Resolve）の有効化。\n")
+    TEXT("0: Disabled\n")
+    TEXT("1: Enabled at SubscribeToPostProcessingPass BeforeDOF"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceInjection(
+    TEXT("r.InstantRdv.Bbv.RadianceInjection"),
+    1,
+    TEXT("BBV Radiance Injection passの有効化。\n")
+    TEXT("0: Disabled\n")
+    TEXT("1: Enabled"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceResolve(
+    TEXT("r.InstantRdv.Bbv.RadianceResolve"),
+    1,
+    TEXT("BBV Radiance Resolve passの有効化。\n")
+    TEXT("0: Disabled\n")
+    TEXT("1: Enabled"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvFspUpdate(
+    TEXT("r.InstantRdv.Fsp.Update"),
+    1,
+    TEXT("Frustum Space Probe(FSP) 初期更新の有効化。\n")
+    TEXT("0: Disabled\n")
+    TEXT("1: Enabled after BBV Radiance Resolve"),
     ECVF_RenderThreadSafe);
 
 static FRDGTextureRef GetViewSceneDepthTexture_RenderThread(const FSceneView& View)
@@ -142,10 +168,6 @@ void FInstantRdvSceneViewExtension::ExecuteBbvGeometryUpdate_RenderThread(FRDGBu
 
 void FInstantRdvSceneViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& GraphBuilder, bool bDepthBufferIsPopulated)
 {
-    if (CVarInstantRdvBbvGeometryUpdateTiming.GetValueOnRenderThread() != 0)
-    {
-        return;
-    }
     if (!bDepthBufferIsPopulated)
     {
         return;
@@ -162,7 +184,7 @@ void FInstantRdvSceneViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& 
         ExecuteBbvGeometryUpdate_RenderThread(GraphBuilder, *View, SceneDepthTexture);
     }
 }
-
+// PostProcess先頭.
 void FInstantRdvSceneViewExtension::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs)
 {
     if (CVarInstantRdvBbvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
@@ -183,18 +205,75 @@ void FInstantRdvSceneViewExtension::PrePostProcessPass_RenderThread(FRDGBuilder&
         return;
     }
 
-    if (CVarInstantRdvBbvGeometryUpdateTiming.GetValueOnRenderThread() == 1)
+    // 現状は特になし.
+}
+
+// PostProcess内の各種タイミング.
+void FInstantRdvSceneViewExtension::SubscribeToPostProcessingPass(EPostProcessingPass Pass, const FSceneView& InView, FPostProcessingPassDelegateArray& InOutPassCallbacks, bool bIsPassEnabled)
+{
+    (void)InView;
+    if (Pass == EPostProcessingPass::BeforeDOF && bIsPassEnabled && CVarInstantRdvBbvRadianceUpdate.GetValueOnAnyThread() != 0)
     {
-        ExecuteBbvGeometryUpdate_RenderThread(GraphBuilder, View, SceneDepthTexture);
+        // Radiance はLighting後かつTonemap前のSceneColorが必要なため、BeforeDOFで購読する。
+        InOutPassCallbacks.Add(FPostProcessingPassDelegate::CreateRaw(this, &FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread));
+    }
+}
+
+FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& Inputs)
+{
+    if (CVarInstantRdvBbvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
+    {
+        return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
     }
 
-    const int32 DebugMode = CVarInstantRdvBbvDebugMode.GetValueOnRenderThread();
-    BbvSystem->ExecuteDebugVisualize(
-        GraphBuilder,
-        View,
-        SceneDepthTexture,
-        SceneTextureParameters->SceneColorTexture,
-        DebugMode);
+    FScreenPassTextureSlice SceneColorSlice = Inputs.GetInput(EPostProcessMaterialInput::SceneColor);
+    if (!SceneColorSlice.IsValid())
+    {
+        return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
+    }
+
+    FScreenPassTexture SceneColor(SceneColorSlice);
+    FRDGTextureRef SceneDepthTexture = GetViewSceneDepthTexture_RenderThread(View);
+    if (SceneDepthTexture != nullptr && SceneColor.Texture != nullptr)
+    {
+        const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
+        const bool bEnableRadianceInjection =
+            CVarInstantRdvBbvRadianceUpdate.GetValueOnRenderThread() != 0 &&
+            CVarInstantRdvBbvRadianceInjection.GetValueOnRenderThread() != 0;
+        const bool bEnableRadianceResolve =
+            CVarInstantRdvBbvRadianceUpdate.GetValueOnRenderThread() != 0 &&
+            CVarInstantRdvBbvRadianceResolve.GetValueOnRenderThread() != 0;
+        // BbvMaterial Radialce 更新.
+        BbvSystem->ExecuteRadianceUpdate(
+            GraphBuilder,
+            View,
+            SceneDepthTexture,
+            SceneColor.Texture,
+            ViewInfo.PreExposure,
+            bEnableRadianceInjection,
+            bEnableRadianceResolve);
+        // Fsp更新.
+        BbvSystem->ExecuteFspUpdate(
+            GraphBuilder,
+            View,
+            SceneDepthTexture,
+            CVarInstantRdvFspUpdate.GetValueOnRenderThread() != 0);
+
+
+
+
+        // デバッグ表示.
+        const int32 DebugMode = CVarInstantRdvBbvDebugMode.GetValueOnRenderThread();
+        BbvSystem->ExecuteDebugVisualize(
+            GraphBuilder,
+            View,
+            SceneDepthTexture,
+            SceneColor.Texture,
+            ViewInfo.PreExposure,
+            DebugMode);
+    }
+
+    return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
 }
 
 int32 FInstantRdvSceneViewExtension::GetPriority() const

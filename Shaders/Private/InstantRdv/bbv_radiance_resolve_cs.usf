@@ -1,0 +1,53 @@
+// ファイル説明: BBV Radiance 蓄積を平均化し、OptionalData word1-3へ絶対輝度RGBを書き戻す。
+// word0 は既存の占有/カウント情報が利用するため保持する。
+
+#include "/Engine/Public/Platform.ush"
+
+RWStructuredBuffer<uint> RWBbvRadianceAccumBuffer;
+RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
+
+uint BrickCount;
+uint OptionalDataU32Count;
+
+static const uint kRadianceAccumComponentCount = 4u;
+static const float kRadianceFixedPointScale = 256.0;
+
+uint RadianceAccumAddress(uint BrickIndex, uint Component)
+{
+    return BrickIndex * kRadianceAccumComponentCount + Component;
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint BrickIndex = DispatchThreadId.x;
+    if (BrickIndex >= BrickCount || OptionalDataU32Count < 4u)
+    {
+        return;
+    }
+
+    const uint SampleCount = RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 3u)];
+    if (SampleCount != 0u)
+    {
+        const float InvDenominator = 1.0 / (kRadianceFixedPointScale * float(SampleCount));
+        const float3 CurrentRadiance = float3(
+            RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 0u)],
+            RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 1u)],
+            RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 2u)]) * InvDenominator;
+
+        const uint OptionalStart = BrickIndex * OptionalDataU32Count;
+        const float3 PrevRadiance = float3(
+            asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 1u]),
+            asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 2u]),
+            asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 3u]));
+        const float3 ResolvedRadiance = lerp(PrevRadiance, CurrentRadiance, 0.5);
+        RWBitmaskBrickVoxelOptionData[OptionalStart + 1u] = asuint(ResolvedRadiance.r);
+        RWBitmaskBrickVoxelOptionData[OptionalStart + 2u] = asuint(ResolvedRadiance.g);
+        RWBitmaskBrickVoxelOptionData[OptionalStart + 3u] = asuint(ResolvedRadiance.b);
+    }
+
+    RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 0u)] = 0u;
+    RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 1u)] = 0u;
+    RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 2u)] = 0u;
+    RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 3u)] = 0u;
+}

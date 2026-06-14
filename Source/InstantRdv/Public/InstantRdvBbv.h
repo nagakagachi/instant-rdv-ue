@@ -10,7 +10,7 @@ class FSceneView;
 struct FInstantRdvBbvConfig
 {
     FIntVector BbvGridResolution = FIntVector(64, 64, 64);
-    float BbvVoxelSizeCm = 300.0f;
+    float BbvBrickSizeCm = 300.0f;// NxNxNのVoxelクラスタをBrickと称し, そのサイズを指定するパラメータ.
     FIntVector ProbeGridResolution = FIntVector(32, 32, 32);
     float ProbeCellSizeCm = 200.0f;
     uint32 ProbeCascadeCount = 5;
@@ -51,7 +51,27 @@ public:
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
         FRDGTexture* SceneColorTexture,
+        float SceneColorPreExposure,
         int32 DebugMode);
+
+    // BBV Radiance 更新。BeforeDOF の SceneColor は PreExposure 済みなので、
+    // シェーダ内で PreExposure を打ち消して絶対輝度として蓄積する。
+    void ExecuteRadianceUpdate(
+        FRDGBuilder& GraphBuilder,
+        const FSceneView& View,
+        FRDGTexture* SceneDepthTexture,
+        FRDGTexture* SceneColorTexture,
+        float SceneColorPreExposure,
+        bool bEnableRadianceInjection,
+        bool bEnableRadianceResolve);
+
+    // Frustum Space Probe(FSP) 初期更新。
+    // 参照実装のScreenSpacePass相当で可視Surface Cellを収集し、BBV resolved radianceをFSP cellへ写す。
+    void ExecuteFspUpdate(
+        FRDGBuilder& GraphBuilder,
+        const FSceneView& View,
+        FRDGTexture* SceneDepthTexture,
+        bool bEnableFspUpdate);
 
 private:
     struct FResourceCache
@@ -60,10 +80,16 @@ private:
         TRefCountPtr<class FRDGPooledBuffer> BrickDataBuffer;
         TRefCountPtr<class FRDGPooledBuffer> HiBrickDataBuffer;
         TRefCountPtr<class FRDGPooledBuffer> OptionalDataBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> RadianceAccumBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspCellDataBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspVisibleSurfaceListBuffer;
         uint32 CachedBitmaskElements = 0;
         uint32 CachedBrickDataElements = 0;
         uint32 CachedHiBrickDataElements = 0;
         uint32 CachedOptionalDataElements = 0;
+        uint32 CachedRadianceAccumElements = 0;
+        uint32 CachedFspCellDataElements = 0;
+        uint32 CachedFspVisibleSurfaceListElements = 0;
         bool bInitialized = false;
         bool bGridOriginInitialized = false;
         uint32 FrameCount = 0;
@@ -76,6 +102,9 @@ private:
         FRDGBuffer* FrameBrickDataBuffer = nullptr;
         FRDGBuffer* FrameHiBrickDataBuffer = nullptr;
         FRDGBuffer* FrameOptionalDataBuffer = nullptr;
+        FRDGBuffer* FrameRadianceAccumBuffer = nullptr;
+        FRDGBuffer* FrameFspCellDataBuffer = nullptr;
+        FRDGBuffer* FrameFspVisibleSurfaceListBuffer = nullptr;
     };
 
     FInstantRdvBbvConfig Config;

@@ -34,9 +34,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const uint OccupancyByte = min((OccupiedVoxelCount * 255u) / Denominator, 255u);
     const uint EncodedOptionalWord = OccupancyByte | (OccupiedVoxelCount << 8u);
 
-    [loop]
-    for (uint WordOffset = 0; WordOffset < OptionalDataU32Count; ++WordOffset)
-    {
-        RWBitmaskBrickVoxelOptionData[OptionalStart + WordOffset] = EncodedOptionalWord;
-    }
+    // OptionalData word0 は占有情報、word1-3 はRadiance等の追加属性に使う。
+    // ここで全wordを塗るとRadiance Resolve結果を毎フレーム破壊するため、占有情報だけ更新する。
+    RWBitmaskBrickVoxelOptionData[OptionalStart + 0u] = EncodedOptionalWord;
 }

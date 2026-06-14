@@ -1,0 +1,82 @@
+// ファイル説明: Frustum Space Probe(FSP) の可視Surface Cell収集パス。
+// 参照実装 fsp_screen_space_pass_cs の初期移植として、DepthからWorld位置を復元しFSP cell listへ追加する。
+
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float> SceneDepthTexture;
+RWStructuredBuffer<uint> RWFspCellData;
+RWStructuredBuffer<uint> RWFspVisibleSurfaceList;
+
+uint DepthSizeX;
+uint DepthSizeY;
+uint ViewRectMinX;
+uint ViewRectMinY;
+uint ViewRectSizeX;
+uint ViewRectSizeY;
+uint FspGridResolutionX;
+uint FspGridResolutionY;
+uint FspGridResolutionZ;
+uint FspVisibleSurfaceListCapacity;
+float3 FspGridMinPositionWs;
+float FspCellSizeCm;
+float4x4 InvViewProjectionMatrix;
+
+uint FlattenFspCoord(uint3 Coord)
+{
+    return Coord.x + Coord.y * FspGridResolutionX + Coord.z * FspGridResolutionX * FspGridResolutionY;
+}
+
+bool IsValidDepth(float DeviceDepth)
+{
+    return (0.0 < DeviceDepth) && (DeviceDepth < 1.0);
+}
+
+float3 ReconstructWorldPos(float2 ViewUv, float DeviceDepth)
+{
+    const float2 Ndc = float2(ViewUv.x * 2.0 - 1.0, (1.0 - ViewUv.y) * 2.0 - 1.0);
+    float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    World.xyz /= max(abs(World.w), 1e-6);
+    return World.xyz;
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (DispatchThreadId.x >= ViewRectSizeX || DispatchThreadId.y >= ViewRectSizeY)
+    {
+        return;
+    }
+
+    const uint2 ScenePixelCoord = uint2(ViewRectMinX + DispatchThreadId.x, ViewRectMinY + DispatchThreadId.y);
+    if (ScenePixelCoord.x >= DepthSizeX || ScenePixelCoord.y >= DepthSizeY)
+    {
+        return;
+    }
+
+    const float DeviceDepth = SceneDepthTexture.Load(int3(ScenePixelCoord, 0));
+    if (!IsValidDepth(DeviceDepth))
+    {
+        return;
+    }
+
+    const float2 ViewUv = (float2(DispatchThreadId.xy) + 0.5) / float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
+    const float3 WorldPos = ReconstructWorldPos(ViewUv, DeviceDepth);
+    const int3 CellCoord = int3(floor((WorldPos - FspGridMinPositionWs) / max(FspCellSizeCm, 0.001)));
+    if (any(CellCoord < 0) ||
+        CellCoord.x >= int(FspGridResolutionX) ||
+        CellCoord.y >= int(FspGridResolutionY) ||
+        CellCoord.z >= int(FspGridResolutionZ))
+    {
+        return;
+    }
+
+    const uint CellIndex = FlattenFspCoord(uint3(CellCoord));
+    uint WriteIndex = 0u;
+    InterlockedAdd(RWFspVisibleSurfaceList[0], 1u, WriteIndex);
+    if (WriteIndex < FspVisibleSurfaceListCapacity)
+    {
+        RWFspVisibleSurfaceList[1u + WriteIndex] = CellIndex;
+        const uint CellDataStart = CellIndex * 4u;
+        RWFspCellData[CellDataStart + 0u] = 1u;
+    }
+}

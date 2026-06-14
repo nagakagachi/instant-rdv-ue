@@ -1,0 +1,145 @@
+// ファイル説明: BeforeDOF の SceneColor から BBV Radiance を蓄積する。
+// SceneColor は UE の PreExposure 済みなので、PreExposure を除算して絶対輝度へ戻してから格納する。
+
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float> SceneDepthTexture;
+Texture2D SceneColorTexture;
+StructuredBuffer<uint> BitmaskBrickVoxel;
+RWStructuredBuffer<uint> RWBbvRadianceAccumBuffer;
+
+uint DepthSizeX;
+uint DepthSizeY;
+uint ViewRectMinX;
+uint ViewRectMinY;
+uint ViewRectSizeX;
+uint ViewRectSizeY;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+uint BitmaskWordsPerBrick;
+uint BbvPerVoxelResolution;
+float3 ToroidalOffsetCells;
+float3 GridMinPositionWs;
+float CellSizeCm;
+float DepthtestInjectionWorldOffsetWs;
+float SceneColorPreExposure;
+float3 CameraPositionWs;
+float4x4 InvViewProjectionMatrix;
+
+#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
+
+static const uint kRadianceAccumComponentCount = 4u;
+static const float kRadianceFixedPointScale = 256.0;
+static const float kRadianceInputClamp = 4096.0;
+
+uint RadianceAccumAddress(uint BrickIndex, uint Component)
+{
+    return BrickIndex * kRadianceAccumComponentCount + Component;
+}
+
+float3 ReconstructWorldPosFromUv(float2 Uv, float DeviceDepth)
+{
+    const float2 Ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    World.xyz /= max(abs(World.w), 1e-6);
+    return World.xyz;
+}
+
+bool IsValidDepth(float DeviceDepth)
+{
+    return (0.0 < DeviceDepth) && (DeviceDepth < 1.0);
+}
+
+bool TryCalcBrickIndexFromWorldPos(float3 WorldPos, out uint OutBrickIndex)
+{
+    OutBrickIndex = 0u;
+    const float3 GridPos = (WorldPos - GridMinPositionWs) / max(CellSizeCm, 0.001);
+    const int3 LogicalBrickCoord = int3(floor(GridPos));
+    if (any(LogicalBrickCoord < 0) ||
+        LogicalBrickCoord.x >= int(GridResolutionX) ||
+        LogicalBrickCoord.y >= int(GridResolutionY) ||
+        LogicalBrickCoord.z >= int(GridResolutionZ))
+    {
+        return false;
+    }
+
+    const uint3 PhysicalBrickCoord = WrapBrickCoord(LogicalBrickCoord);
+    OutBrickIndex = FlattenBrickCoord(PhysicalBrickCoord);
+    return true;
+}
+
+bool IsBrickOccupied(uint BrickIndex)
+{
+    [loop]
+    for (uint WordOffset = 0u; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+    {
+        if (BitmaskBrickVoxel[BrickIndex * BitmaskWordsPerBrick + WordOffset] != 0u)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint3 EncodeRadianceToFixed(float3 AbsoluteRadiance)
+{
+    const float3 Clamped = clamp(AbsoluteRadiance, 0.0.xxx, kRadianceInputClamp.xxx);
+    return uint3(Clamped * kRadianceFixedPointScale + 0.5.xxx);
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (DispatchThreadId.x >= ViewRectSizeX || DispatchThreadId.y >= ViewRectSizeY)
+    {
+        return;
+    }
+
+    const uint2 ScenePixelCoord = uint2(ViewRectMinX + DispatchThreadId.x, ViewRectMinY + DispatchThreadId.y);
+    if (ScenePixelCoord.x >= DepthSizeX || ScenePixelCoord.y >= DepthSizeY)
+    {
+        return;
+    }
+
+    const float DeviceDepth = SceneDepthTexture.Load(int3(ScenePixelCoord, 0));
+    if (!IsValidDepth(DeviceDepth))
+    {
+        return;
+    }
+
+    const float2 ViewUv = (float2(DispatchThreadId.xy) + 0.5) / float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
+    float3 WorldPos = ReconstructWorldPosFromUv(ViewUv, DeviceDepth);
+
+    // Geometry Injection と同じく、表面直後のセルへRadianceを結びつける。
+    const float3 WorldPos0 = ReconstructWorldPosFromUv(ViewUv, 0.0);
+    const float3 WorldPos1 = ReconstructWorldPosFromUv(ViewUv, 1.0);
+    const float Dist0 = dot(WorldPos0 - CameraPositionWs, WorldPos0 - CameraPositionWs);
+    const float Dist1 = dot(WorldPos1 - CameraPositionWs, WorldPos1 - CameraPositionWs);
+    const float3 ViewRayOriginWs = (Dist0 < Dist1) ? WorldPos0 : WorldPos1;
+    const float3 ToSurface = WorldPos - ViewRayOriginWs;
+    const float ToSurfaceLenSq = dot(ToSurface, ToSurface);
+    const float3 ViewDir = (ToSurfaceLenSq > 1e-10) ? (ToSurface * rsqrt(ToSurfaceLenSq)) : float3(0.0, 0.0, 1.0);
+    WorldPos += ViewDir * DepthtestInjectionWorldOffsetWs;
+
+    uint BrickIndex = 0u;
+    if (!TryCalcBrickIndexFromWorldPos(WorldPos, BrickIndex))
+    {
+        return;
+    }
+
+    // 空Brickへ漏れた場合は蓄積しない。短距離fallbackは後続の厳密移植で追加する。
+    if (!IsBrickOccupied(BrickIndex))
+    {
+        return;
+    }
+
+    const float3 PreExposedRadiance = SceneColorTexture.Load(int3(ScenePixelCoord, 0)).rgb;
+    const float3 AbsoluteRadiance = PreExposedRadiance / max(SceneColorPreExposure, 1.0e-6);
+    const uint3 FixedRadiance = EncodeRadianceToFixed(AbsoluteRadiance);
+
+    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 0u)], FixedRadiance.r);
+    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 1u)], FixedRadiance.g);
+    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 2u)], FixedRadiance.b);
+    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 3u)], 1u);
+}

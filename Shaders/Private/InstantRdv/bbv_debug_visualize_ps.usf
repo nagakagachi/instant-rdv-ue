@@ -6,9 +6,11 @@ SamplerState PointClampSampler;
 
 StructuredBuffer<uint> BitmaskBrickVoxel;
 StructuredBuffer<uint> BrickData;
+StructuredBuffer<uint> BitmaskBrickVoxelOptionData;
 
 float4x4 InvViewProjectionMatrix;
 float3 CameraPositionWs;
+float SceneColorPreExposure;
 uint DepthSizeX;
 uint DepthSizeY;
 uint ViewRectMinX;
@@ -36,6 +38,24 @@ float3 HashColor(uint Value)
     const float g = frac(float((n >>  8) & 255u) / 255.0 + 0.37);
     const float b = frac(float((n >> 16) & 255u) / 255.0 + 0.73);
     return float3(r, g, b);
+}
+
+float3 LoadResolvedRadiance(uint BrickIndex)
+{
+    const uint OptionalStart = BrickIndex * 4u;
+    return max(float3(
+        asfloat(BitmaskBrickVoxelOptionData[OptionalStart + 1u]),
+        asfloat(BitmaskBrickVoxelOptionData[OptionalStart + 2u]),
+        asfloat(BitmaskBrickVoxelOptionData[OptionalStart + 3u])), 0.0.xxx);
+}
+
+float3 DisplayRadiance(float3 AbsoluteRadiance)
+{
+    // 格納値は露出前の絶対輝度。デバッグ表示では白飛びを避けるため簡易圧縮して見せる。
+    //return AbsoluteRadiance / (1.0.xxx + AbsoluteRadiance);
+    
+    // 表示用にPreExposure適用.
+	return AbsoluteRadiance * SceneColorPreExposure;
 }
 
 uint HashInt3(int3 V)
@@ -181,7 +201,7 @@ PsOut MainPS(VsOutput Input)
         return Output;
     }
 
-    if (DebugMode != 2 && DebugMode != 3)
+    if (DebugMode != 2 && DebugMode != 3 && DebugMode != 4)
     {
         Output.Color = BaseColor;
         return Output;
@@ -226,6 +246,15 @@ PsOut MainPS(VsOutput Input)
     }
 
     float3 HitColor = float3(0.0, 0.0, 0.0);
+    if (DebugMode == 4)
+    {
+        const float3 Radiance = LoadResolvedRadiance(HitBrickIndex);
+        HitColor = DisplayRadiance(Radiance);
+		const float DebugRadianceBlendRate = 1.0;
+        Output.Color = float4(lerp(BaseColor.rgb, HitColor, DebugRadianceBlendRate), BaseColor.a);
+        return Output;
+    }
+
     // ハッシュ色は浮動小数ヒット位置ではなく安定した論理座標から生成し、
     // カメラ微小移動時の色点滅を抑制する。
     if (DebugMode == 2)

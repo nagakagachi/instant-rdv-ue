@@ -1,0 +1,93 @@
+// ファイル説明: 可視FSP cellへBBV resolved radianceを写す初期更新パス。
+// フル移植時はProbe pool / oct atlas / SH更新へ拡張するが、BBV radianceとの接続点はここで確立する。
+
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint> BbvOptionalData;
+StructuredBuffer<uint> FspVisibleSurfaceList;
+RWStructuredBuffer<uint> RWFspCellData;
+
+uint FspGridResolutionX;
+uint FspGridResolutionY;
+uint FspGridResolutionZ;
+uint FspCellDataU32Count;
+uint FspVisibleSurfaceListCapacity;
+uint BbvGridResolutionX;
+uint BbvGridResolutionY;
+uint BbvGridResolutionZ;
+uint BbvOptionalDataU32Count;
+float3 FspGridMinPositionWs;
+float FspCellSizeCm;
+float3 BbvGridMinPositionWs;
+float BbvCellSizeCm;
+float3 BbvToroidalOffsetCells;
+
+uint3 DecodeFspCoord(uint CellIndex)
+{
+    const uint Slice = FspGridResolutionX * FspGridResolutionY;
+    const uint Z = CellIndex / Slice;
+    const uint Rem = CellIndex - Z * Slice;
+    const uint Y = Rem / FspGridResolutionX;
+    const uint X = Rem - Y * FspGridResolutionX;
+    return uint3(X, Y, Z);
+}
+
+uint FlattenBbvCoord(uint3 Coord)
+{
+    return Coord.x + Coord.y * BbvGridResolutionX + Coord.z * BbvGridResolutionX * BbvGridResolutionY;
+}
+
+uint3 WrapBbvCoord(int3 LogicalCoord)
+{
+    int3 Wrapped = LogicalCoord + int3(BbvToroidalOffsetCells + 0.5);
+    Wrapped.x = ((Wrapped.x % int(BbvGridResolutionX)) + int(BbvGridResolutionX)) % int(BbvGridResolutionX);
+    Wrapped.y = ((Wrapped.y % int(BbvGridResolutionY)) + int(BbvGridResolutionY)) % int(BbvGridResolutionY);
+    Wrapped.z = ((Wrapped.z % int(BbvGridResolutionZ)) + int(BbvGridResolutionZ)) % int(BbvGridResolutionZ);
+    return uint3(Wrapped);
+}
+
+bool TryReadBbvRadiance(float3 WorldPos, out float3 OutRadiance)
+{
+    OutRadiance = 0.0.xxx;
+    const int3 LogicalCoord = int3(floor((WorldPos - BbvGridMinPositionWs) / max(BbvCellSizeCm, 0.001)));
+    if (any(LogicalCoord < 0) ||
+        LogicalCoord.x >= int(BbvGridResolutionX) ||
+        LogicalCoord.y >= int(BbvGridResolutionY) ||
+        LogicalCoord.z >= int(BbvGridResolutionZ) ||
+        BbvOptionalDataU32Count < 4u)
+    {
+        return false;
+    }
+
+    const uint BrickIndex = FlattenBbvCoord(WrapBbvCoord(LogicalCoord));
+    const uint OptionalStart = BrickIndex * BbvOptionalDataU32Count;
+    OutRadiance = max(float3(
+        asfloat(BbvOptionalData[OptionalStart + 1u]),
+        asfloat(BbvOptionalData[OptionalStart + 2u]),
+        asfloat(BbvOptionalData[OptionalStart + 3u])), 0.0.xxx);
+    return true;
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint ListIndex = DispatchThreadId.x;
+    const uint VisibleCount = min(FspVisibleSurfaceList[0], FspVisibleSurfaceListCapacity);
+    if (ListIndex >= VisibleCount)
+    {
+        return;
+    }
+
+    const uint CellIndex = FspVisibleSurfaceList[1u + ListIndex];
+    const uint3 CellCoord = DecodeFspCoord(CellIndex);
+    const float3 CellCenterWs = FspGridMinPositionWs + (float3(CellCoord) + 0.5.xxx) * FspCellSizeCm;
+
+    float3 Radiance = 0.0.xxx;
+    TryReadBbvRadiance(CellCenterWs, Radiance);
+
+    const uint CellDataStart = CellIndex * FspCellDataU32Count;
+    RWFspCellData[CellDataStart + 0u] = 1u;
+    RWFspCellData[CellDataStart + 1u] = asuint(Radiance.r);
+    RWFspCellData[CellDataStart + 2u] = asuint(Radiance.g);
+    RWFspCellData[CellDataStart + 3u] = asuint(Radiance.b);
+}
