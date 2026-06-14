@@ -4,6 +4,8 @@
 
 class FInstantRdvBbv;
 class FRDGBuilder;
+class FRDGTexture;
+class FSceneView;
 struct FPostProcessingInputs;
 
 class FInstantRdvSceneViewExtension final : public FSceneViewExtensionBase
@@ -15,11 +17,16 @@ public:
     virtual void SetupViewFamily(FSceneViewFamily& InViewFamily) override;
     virtual void SetupView(FSceneViewFamily& InViewFamily, FSceneView& InView) override;
     virtual void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) override;
+    virtual void PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily) override;
+    virtual void PreRenderView_RenderThread(FRDGBuilder& GraphBuilder, FSceneView& InView) override;
+    virtual void PreRenderBasePass_RenderThread(FRDGBuilder& GraphBuilder, bool bDepthBufferIsPopulated) override;
     virtual void PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs) override;
     virtual int32 GetPriority() const override;
 
 private:
     virtual bool IsActiveThisFrame_Internal(const FSceneViewExtensionContext& Context) const override;
+    void ExecuteBbvGeometryUpdate_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTexture* SceneDepthTexture);
 
     TUniquePtr<FInstantRdvBbv> BbvSystem;
+    TArray<const FSceneView*> FrameViews_RenderThread;
 };

@@ -305,14 +305,20 @@ uint32 FInstantRdvBbvConfig::GetOptionalDataElementCount() const
     return GetBbvBrickCount() * OptionalDataU32Count;
 }
 
-void FInstantRdvBbv::Execute(
+void FInstantRdvBbv::BeginFrame_RenderThread()
+{
+    ResourceCache.FrameBitmaskBuffer = nullptr;
+    ResourceCache.FrameBrickDataBuffer = nullptr;
+    ResourceCache.FrameHiBrickDataBuffer = nullptr;
+    ResourceCache.FrameOptionalDataBuffer = nullptr;
+}
+
+void FInstantRdvBbv::ExecuteGeometryUpdate(
     FRDGBuilder& GraphBuilder,
     const FSceneView& View,
     FRDGTexture* SceneDepthTexture,
-    FRDGTexture* SceneColorTexture,
-    int32 DebugMode,
-    bool bEnableMainViewInjection,
-    bool bEnableMainViewRemoval)
+    bool bEnableMainViewGeometryInjection,
+    bool bEnableMainViewGeometryRemoval)
 {
     if (SceneDepthTexture == nullptr)
     {
@@ -435,7 +441,7 @@ void FInstantRdvBbv::Execute(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvBeginViewUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(1, 1, 1));
     }
 
-    if (bEnableMainViewInjection)
+    if (bEnableMainViewGeometryInjection)
     {
         FInstantRdvBbvDepthInjectionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthInjectionCS::FParameters>();
         Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
@@ -486,7 +492,7 @@ void FInstantRdvBbv::Execute(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvToroidalClear"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
-    if (bEnableMainViewRemoval)
+    if (bEnableMainViewGeometryRemoval)
     {
         {
             FInstantRdvBbvDepthFrustumCullCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthFrustumCullCS::FParameters>();
@@ -587,51 +593,81 @@ void FInstantRdvBbv::Execute(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvElementUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
-    if (DebugMode > 0 && SceneColorTexture != nullptr)
+    ResourceCache.FrameBitmaskBuffer = BitmaskBuffer;
+    ResourceCache.FrameBrickDataBuffer = BrickDataBuffer;
+    ResourceCache.FrameHiBrickDataBuffer = HiBrickDataBuffer;
+    ResourceCache.FrameOptionalDataBuffer = OptionalDataBuffer;
+    ResourceCache.bInitialized = true;
+}
+
+void FInstantRdvBbv::ExecuteDebugVisualize(
+    FRDGBuilder& GraphBuilder,
+    const FSceneView& View,
+    FRDGTexture* SceneDepthTexture,
+    FRDGTexture* SceneColorTexture,
+    int32 DebugMode)
+{
+    if (DebugMode <= 0 || SceneDepthTexture == nullptr || SceneColorTexture == nullptr)
     {
-        FRDGTextureRef SceneColorInputTexture = GraphBuilder.CreateTexture(SceneColorTexture->Desc, TEXT("InstantRdv.BbvDebugSceneColorInput"));
-        AddCopyTexturePass(GraphBuilder, SceneColorTexture, SceneColorInputTexture);
-
-        FInstantRdvBbvDebugVisualizePS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDebugVisualizePS::FParameters>();
-        Parameters->SceneDepthTexture = SceneDepthTexture;
-        Parameters->SceneColorTexture = SceneColorInputTexture;
-        Parameters->PointClampSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
-        Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
-        Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
-        Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
-        const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
-        Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
-        Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
-        Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
-        Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
-        Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-        Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-        Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
-        Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-        Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
-        Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
-        Parameters->CellSizeCm = Config.BbvVoxelSizeCm;
-        Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
-        Parameters->MaxTraceDistanceCm = Config.BbvVoxelSizeCm * static_cast<float>(Config.BbvGridResolution.GetMax());
-        Parameters->DebugMode = DebugMode;
-        Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
-        Parameters->BrickData = GraphBuilder.CreateSRV(BrickDataBuffer);
-        Parameters->RenderTargets[0] = FRenderTargetBinding(SceneColorTexture, ERenderTargetLoadAction::ELoad);
-
-        const FScreenPassTextureViewport Viewport(SceneColorTexture, ViewRect);
-        TShaderMapRef<FScreenPassVS> VertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        TShaderMapRef<FInstantRdvBbvDebugVisualizePS> PixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        AddDrawScreenPass(
-            GraphBuilder,
-            RDG_EVENT_NAME("InstantRdv.BbvDebugVisualize"),
-            View,
-            Viewport,
-            Viewport,
-            VertexShader,
-            PixelShader,
-            Parameters);
+        return;
     }
 
-    ResourceCache.bInitialized = true;
+    FRDGBufferRef BitmaskBuffer = ResourceCache.FrameBitmaskBuffer;
+    FRDGBufferRef BrickDataBuffer = ResourceCache.FrameBrickDataBuffer;
+
+    if (BitmaskBuffer == nullptr && ResourceCache.BitmaskBuffer.IsValid())
+    {
+        BitmaskBuffer = GraphBuilder.RegisterExternalBuffer(ResourceCache.BitmaskBuffer, TEXT("InstantRdv.BbvBitmaskBuffer"));
+    }
+    if (BrickDataBuffer == nullptr && ResourceCache.BrickDataBuffer.IsValid())
+    {
+        BrickDataBuffer = GraphBuilder.RegisterExternalBuffer(ResourceCache.BrickDataBuffer, TEXT("InstantRdv.BbvBrickDataBuffer"));
+    }
+    if (BitmaskBuffer == nullptr || BrickDataBuffer == nullptr)
+    {
+        return;
+    }
+
+    FRDGTextureRef SceneColorInputTexture = GraphBuilder.CreateTexture(SceneColorTexture->Desc, TEXT("InstantRdv.BbvDebugSceneColorInput"));
+    AddCopyTexturePass(GraphBuilder, SceneColorTexture, SceneColorInputTexture);
+
+    FInstantRdvBbvDebugVisualizePS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDebugVisualizePS::FParameters>();
+    Parameters->SceneDepthTexture = SceneDepthTexture;
+    Parameters->SceneColorTexture = SceneColorInputTexture;
+    Parameters->PointClampSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+    Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+    Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
+    Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
+    Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+    const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+    Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+    Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+    Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+    Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+    Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
+    Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
+    Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+    Parameters->BitmaskWordsPerBrick = Config.GetBitmaskU32CountPerBrick();
+    Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
+    Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
+    Parameters->CellSizeCm = Config.BbvVoxelSizeCm;
+    Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
+    Parameters->MaxTraceDistanceCm = Config.BbvVoxelSizeCm * static_cast<float>(Config.BbvGridResolution.GetMax());
+    Parameters->DebugMode = DebugMode;
+    Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
+    Parameters->BrickData = GraphBuilder.CreateSRV(BrickDataBuffer);
+    Parameters->RenderTargets[0] = FRenderTargetBinding(SceneColorTexture, ERenderTargetLoadAction::ELoad);
+
+    const FScreenPassTextureViewport Viewport(SceneColorTexture, ViewRect);
+    TShaderMapRef<FScreenPassVS> VertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+    TShaderMapRef<FInstantRdvBbvDebugVisualizePS> PixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+    AddDrawScreenPass(
+        GraphBuilder,
+        RDG_EVENT_NAME("InstantRdv.BbvDebugVisualize"),
+        View,
+        Viewport,
+        Viewport,
+        VertexShader,
+        PixelShader,
+        Parameters);
 }

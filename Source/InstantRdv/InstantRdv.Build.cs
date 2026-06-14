@@ -1,4 +1,5 @@
 using UnrealBuildTool;
+using System.IO;
 
 public class InstantRdv : ModuleRules
 {
@@ -9,7 +10,13 @@ public class InstantRdv : ModuleRules
         PublicIncludePaths.AddRange(
             new[]
             {
-                "Runtime/Renderer/Internal"
+                Path.Combine(EngineDirectory, "Source/Runtime/Renderer/Internal")
+            });
+
+        PrivateIncludePaths.AddRange(
+            new[]
+            {
+                Path.Combine(EngineDirectory, "Source/Runtime/Renderer/Private")
             });
 
         PublicDependencyModuleNames.AddRange(

@@ -34,14 +34,24 @@ struct FInstantRdvBbvConfig
 class FInstantRdvBbv final
 {
 public:
-    void Execute(
+    // フレーム内一時参照（RDGバッファ参照）の初期化。
+    void BeginFrame_RenderThread();
+
+    // BBV Geometry 更新（Injection / Removal）本体。
+    void ExecuteGeometryUpdate(
+        FRDGBuilder& GraphBuilder,
+        const FSceneView& View,
+        FRDGTexture* SceneDepthTexture,
+        bool bEnableMainViewGeometryInjection,
+        bool bEnableMainViewGeometryRemoval);
+
+    // BBV Debug 可視化。Geometry 更新とは切り離して呼べるようにする。
+    void ExecuteDebugVisualize(
         FRDGBuilder& GraphBuilder,
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
         FRDGTexture* SceneColorTexture,
-        int32 DebugMode,
-        bool bEnableMainViewInjection,
-        bool bEnableMainViewRemoval);
+        int32 DebugMode);
 
 private:
     struct FResourceCache
@@ -60,6 +70,12 @@ private:
         FIntVector GridMinCell = FIntVector::ZeroValue;
         FVector GridMinPositionWs = FVector::ZeroVector;
         FIntVector ToroidalOffsetCells = FIntVector::ZeroValue;
+        // PreRenderBasePass(Geometry) と PrePostProcess(Debug) 間で、
+        // 同一フレーム中の最新RDGバッファ参照を受け渡すための一時キャッシュ。
+        FRDGBuffer* FrameBitmaskBuffer = nullptr;
+        FRDGBuffer* FrameBrickDataBuffer = nullptr;
+        FRDGBuffer* FrameHiBrickDataBuffer = nullptr;
+        FRDGBuffer* FrameOptionalDataBuffer = nullptr;
     };
 
     FInstantRdvBbvConfig Config;
