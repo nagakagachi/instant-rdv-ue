@@ -16,6 +16,10 @@ RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
 
 uint DepthSizeX;
 uint DepthSizeY;
+uint ViewRectMinX;
+uint ViewRectMinY;
+uint ViewRectSizeX;
+uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
@@ -157,9 +161,12 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             continue;
         }
 
+        const uint2 ViewDepthCoord = uint2(
+            min(uint(Uv.x * ViewRectSizeX), ViewRectSizeX - 1u),
+            min(uint(Uv.y * ViewRectSizeY), ViewRectSizeY - 1u));
         const uint2 DepthCoord = uint2(
-            min(uint(Uv.x * DepthSizeX), DepthSizeX - 1u),
-            min(uint(Uv.y * DepthSizeY), DepthSizeY - 1u));
+            min(ViewRectMinX + ViewDepthCoord.x, DepthSizeX - 1u),
+            min(ViewRectMinY + ViewDepthCoord.y, DepthSizeY - 1u));
         const float SurfaceDepth = SceneDepthTexture.Load(int3(DepthCoord, 0));
         if (!IsValidDepth(SurfaceDepth))
         {

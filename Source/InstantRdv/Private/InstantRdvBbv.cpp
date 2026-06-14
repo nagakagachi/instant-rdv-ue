@@ -76,6 +76,10 @@ public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, DepthSizeX)
         SHADER_PARAMETER(uint32, DepthSizeY)
+        SHADER_PARAMETER(uint32, ViewRectMinX)
+        SHADER_PARAMETER(uint32, ViewRectMinY)
+        SHADER_PARAMETER(uint32, ViewRectSizeX)
+        SHADER_PARAMETER(uint32, ViewRectSizeY)
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
@@ -138,6 +142,10 @@ public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, DepthSizeX)
         SHADER_PARAMETER(uint32, DepthSizeY)
+        SHADER_PARAMETER(uint32, ViewRectMinX)
+        SHADER_PARAMETER(uint32, ViewRectMinY)
+        SHADER_PARAMETER(uint32, ViewRectSizeX)
+        SHADER_PARAMETER(uint32, ViewRectSizeY)
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
@@ -226,6 +234,10 @@ public:
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(uint32, DepthSizeX)
         SHADER_PARAMETER(uint32, DepthSizeY)
+        SHADER_PARAMETER(uint32, ViewRectMinX)
+        SHADER_PARAMETER(uint32, ViewRectMinY)
+        SHADER_PARAMETER(uint32, ViewRectSizeX)
+        SHADER_PARAMETER(uint32, ViewRectSizeY)
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
@@ -363,38 +375,39 @@ void FInstantRdvBbv::Execute(
     const FVector GridExtentCm = FVector(Config.BbvGridResolution) * Config.BbvVoxelSizeCm;
     const FVector GridHalfExtentCm = GridExtentCm * 0.5f;
     const float Cell = FMath::Max(Config.BbvVoxelSizeCm, 0.001f);
+    const FVector DesiredGridMin = View.ViewLocation - GridHalfExtentCm;
+    const FIntVector DesiredMinCell(FMath::FloorToInt(DesiredGridMin.X / Cell), FMath::FloorToInt(DesiredGridMin.Y / Cell), FMath::FloorToInt(DesiredGridMin.Z / Cell));
     if (!ResourceCache.bGridOriginInitialized)
     {
-        const FVector DesiredMin = View.ViewLocation - GridHalfExtentCm;
-        ResourceCache.GridMinPositionWs = FVector(
-            FMath::FloorToFloat(DesiredMin.X / Cell) * Cell,
-            FMath::FloorToFloat(DesiredMin.Y / Cell) * Cell,
-            FMath::FloorToFloat(DesiredMin.Z / Cell) * Cell);
+        ResourceCache.GridMinCell = DesiredMinCell;
+        ResourceCache.GridMinPositionWs = FVector(ResourceCache.GridMinCell) * Cell;
         ResourceCache.ToroidalOffsetCells = FIntVector::ZeroValue;
         ResourceCache.bGridOriginInitialized = true;
     }
 
-    const FVector DesiredGridMin = View.ViewLocation - GridHalfExtentCm;
-    const FIntVector DesiredMinCell(FMath::FloorToInt(DesiredGridMin.X / Cell), FMath::FloorToInt(DesiredGridMin.Y / Cell), FMath::FloorToInt(DesiredGridMin.Z / Cell));
-    const FIntVector CurrentMinCell(
-        FMath::FloorToInt(ResourceCache.GridMinPositionWs.X / Cell),
-        FMath::FloorToInt(ResourceCache.GridMinPositionWs.Y / Cell),
-        FMath::FloorToInt(ResourceCache.GridMinPositionWs.Z / Cell));
-    const FIntVector GridMoveCellDelta = DesiredMinCell - CurrentMinCell;
-
-    if (!GridMoveCellDelta.IsZero())
+    const bool bEnableGridMotion = bEnableMainViewInjection || bEnableMainViewRemoval;
+    const FIntVector CurrentMinCell = ResourceCache.GridMinCell;
+    FIntVector GridMoveCellDelta = FIntVector::ZeroValue;
+    if (bEnableGridMotion)
     {
-        ResourceCache.GridMinPositionWs = FVector(DesiredMinCell) * Cell;
-        auto WrapOffset = [](int32 Base, int32 Delta, int32 Mod)->int32
+        GridMoveCellDelta = DesiredMinCell - CurrentMinCell;
+        if (!GridMoveCellDelta.IsZero())
         {
-            const int32 Raw = (Base + Delta) % Mod;
-            return (Raw < 0) ? (Raw + Mod) : Raw;
-        };
-        ResourceCache.ToroidalOffsetCells = FIntVector(
-            WrapOffset(ResourceCache.ToroidalOffsetCells.X, GridMoveCellDelta.X, Config.BbvGridResolution.X),
-            WrapOffset(ResourceCache.ToroidalOffsetCells.Y, GridMoveCellDelta.Y, Config.BbvGridResolution.Y),
-            WrapOffset(ResourceCache.ToroidalOffsetCells.Z, GridMoveCellDelta.Z, Config.BbvGridResolution.Z));
+            ResourceCache.GridMinCell = DesiredMinCell;
+            ResourceCache.GridMinPositionWs = FVector(ResourceCache.GridMinCell) * Cell;
+            auto WrapOffset = [](int32 Base, int32 Delta, int32 Mod)->int32
+            {
+                const int32 Raw = (Base + Delta) % Mod;
+                return (Raw < 0) ? (Raw + Mod) : Raw;
+            };
+            ResourceCache.ToroidalOffsetCells = FIntVector(
+                WrapOffset(ResourceCache.ToroidalOffsetCells.X, GridMoveCellDelta.X, Config.BbvGridResolution.X),
+                WrapOffset(ResourceCache.ToroidalOffsetCells.Y, GridMoveCellDelta.Y, Config.BbvGridResolution.Y),
+                WrapOffset(ResourceCache.ToroidalOffsetCells.Z, GridMoveCellDelta.Z, Config.BbvGridResolution.Z));
+        }
     }
+    // MainView更新無効時は、GridMin/ToroidalOffset を固定して
+    // デバッグ時の既存BBVがカメラ移動で見かけ上スライドしないようにする。
 
     FRDGBufferRef FrustumBrickCounterBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("InstantRdv.BbvFrustumBrickCounter"));
     FRDGBufferRef FrustumBrickListBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BrickCount), TEXT("InstantRdv.BbvFrustumBrickList"));
@@ -434,6 +447,11 @@ void FInstantRdvBbv::Execute(
         FInstantRdvBbvDepthInjectionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthInjectionCS::FParameters>();
         Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
         Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+        const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+        Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+        Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+        Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+        Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
         Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
         Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
         Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
@@ -452,8 +470,8 @@ void FInstantRdvBbv::Execute(
         Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
         Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(BitmaskBuffer);
         TShaderMapRef<FInstantRdvBbvDepthInjectionCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->DepthSizeX, 8u);
-        const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->DepthSizeY, 8u);
+        const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
+        const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthInjectionMainView"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
     }
 
@@ -511,9 +529,14 @@ void FInstantRdvBbv::Execute(
         }
 
         {
+            const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
             FInstantRdvBbvDepthCarvingCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthCarvingCS::FParameters>();
             Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
             Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+            Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+            Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+            Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+            Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
             Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
             Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
@@ -584,6 +607,11 @@ void FInstantRdvBbv::Execute(
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
         Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
         Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+        const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+        Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+        Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+        Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+        Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
         Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
         Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
         Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
@@ -598,7 +626,6 @@ void FInstantRdvBbv::Execute(
         Parameters->BrickData = GraphBuilder.CreateSRV(BrickDataBuffer);
         Parameters->RenderTargets[0] = FRenderTargetBinding(SceneColorTexture, ERenderTargetLoadAction::ELoad);
 
-        const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
         const FScreenPassTextureViewport Viewport(SceneColorTexture, ViewRect);
         TShaderMapRef<FScreenPassVS> VertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         TShaderMapRef<FInstantRdvBbvDebugVisualizePS> PixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));

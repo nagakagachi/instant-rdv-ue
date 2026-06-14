@@ -11,6 +11,10 @@ float4x4 InvViewProjectionMatrix;
 float3 CameraPositionWs;
 uint DepthSizeX;
 uint DepthSizeY;
+uint ViewRectMinX;
+uint ViewRectMinY;
+uint ViewRectSizeX;
+uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
@@ -138,13 +142,19 @@ PsOut MainPS(VsOutput Input)
 {
     PsOut Output = (PsOut)0;
 
-    const float2 Uv = Input.UVAndScreenPos.xy;
-    const uint2 PixelCoord = uint2(
-        min(uint(saturate(Uv.x) * DepthSizeX), DepthSizeX - 1u),
-        min(uint(saturate(Uv.y) * DepthSizeY), DepthSizeY - 1u));
-    const float2 RayUv = (float2(PixelCoord) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
+    // Input.UVAndScreenPos.xy は現在ViewRect内の正規化UV。
+    // これを基準に View座標/Scene絶対座標 を両方再構成して使い分ける。
+    const float2 ViewUvInput = saturate(Input.UVAndScreenPos.xy);
+    const uint2 ViewPixelCoord = uint2(
+        min(uint(ViewUvInput.x * ViewRectSizeX), ViewRectSizeX - 1u),
+        min(uint(ViewUvInput.y * ViewRectSizeY), ViewRectSizeY - 1u));
+    const uint2 ScenePixelCoord = uint2(
+        min(ViewRectMinX + ViewPixelCoord.x, DepthSizeX - 1u),
+        min(ViewRectMinY + ViewPixelCoord.y, DepthSizeY - 1u));
+    const float2 ViewUv = (float2(ViewPixelCoord) + 0.5) / float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
+    const float2 RayUv = ViewUv;
 
-    const float4 BaseColor = SceneColorTexture.Load(int3(PixelCoord, 0));
+    const float4 BaseColor = SceneColorTexture.Load(int3(ScenePixelCoord, 0));
 
     if (DebugMode == 1)
     {
@@ -152,8 +162,8 @@ PsOut MainPS(VsOutput Input)
         const uint FineDimY = GridResolutionY * BbvPerVoxelResolution;
         const uint FineDimZ = GridResolutionZ * BbvPerVoxelResolution;
 
-        const uint FineX = min((uint)(Uv.x * FineDimX), FineDimX - 1u);
-        const uint FineY = min((uint)((1.0 - Uv.y) * FineDimY), FineDimY - 1u);
+        const uint FineX = min((uint)(ViewUv.x * FineDimX), FineDimX - 1u);
+        const uint FineY = min((uint)((1.0 - ViewUv.y) * FineDimY), FineDimY - 1u);
 
         uint OccupiedZCount = 0u;
         [loop]

@@ -57,6 +57,7 @@ private:
         bool bInitialized = false;
         bool bGridOriginInitialized = false;
         uint32 FrameCount = 0;
+        FIntVector GridMinCell = FIntVector::ZeroValue;
         FVector GridMinPositionWs = FVector::ZeroVector;
         FIntVector ToroidalOffsetCells = FIntVector::ZeroValue;
     };

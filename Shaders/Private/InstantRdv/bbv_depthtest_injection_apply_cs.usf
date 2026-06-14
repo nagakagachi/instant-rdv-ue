@@ -14,6 +14,10 @@ RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
 
 uint DepthSizeX;
 uint DepthSizeY;
+uint ViewRectMinX;
+uint ViewRectMinY;
+uint ViewRectSizeX;
+uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
@@ -28,9 +32,9 @@ float4x4 InvViewProjectionMatrix;
 
 #include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
 
-float3 ReconstructWorldPos(uint2 PixelCoord, float DeviceDepth)
+float3 ReconstructWorldPos(uint2 ViewPixelCoord, float DeviceDepth)
 {
-    const float2 Uv = (float2(PixelCoord) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
+    const float2 Uv = (float2(ViewPixelCoord) + 0.5) / float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
     const float2 Ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
     float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
     World.xyz /= max(abs(World.w), 1e-6);
@@ -72,12 +76,13 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     uint TargetWordAddress = 0u;
     uint TargetBitMask = 0u;
 
-    if (DispatchThreadId.x < DepthSizeX && DispatchThreadId.y < DepthSizeY)
+    if (DispatchThreadId.x < ViewRectSizeX && DispatchThreadId.y < ViewRectSizeY)
     {
-        const float DeviceDepth = SceneDepthTexture.Load(int3(DispatchThreadId.xy, 0));
+        const uint2 DepthCoord = uint2(ViewRectMinX + DispatchThreadId.x, ViewRectMinY + DispatchThreadId.y);
+        const float DeviceDepth = SceneDepthTexture.Load(int3(DepthCoord, 0));
         if (IsValidDepth(DeviceDepth))
         {
-            const float2 Uv = (float2(DispatchThreadId.xy) + 0.5) / float2(max(DepthSizeX, 1u), max(DepthSizeY, 1u));
+            const float2 Uv = (float2(DispatchThreadId.xy) + 0.5) / float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
             float3 WorldPos = ReconstructWorldPos(DispatchThreadId.xy, DeviceDepth);
 
             // 表面注入直後にRemovalへ消されにくくするため、視線奥へオフセットする。

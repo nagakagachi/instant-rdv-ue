@@ -30,7 +30,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const uint LogicalX = Rem - LogicalY * GridResolutionX;
     const int3 LogicalCoord = int3(LogicalX, LogicalY, LogicalZ);
 
-    const int3 PrevLogicalCoord = LogicalCoord - GridMoveDeltaCells.xyz;
+    // new論理座標が前フレーム内に存在したかを判定するため、
+    // old_coord = new_coord + delta で逆写像する（符号を誤ると一方向へ流れ続ける）。
+    const int3 PrevLogicalCoord = LogicalCoord + GridMoveDeltaCells.xyz;
     const bool bWasInside =
         (PrevLogicalCoord.x >= 0 && PrevLogicalCoord.x < int(GridResolutionX)) &&
         (PrevLogicalCoord.y >= 0 && PrevLogicalCoord.y < int(GridResolutionY)) &&
