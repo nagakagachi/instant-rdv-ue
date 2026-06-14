@@ -385,29 +385,22 @@ void FInstantRdvBbv::Execute(
         ResourceCache.bGridOriginInitialized = true;
     }
 
-    const bool bEnableGridMotion = bEnableMainViewInjection || bEnableMainViewRemoval;
     const FIntVector CurrentMinCell = ResourceCache.GridMinCell;
-    FIntVector GridMoveCellDelta = FIntVector::ZeroValue;
-    if (bEnableGridMotion)
+    const FIntVector GridMoveCellDelta = DesiredMinCell - CurrentMinCell;
+    if (!GridMoveCellDelta.IsZero())
     {
-        GridMoveCellDelta = DesiredMinCell - CurrentMinCell;
-        if (!GridMoveCellDelta.IsZero())
+        ResourceCache.GridMinCell = DesiredMinCell;
+        ResourceCache.GridMinPositionWs = FVector(ResourceCache.GridMinCell) * Cell;
+        auto WrapOffset = [](int32 Base, int32 Delta, int32 Mod)->int32
         {
-            ResourceCache.GridMinCell = DesiredMinCell;
-            ResourceCache.GridMinPositionWs = FVector(ResourceCache.GridMinCell) * Cell;
-            auto WrapOffset = [](int32 Base, int32 Delta, int32 Mod)->int32
-            {
-                const int32 Raw = (Base + Delta) % Mod;
-                return (Raw < 0) ? (Raw + Mod) : Raw;
-            };
-            ResourceCache.ToroidalOffsetCells = FIntVector(
-                WrapOffset(ResourceCache.ToroidalOffsetCells.X, GridMoveCellDelta.X, Config.BbvGridResolution.X),
-                WrapOffset(ResourceCache.ToroidalOffsetCells.Y, GridMoveCellDelta.Y, Config.BbvGridResolution.Y),
-                WrapOffset(ResourceCache.ToroidalOffsetCells.Z, GridMoveCellDelta.Z, Config.BbvGridResolution.Z));
-        }
+            const int32 Raw = (Base + Delta) % Mod;
+            return (Raw < 0) ? (Raw + Mod) : Raw;
+        };
+        ResourceCache.ToroidalOffsetCells = FIntVector(
+            WrapOffset(ResourceCache.ToroidalOffsetCells.X, GridMoveCellDelta.X, Config.BbvGridResolution.X),
+            WrapOffset(ResourceCache.ToroidalOffsetCells.Y, GridMoveCellDelta.Y, Config.BbvGridResolution.Y),
+            WrapOffset(ResourceCache.ToroidalOffsetCells.Z, GridMoveCellDelta.Z, Config.BbvGridResolution.Z));
     }
-    // MainView更新無効時は、GridMin/ToroidalOffset を固定して
-    // デバッグ時の既存BBVがカメラ移動で見かけ上スライドしないようにする。
 
     FRDGBufferRef FrustumBrickCounterBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("InstantRdv.BbvFrustumBrickCounter"));
     FRDGBufferRef FrustumBrickListBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BrickCount), TEXT("InstantRdv.BbvFrustumBrickList"));
