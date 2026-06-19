@@ -30,7 +30,7 @@ void FInstantRdvModule::StartupModule()
     }
     else
     {
-        PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddRaw(this, &FInstantRdvModule::RegisterSceneViewExtension);
+        PostEngineInitHandle = FCoreDelegates::GetOnPostEngineInit().AddRaw(this, &FInstantRdvModule::RegisterSceneViewExtension);//PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddRaw(this, &FInstantRdvModule::RegisterSceneViewExtension);
     }
 }
 
@@ -38,7 +38,7 @@ void FInstantRdvModule::ShutdownModule()
 {
     if (PostEngineInitHandle.IsValid())
     {
-        FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
+        FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);//FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
         PostEngineInitHandle.Reset();
     }
 

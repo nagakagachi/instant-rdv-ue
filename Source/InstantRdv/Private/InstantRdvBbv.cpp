@@ -591,7 +591,7 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             const float FineCellSizeCm = Config.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.BbvPerVoxelResolution), 1.0f);
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
-            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());//Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
             Parameters->SceneDepthTexture = SceneDepthTexture;
             Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
             Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(BitmaskBuffer);
@@ -635,7 +635,7 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
                 Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
                 Parameters->CellSizeCm = Config.BbvBrickSizeCm;
-                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
+                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());// Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
                 Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
                 Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
                 Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
@@ -679,9 +679,9 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 Parameters->ToroidalOffsetCells = FVector3f(ResourceCache.ToroidalOffsetCells);
                 Parameters->GridMinPositionWs = FVector3f(ResourceCache.GridMinPositionWs);
                 Parameters->CellSizeCm = Config.BbvBrickSizeCm;
-                Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetViewMatrix());
-                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
-                Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+                Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetWorldToView()); //Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetViewMatrix());
+                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip()); //Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
+                Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
                 Parameters->SceneDepthTexture = SceneDepthTexture;
                 Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
                 Parameters->FrustumBrickCounter = GraphBuilder.CreateSRV(FrustumBrickCounterBuffer);
@@ -803,7 +803,7 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
-            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
             Parameters->SceneDepthTexture = SceneDepthTexture;
             Parameters->SceneColorTexture = SceneColorTexture;
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
@@ -907,7 +907,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspVisibleSurfaceListCapacity = FspVisibleSurfaceListElementCount - 1u;
         Parameters->FspGridMinPositionWs = FVector3f(FspGridMinPositionWs);
         Parameters->FspCellSizeCm = Config.ProbeCellSizeCm;
-        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
         Parameters->SceneDepthTexture = SceneDepthTexture;
         Parameters->RWFspCellData = GraphBuilder.CreateUAV(FspCellDataBuffer);
         Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(FspVisibleSurfaceListBuffer);
@@ -988,7 +988,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
         Parameters->SceneDepthTexture = SceneDepthTexture;
         Parameters->SceneColorTexture = SceneColorInputTexture;
         Parameters->PointClampSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
         Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
         Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
