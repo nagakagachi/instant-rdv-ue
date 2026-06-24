@@ -9,7 +9,7 @@ uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
 int4 GridMoveDeltaCells;
-float3 ToroidalOffsetCells;
+float3 BbvToroidalOffsetCells;
 uint OptionalDataU32Count;
 
 #include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"

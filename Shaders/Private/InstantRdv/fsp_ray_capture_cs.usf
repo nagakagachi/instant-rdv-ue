@@ -1,0 +1,27 @@
+// FSP: Ray capture (簡易版)
+// 参照実装ではレイトレースで6方向を OctahedralAtlas に書き込むが、
+// ここでは可視セルリストに基づいて各セルにデバッグ用ラジアンスを書き込む簡易実装を行う。
+
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint> FspVisibleSurfaceList; // [0]=count, [1..N]=cellIndex
+RWStructuredBuffer<uint4> RWFspProbeRadiance; // per-cell RGBA float encoded as uint4
+
+[numthreads(64,1,1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint idx = DispatchThreadId.x;
+    uint visibleCount = FspVisibleSurfaceList[0];
+    if (idx >= visibleCount) return;
+
+    uint cellIndex = FspVisibleSurfaceList[1 + idx];
+
+    // デバッグカラー: cellIndex を元に色を生成 (正規化して循環させる)
+    float r = fmod((float)cellIndex * 0.1234, 1.0);
+    float g = fmod((float)cellIndex * 0.2345, 1.0);
+    float b = fmod((float)cellIndex * 0.3456, 1.0);
+    float a = 1.0;
+
+    uint4 encoded = asuint(float4(r, g, b, a));
+    RWFspProbeRadiance[cellIndex] = encoded;
+}

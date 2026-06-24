@@ -13,14 +13,14 @@ uint BitmaskWordsPerBrick;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-float3 ToroidalOffsetCells;
-float3 GridMinPositionWs;
+float3 BbvToroidalOffsetCells;
+float3 BbvGridMinPositionWs;
 float CellSizeCm;
 float4x4 ViewProjectionMatrix;
 
 int3 UnwrapLogicalBrickCoord(uint3 PhysicalCoord)
 {
-    int3 Logical = int3(PhysicalCoord) - int3(ToroidalOffsetCells + 0.5);
+    int3 Logical = int3(PhysicalCoord) - int3(BbvToroidalOffsetCells + 0.5);
     Logical.x = ((Logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
     Logical.y = ((Logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
     Logical.z = ((Logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
@@ -45,7 +45,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         const uint3 PhysicalCoord = uint3(PhysicalX, PhysicalY, PhysicalZ);
         const int3 LogicalCoord = UnwrapLogicalBrickCoord(PhysicalCoord);
 
-        const float3 BrickCenterWs = GridMinPositionWs + (float3(LogicalCoord) + 0.5) * CellSizeCm;
+        const float3 BrickCenterWs = BbvGridMinPositionWs + (float3(LogicalCoord) + 0.5) * CellSizeCm;
         const float4 BrickCenterCs = mul(float4(BrickCenterWs, 1.0), ViewProjectionMatrix);
         if (abs(BrickCenterCs.w) > 1e-6)
         {

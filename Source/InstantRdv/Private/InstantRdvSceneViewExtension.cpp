@@ -101,8 +101,12 @@ static FRDGTextureRef GetViewSceneDepthTexture_RenderThread(const FSceneView& Vi
 
 FInstantRdvSceneViewExtension::FInstantRdvSceneViewExtension(const FAutoRegister& AutoRegister)
     : FSceneViewExtensionBase(AutoRegister)
-    , BbvSystem(MakeUnique<FInstantRdvBbv>())
 {
+    BbvSystem = MakeUnique<FInstantRdvBbv>();
+    {
+        BbvSystem->Initialize();
+    }
+
 }
 
 FInstantRdvSceneViewExtension::~FInstantRdvSceneViewExtension() = default;
@@ -131,7 +135,7 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     FrameViews_RenderThread.Reset();
     if (BbvSystem.IsValid())
     {
-        BbvSystem->BeginFrame_RenderThread();
+        BbvSystem->BeginFrame_RenderThread(GraphBuilder, InViewFamily);
     }
 }
 

@@ -156,7 +156,7 @@ bool TraceBbvRayReference(
     const float CellSizeInv = 1.0 / CellSize;
     const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
 
-    const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
+	const float3 RayOrigin = (RayOriginWs - BbvGridMinPositionWs) * CellSizeInv;
     const float3 RayDir = RayDirWs;
     const float3 RayDirInv = SafeInv(RayDir);
     const float3 RayDirSign = sign(RayDir);

@@ -23,8 +23,8 @@ uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
 uint BbvPerVoxelResolution;
-float3 ToroidalOffsetCells;
-float3 GridMinPositionWs;
+float3 BbvToroidalOffsetCells;
+float3 BbvGridMinPositionWs;
 float CellSizeCm;
 float DepthtestInjectionWorldOffsetWs;
 float3 CameraPositionWs;
@@ -99,7 +99,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             // C++側で fine cell 数から算出したワールド距離(cm)を適用する。
             WorldPos += ViewDir * DepthtestInjectionWorldOffsetWs;
 
-            const float3 GridPos = (WorldPos - GridMinPositionWs) / max(CellSizeCm, 0.001);
+			const float3 GridPos = (WorldPos - BbvGridMinPositionWs) / max(CellSizeCm, 0.001);
             const int3 LogicalBrickCoord = int3(floor(GridPos));
             if (all(LogicalBrickCoord >= 0) &&
                 LogicalBrickCoord.x < int(GridResolutionX) &&

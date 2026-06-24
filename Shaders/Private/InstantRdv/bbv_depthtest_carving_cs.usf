@@ -25,8 +25,8 @@ uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
 uint BbvPerVoxelResolution;
-float3 ToroidalOffsetCells;
-float3 GridMinPositionWs;
+float3 BbvToroidalOffsetCells;
+float3 BbvGridMinPositionWs;
 float CellSizeCm;
 float4x4 ViewMatrix;
 float4x4 ViewProjectionMatrix;
@@ -39,7 +39,7 @@ bool IsValidDepth(float DeviceDepth)
 
 int3 UnwrapLogicalBrickCoord(uint3 PhysicalCoord)
 {
-    int3 Logical = int3(PhysicalCoord) - int3(ToroidalOffsetCells + 0.5);
+    int3 Logical = int3(PhysicalCoord) - int3(BbvToroidalOffsetCells + 0.5);
     Logical.x = ((Logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
     Logical.y = ((Logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
     Logical.z = ((Logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
@@ -121,7 +121,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     LogicalCoord.z = WaveReadLaneAt(LogicalCoord.z, SlotFirstLane);
 
     // 3. このlane担当u32ブロックを取り出し、立っているbitのみ走査する。
-    const float3 BrickOriginWs = GridMinPositionWs + float3(LogicalCoord) * CellSizeCm;
+	const float3 BrickOriginWs = BbvGridMinPositionWs + float3(LogicalCoord) * CellSizeCm;
     const float3 BitCellStepWs = CellSizeCm / max(float(BbvPerVoxelResolution), 1.0);
     const uint WordAddress = BrickIndex * BitmaskWordsPerBrick + U32Offset;
 

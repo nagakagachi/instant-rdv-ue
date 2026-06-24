@@ -1,0 +1,24 @@
+// FSP probe pool / free stack 初期化シェーダ
+#include "/Engine/Public/Platform.ush"
+
+RWStructuredBuffer<uint> RWFspProbeFreeStack; // [0] = count, [1..N] = free indices
+uint ProbePoolElementCount;
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint idx = DispatchThreadId.x;
+    if (idx >= ProbePoolElementCount)
+    {
+        return;
+    }
+
+    // LIFO になるように逆順で格納する。
+    RWFspProbeFreeStack[1 + idx] = ProbePoolElementCount - 1u - idx;
+
+    // スレッド0 がカウンタをセットする。
+    if (idx == 0u)
+    {
+        RWFspProbeFreeStack[0] = ProbePoolElementCount;
+    }
+}

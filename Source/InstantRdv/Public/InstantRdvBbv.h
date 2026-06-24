@@ -2,10 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "RenderGraphFwd.h"
+#include "InstantRdvFsp.h"
+#include "InstantRdvBbvFrameResources.h"
 
 class FRDGBuilder;
 class FRDGTexture;
 class FSceneView;
+class FInstantRdvFsp;
 
 struct FInstantRdvBbvConfig
 {
@@ -34,8 +37,12 @@ struct FInstantRdvBbvConfig
 class FInstantRdvBbv final
 {
 public:
-    // フレーム内一時参照（RDGバッファ参照）の初期化。
-    void BeginFrame_RenderThread();
+
+    // 初期化/解放 (Editor/Device 初期化タイミングで呼ぶ)
+    void Initialize();
+
+    // フレーム内Renderの最初の更新. SceneViewExtensionのPreRenderViewFamily_RenderThread等で呼ぶことを想定.
+    void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& InViewFamily);
 
     // BBV Geometry 更新（Injection / Removal）本体。
     void ExecuteGeometryUpdate(
@@ -76,6 +83,14 @@ public:
 private:
     struct FResourceCache
     {
+        bool bInitialized = false;
+        uint32 FrameCount = 0;
+
+        FIntVector BbvGridMinCell = FIntVector::ZeroValue;// Bbvのセル絶対座標におけるグリッドMinセル座標
+        FVector BbvGridMinPositionWs = FVector::ZeroVector;// Bbvのグリッド範囲のMin座標
+        FIntVector BbvToroidalOffsetCells = FIntVector::ZeroValue;
+
+
         TRefCountPtr<class FRDGPooledBuffer> BitmaskBuffer;
         TRefCountPtr<class FRDGPooledBuffer> BrickDataBuffer;
         TRefCountPtr<class FRDGPooledBuffer> HiBrickDataBuffer;
@@ -83,6 +98,12 @@ private:
         TRefCountPtr<class FRDGPooledBuffer> RadianceAccumBuffer;
         TRefCountPtr<class FRDGPooledBuffer> FspCellDataBuffer;
         TRefCountPtr<class FRDGPooledBuffer> FspVisibleSurfaceListBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspProbePoolBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspProbeFreeStackBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspActiveProbeListPrevBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspActiveProbeListCurrBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspProbeRadianceBuffer;
+        TRefCountPtr<class FRDGPooledBuffer> FspPackedSHBuffer;
         uint32 CachedBitmaskElements = 0;
         uint32 CachedBrickDataElements = 0;
         uint32 CachedHiBrickDataElements = 0;
@@ -90,14 +111,14 @@ private:
         uint32 CachedRadianceAccumElements = 0;
         uint32 CachedFspCellDataElements = 0;
         uint32 CachedFspVisibleSurfaceListElements = 0;
-        bool bInitialized = false;
-        bool bGridOriginInitialized = false;
-        uint32 FrameCount = 0;
-        FIntVector GridMinCell = FIntVector::ZeroValue;
-        FVector GridMinPositionWs = FVector::ZeroVector;
-        FIntVector ToroidalOffsetCells = FIntVector::ZeroValue;
+        uint32 CachedFspProbePoolElements = 0;
+        uint32 CachedFspProbeFreeStackElements = 0;
+        uint32 CachedFspProbeRadianceElements = 0;
+        uint32 CachedFspPackedSHElems = 0;
+
+        
         // PreRenderBasePass(Geometry) と PrePostProcess(Debug) 間で、
-        // 同一フレーム中の最新RDGバッファ参照を受け渡すための一時キャッシュ。
+        // 同一フレーム中の最新RDGバッファ参照を受け渡すための一時キャッシュ
         FRDGBuffer* FrameBitmaskBuffer = nullptr;
         FRDGBuffer* FrameBrickDataBuffer = nullptr;
         FRDGBuffer* FrameHiBrickDataBuffer = nullptr;
@@ -105,8 +126,19 @@ private:
         FRDGBuffer* FrameRadianceAccumBuffer = nullptr;
         FRDGBuffer* FrameFspCellDataBuffer = nullptr;
         FRDGBuffer* FrameFspVisibleSurfaceListBuffer = nullptr;
+        FRDGBuffer* FrameFspProbePoolBuffer = nullptr;
+        FRDGBuffer* FrameFspProbeFreeStackBuffer = nullptr;
+        FRDGBuffer* FrameFspActiveProbeListPrevBuffer = nullptr;
+        FRDGBuffer* FrameFspActiveProbeListCurrBuffer = nullptr;
+        FRDGBuffer* FrameFspProbeRadianceBuffer = nullptr;
     };
 
     FInstantRdvBbvConfig Config;
     FResourceCache ResourceCache;
+
+    // FSP (Frustum Space Probe) 管理オブジェクト。実装詳細は InstantRdvFsp.* に分離。
+    TUniquePtr<class FInstantRdvFsp> Fsp;
+
+    // フレーム単位でBBVとFSP間で受け渡す参照情報。
+    FInstantRdvBbvFrameResources FrameResources;
 };

@@ -22,9 +22,9 @@ uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
 uint BbvPerVoxelResolution;
-float3 ToroidalOffsetCells;
+float3 BbvToroidalOffsetCells;
 float CellSizeCm;
-float3 GridMinPositionWs;
+float3 BbvGridMinPositionWs;
 float MaxTraceDistanceCm;
 int DebugMode;
 
@@ -259,14 +259,14 @@ PsOut MainPS(VsOutput Input)
     // カメラ微小移動時の色点滅を抑制する。
     if (DebugMode == 2)
     {
-        const int3 GridOriginBrickCoord = int3(floor(GridMinPositionWs / max(CellSizeCm, 0.001)));
+		const int3 GridOriginBrickCoord = int3(floor(BbvGridMinPositionWs / max(CellSizeCm, 0.001)));
         const int3 WorldBrickCoord = GridOriginBrickCoord + HitLogicalBrickCoord;
         HitColor = HashColor(HashInt3(WorldBrickCoord));
     }
     else
     {
         const float FineCellSizeCm = CellSizeCm / max(float(BbvPerVoxelResolution), 1.0);
-        const int3 GridOriginFineCoord = int3(floor(GridMinPositionWs / max(FineCellSizeCm, 0.001)));
+		const int3 GridOriginFineCoord = int3(floor(BbvGridMinPositionWs / max(FineCellSizeCm, 0.001)));
         const int3 WorldFineCoord = GridOriginFineCoord + HitLogicalFineCoord;
         HitColor = HashColor(HashInt3(WorldFineCoord));
     }

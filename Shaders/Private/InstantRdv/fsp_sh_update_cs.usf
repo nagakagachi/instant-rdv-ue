@@ -1,0 +1,24 @@
+// FSP: Packed SH update (簡易化)
+// 入力: 各ProbeのRadiance(encode as uint4 in RWFspProbeRadiance)
+// 出力: Packed SH (RWStructuredBuffer<float4>) を Probe 単位で kPackedSHFloat4Count 分格納する
+
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint4> FspProbeRadiance; // per-probe encoded as uint4(asuint(float4(r,g,b,a)))
+RWStructuredBuffer<float4> RWFspPackedSH; // per-probe packed SH: [probeIndex * k + 0 .. k-1]
+
+[numthreads(64,1,1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint probeIdx = DispatchThreadId.x;
+    // 呼び出し側でプローブ数に合わせて Dispatch グループを計算すること
+
+    uint4 enc = FspProbeRadiance[probeIdx];
+    float4 rgb = asfloat(enc);
+
+    // 簡易: L0 にそのまま radiance を入れ、他係数は 0 とする
+    RWFspPackedSH[probeIdx * 4u + 0u] = rgb; // L0
+    RWFspPackedSH[probeIdx * 4u + 1u] = float4(0,0,0,0);
+    RWFspPackedSH[probeIdx * 4u + 2u] = float4(0,0,0,0);
+    RWFspPackedSH[probeIdx * 4u + 3u] = float4(0,0,0,0);
+}
