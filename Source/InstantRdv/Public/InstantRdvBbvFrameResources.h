@@ -6,7 +6,7 @@
 // フレーム単位でBBVとFSP間で受け渡すリソース参照。
 // RDGスコープ内で有効な FRDGBufferRef / FRDGTextureRef を保持する。
 // NOTE: Public ヘッダなので軽量な前方参照 (RenderGraphFwd) のみを include している。
-
+/*
 struct FInstantRdvBbvFrameResources
 {
     // ラジアンス蓄積バッファの要素数 (暫定)
@@ -26,3 +26,4 @@ struct FInstantRdvBbvFrameResources
 
     // 将来的に FRDGTextureRef 等も追加される可能性がある。
 };
+*/

@@ -32,6 +32,7 @@ struct FInstantRdvBbvConfig
     uint32 GetHiBrickBrickCount() const;
     uint32 GetHiBrickDataElementCount() const;
     uint32 GetOptionalDataElementCount() const;
+    uint32 GetRadianceAccumDataElementCount() const;
 };
 
 class FInstantRdvBbv final
@@ -81,64 +82,44 @@ public:
         bool bEnableFspUpdate);
 
 private:
-    struct FResourceCache
+
+    struct PersistentRdgPooledBufferSet
     {
-        bool bInitialized = false;
-        uint32 FrameCount = 0;
+        TRefCountPtr<class FRDGPooledBuffer>    PooledBuffer{};// プールに確保したBuffer本体. 最初にExtraction指定して永続化する.
 
-        FIntVector BbvGridMinCell = FIntVector::ZeroValue;// Bbvのセル絶対座標におけるグリッドMinセル座標
-        FVector BbvGridMinPositionWs = FVector::ZeroVector;// Bbvのグリッド範囲のMin座標
-        FIntVector BbvToroidalOffsetCells = FIntVector::ZeroValue;
-
-
-        TRefCountPtr<class FRDGPooledBuffer> BitmaskBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> BrickDataBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> HiBrickDataBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> OptionalDataBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> RadianceAccumBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspCellDataBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspVisibleSurfaceListBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspProbePoolBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspProbeFreeStackBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspActiveProbeListPrevBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspActiveProbeListCurrBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspProbeRadianceBuffer;
-        TRefCountPtr<class FRDGPooledBuffer> FspPackedSHBuffer;
-        uint32 CachedBitmaskElements = 0;
-        uint32 CachedBrickDataElements = 0;
-        uint32 CachedHiBrickDataElements = 0;
-        uint32 CachedOptionalDataElements = 0;
-        uint32 CachedRadianceAccumElements = 0;
-        uint32 CachedFspCellDataElements = 0;
-        uint32 CachedFspVisibleSurfaceListElements = 0;
-        uint32 CachedFspProbePoolElements = 0;
-        uint32 CachedFspProbeFreeStackElements = 0;
-        uint32 CachedFspProbeRadianceElements = 0;
-        uint32 CachedFspPackedSHElems = 0;
-
-        
-        // PreRenderBasePass(Geometry) と PrePostProcess(Debug) 間で、
-        // 同一フレーム中の最新RDGバッファ参照を受け渡すための一時キャッシュ
-        FRDGBuffer* FrameBitmaskBuffer = nullptr;
-        FRDGBuffer* FrameBrickDataBuffer = nullptr;
-        FRDGBuffer* FrameHiBrickDataBuffer = nullptr;
-        FRDGBuffer* FrameOptionalDataBuffer = nullptr;
-        FRDGBuffer* FrameRadianceAccumBuffer = nullptr;
-        FRDGBuffer* FrameFspCellDataBuffer = nullptr;
-        FRDGBuffer* FrameFspVisibleSurfaceListBuffer = nullptr;
-        FRDGBuffer* FrameFspProbePoolBuffer = nullptr;
-        FRDGBuffer* FrameFspProbeFreeStackBuffer = nullptr;
-        FRDGBuffer* FrameFspActiveProbeListPrevBuffer = nullptr;
-        FRDGBuffer* FrameFspActiveProbeListCurrBuffer = nullptr;
-        FRDGBuffer* FrameFspProbeRadianceBuffer = nullptr;
+        FRDGBufferRef                           Handle{};// フレーム先頭で上記BufferをRDGにRegisterした際のハンドルを保持.
     };
 
-    FInstantRdvBbvConfig Config;
-    FResourceCache ResourceCache;
+    struct FSystemState
+    {
+        bool    bRenderInitialized = false;
+        uint32  FrameCount = 0;
+
+        FIntVector  BbvGridMinCell = FIntVector::ZeroValue;// Bbvのセル絶対座標におけるグリッドMinセル座標
+        FVector     BbvGridMinPositionWs = FVector::ZeroVector;// Bbvのグリッド範囲のMin座標
+        FIntVector  BbvToroidalOffsetCells = FIntVector::ZeroValue;
+
+
+        // システムがフレームをまたいで管理するリソース群.
+        PersistentRdgPooledBufferSet BitmaskBuffer;
+        PersistentRdgPooledBufferSet BrickDataBuffer;
+        PersistentRdgPooledBufferSet HiBrickDataBuffer;
+        PersistentRdgPooledBufferSet OptionalDataBuffer;
+        PersistentRdgPooledBufferSet RadianceAccumBuffer;
+
+        PersistentRdgPooledBufferSet FspCellDataBuffer;
+        PersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
+        PersistentRdgPooledBufferSet FspProbePoolBuffer;
+        PersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
+        PersistentRdgPooledBufferSet FspActiveProbeListPrevBuffer;
+        PersistentRdgPooledBufferSet FspActiveProbeListCurrBuffer;
+        PersistentRdgPooledBufferSet FspProbeRadianceBuffer;
+        PersistentRdgPooledBufferSet FspPackedSHBuffer;
+    };
+
+    FInstantRdvBbvConfig    Config;
+    FSystemState          SystemState;
 
     // FSP (Frustum Space Probe) 管理オブジェクト。実装詳細は InstantRdvFsp.* に分離。
     TUniquePtr<class FInstantRdvFsp> Fsp;
-
-    // フレーム単位でBBVとFSP間で受け渡す参照情報。
-    FInstantRdvBbvFrameResources FrameResources;
 };
