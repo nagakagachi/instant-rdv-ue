@@ -753,7 +753,7 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
                 Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
                 Parameters->CellSizeCm = Config.BbvBrickSizeCm;
-                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
+                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
                 Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.BitmaskBuffer.Handle);
                 Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
                 Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
