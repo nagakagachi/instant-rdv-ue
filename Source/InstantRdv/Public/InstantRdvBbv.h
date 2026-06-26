@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "RenderGraphFwd.h"
 #include "InstantRdvFsp.h"
-#include "InstantRdvBbvFrameResources.h"
 
 class FRDGBuilder;
 class FRDGTexture;
