@@ -65,7 +65,8 @@ class RandomInstance
 
 
 float4x4 ViewProjectionMatrix;
-float3 BbvGridMinPositionWs;
+float ViewAcpectRatio;
+float3 FspGridMinPositionWs;
 float CellSizeCm;
 uint GridResolutionX;
 uint GridResolutionY;
@@ -131,57 +132,34 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
 	const int grid_pos_y = (instance_index - (grid_pos_z * (GridResolutionX * GridResolutionY))) / (GridResolutionX);
 	const int grid_pos_x = instance_index % GridResolutionX;
 	
-	
-	//float3 instance_pos_ws = float3(0.0, 0.0, 100.0) + (rnd.rand3() * 2.0 - 1.0) * 1000.0;
-	
-	float3 instance_pos_ws = float3(grid_pos_x, grid_pos_y, grid_pos_z) * CellSizeCm + BbvGridMinPositionWs;
+	float3 instance_pos_ws = float3(grid_pos_x, grid_pos_y, grid_pos_z) * CellSizeCm + FspGridMinPositionWs;
 	
 	
 	const float k_radius_ws = 10.0;
-	float3 instance_vtx_pos_ws = instance_pos_ws + (float3(pos[local_vtx_index] * k_radius_ws, 0.0)); // 本当はビルボード風にする.
 	
-	float4 instance_pos_cs = mul(float4(instance_vtx_pos_ws, 1.0), ViewProjectionMatrix);
+	#if 0
+		float3 instance_vtx_pos_ws = instance_pos_ws + (float3(pos[local_vtx_index] * k_radius_ws, 0.0)); // 本当はビルボード風にする.
+		float4 instance_pos_cs = mul(float4(instance_vtx_pos_ws, 1.0), ViewProjectionMatrix);
+	#else
+		float3 instance_vtx_pos_ws = instance_pos_ws;
+		float4 instance_pos_cs = mul(float4(instance_vtx_pos_ws, 1.0), ViewProjectionMatrix);
+		// ClipSpaceでビルボードの頂点座標に補正する.
+	instance_pos_cs.xy += pos[local_vtx_index] * float2(1.0 / ViewAcpectRatio, 1.0) * k_radius_ws; // / instance_pos_cs.z;
+	#endif
 	
 	
 	o.Pos = instance_pos_cs;
 	o.UV = uv[local_vtx_index];
 	
-	/*
-	const float2 random_pos_2d = rnd.rand2();
-	
-	const float k_radius_ss = 0.02;
-	const float2 instance_vtx_pos_2d = pos[local_vtx_index] * k_radius_ss + (random_pos_2d * 2.0 - 1.0);
-	
-	
-	const float output_z = 1.0;// ReversedZ考慮の場合は 1.0 -> Near
-	
-	o.Pos = float4(instance_vtx_pos_2d, output_z, 1.0);
-	o.UV = uv[local_vtx_index];
-	//o.ProbeIndex = 0;
-	*/
-	
 	return o;
 }
 
 float4 MainPS(VS_OUTPUT vertex_output) : SV_Target0
-{
-	/*
-	uint4 enc = FspProbeRadiance[ProbeIndex];
-	float3 radiance = asfloat(enc).xyz;
-
-    // simple lighting: darker towards edges using UV
-	float rim = 1.0 - length(UV - 0.5) * 2.0;
-	rim = saturate(rim);
-	float3 color = radiance * (0.6 + 0.4 * rim);
-	return float4(color, 1.0);
-	*/
-	
-	
+{	
 	if (0.5 <= length(vertex_output.UV.xy - 0.5))
 	{
-		//discard;
-	}
-	
+		discard;
+	}	
 	return float4(vertex_output.UV.xy, 0.0, 1.0);
 
 }

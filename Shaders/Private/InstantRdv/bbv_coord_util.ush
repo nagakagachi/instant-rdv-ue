@@ -4,7 +4,7 @@
 // 移植時の注意:
 // - 座標は「論理座標 -> トロイダル wrap 後の物理座標」でアクセスする。
 //   先に flatten すると、更新と追跡で別セルを参照して破綻する。
-// - Fine Voxel の bit 順序は BbvPerVoxelResolution=8 時に subbrick morton を使う。
+// - Fine Voxel の bit 順序は BbvPerBrickResolution=8 時に subbrick morton を使う。
 //   単純な線形 index に戻すと Injection/Trace の対応が崩れる。
 
 uint FlattenBrickCoord(uint3 BrickCoord)
@@ -33,7 +33,7 @@ uint CalcSubbrickMortonBitIndex(uint3 P)
 
 uint CalcFineBitIndex(uint3 FineCoord)
 {
-    if (BbvPerVoxelResolution == 8u)
+    if (BbvPerBrickResolution == 8u)
     {
         const uint3 SubbrickCoord = FineCoord / 4u;
         const uint3 SubbrickLocal = FineCoord % 4u;
@@ -41,5 +41,5 @@ uint CalcFineBitIndex(uint3 FineCoord)
         return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
     }
 
-    return FineCoord.x + FineCoord.y * BbvPerVoxelResolution + FineCoord.z * BbvPerVoxelResolution * BbvPerVoxelResolution;
+    return FineCoord.x + FineCoord.y * BbvPerBrickResolution + FineCoord.z * BbvPerBrickResolution * BbvPerBrickResolution;
 }

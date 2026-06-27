@@ -13,16 +13,14 @@ struct FInstantRdvBbvConfig
 {
     FIntVector BbvGridResolution = FIntVector(64, 64, 64);
     float BbvBrickSizeCm = 300.0f;// NxNxNのVoxelクラスタをBrickと称し, そのサイズを指定するパラメータ.
-    FIntVector ProbeGridResolution = FIntVector(32, 32, 32);
-    float ProbeCellSizeCm = 200.0f;
-    uint32 ProbeCascadeCount = 5;
 
-    uint32 BbvPerVoxelResolution = 8;
+    uint32 BbvPerBrickResolution = 8;
     // BrickData は 1 Brick あたり 4 uint を前提に各シェーダがアクセスする。
     // ここを 1 などに変更すると、occupied count や各種属性の参照先が壊れる。
     uint32 BrickDataU32Count = 4;
     uint32 HiBrickDataU32Count = 1;
     uint32 OptionalDataU32Count = 4;
+
 
     uint32 GetBbvBrickCount() const;
     uint32 GetBitmaskU32CountPerBrick() const;
@@ -33,6 +31,60 @@ struct FInstantRdvBbvConfig
     uint32 GetOptionalDataElementCount() const;
     uint32 GetRadianceAccumDataElementCount() const;
 };
+struct FInstantRdvFspConfig
+{
+    FIntVector ProbeGridResolution = FIntVector(32, 32, 32);
+    float ProbeCellSizeCm = 200.0f;
+    uint32 ProbeCascadeCount = 5;
+
+    uint32 GetFspCellCount() const;
+};
+
+
+struct FToroidalGrid
+{
+    FIntVector  GridReso = FIntVector::ZeroValue;// 解像度
+    FIntVector  GridMinCell = FIntVector::ZeroValue;// セル絶対座標におけるグリッドMinセル座標
+    FVector     MinPositionWs = FVector::ZeroVector;// Bbvのグリッド範囲のMin座標
+    FIntVector  FrameCellDelta = FIntVector::ZeroValue;// フレームでの移動Cell量.
+
+    FIntVector  ToroidalOffsetCells = FIntVector::ZeroValue;// Toroidal Mapping Offset
+
+
+    static FIntVector CalcToroidalOffsetCells(const FIntVector& current_offset, const FIntVector& delta, const FIntVector& resolution)
+    {
+        auto ToroidalMappingWrap1D = [](int Base, int Delta, int Mod)
+            {
+                const int Raw = (Base + Delta) % Mod;
+                return (Raw < 0) ? (Raw + Mod) : Raw;// 負の場合は反対側へWrap.
+            };
+
+        return FIntVector(
+            ToroidalMappingWrap1D(current_offset.X, delta.X, resolution.X),
+            ToroidalMappingWrap1D(current_offset.Y, delta.Y, resolution.Y),
+            ToroidalMappingWrap1D(current_offset.Z, delta.Z, resolution.Z));
+    }
+
+    void UpdateDelta(const FVector& new_important_position, float cell_size)
+    {
+        const FVector GridHalfExtent = FVector(GridReso) * cell_size * 0.5f;
+        const FVector DesiredGridMin = new_important_position - GridHalfExtent;
+        const FIntVector DesiredMinCell(floorf(DesiredGridMin.X / cell_size), floorf(DesiredGridMin.Y / cell_size), floorf(DesiredGridMin.Z / cell_size) );
+        // 移動セル量.
+        FrameCellDelta = DesiredMinCell - GridMinCell;
+        GridMinCell = DesiredMinCell;
+        if (!FrameCellDelta.IsZero())
+        {
+            MinPositionWs = FVector(GridMinCell) * cell_size;
+            ToroidalOffsetCells = CalcToroidalOffsetCells(ToroidalOffsetCells, FrameCellDelta, GridReso);
+        }
+    }
+
+    int GetCellCount() const
+    {
+        return GridReso.X * GridReso.Y * GridReso.Z;
+    }
+};
 
 class FInstantRdvBbv final
 {
@@ -41,8 +93,8 @@ public:
     // 初期化/解放 (Editor/Device 初期化タイミングで呼ぶ)
     void Initialize();
 
-    // フレーム内Renderの最初の更新. SceneViewExtensionのPreRenderViewFamily_RenderThread等で呼ぶことを想定.
-    void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& InViewFamily);
+    // フレーム内Renderの最初の更新. SceneViewExtensionのPreRenderView_RenderThread等で呼ぶことを想定.
+    void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InViewFamily);
 
     // BBV Geometry 更新（Injection / Removal）本体。
     void ExecuteGeometryUpdate(
@@ -82,7 +134,7 @@ public:
 
 private:
 
-    struct PersistentRdgPooledBufferSet
+    struct FPersistentRdgPooledBufferSet
     {
         TRefCountPtr<class FRDGPooledBuffer>    PooledBuffer{};// プールに確保したBuffer本体. 最初にExtraction指定して永続化する.
 
@@ -91,34 +143,47 @@ private:
 
     struct FSystemState
     {
+
+        // Inner.
+        struct FBbvState
+        {
+            FToroidalGrid TrGrid{};
+
+            // システムがフレームをまたいで管理するリソース群.
+            FPersistentRdgPooledBufferSet BitmaskBuffer;
+            FPersistentRdgPooledBufferSet BrickDataBuffer;
+            FPersistentRdgPooledBufferSet HiBrickDataBuffer;
+            FPersistentRdgPooledBufferSet OptionalDataBuffer;
+            FPersistentRdgPooledBufferSet RadianceAccumBuffer;
+        };
+        // Inner.
+        struct FFspState
+        {
+            FToroidalGrid TrGrid{};
+
+            FPersistentRdgPooledBufferSet FspCellDataBuffer;
+            FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
+            FPersistentRdgPooledBufferSet FspProbePoolBuffer;
+            FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
+            FPersistentRdgPooledBufferSet FspActiveProbeListPrevBuffer;
+            FPersistentRdgPooledBufferSet FspActiveProbeListCurrBuffer;
+            FPersistentRdgPooledBufferSet FspProbeRadianceBuffer;
+            FPersistentRdgPooledBufferSet FspPackedSHBuffer;
+        };
+
+
         bool    bRenderInitialized = false;
         uint32  FrameCount = 0;
 
-        FIntVector  BbvGridMinCell = FIntVector::ZeroValue;// Bbvのセル絶対座標におけるグリッドMinセル座標
-        FVector     BbvGridMinPositionWs = FVector::ZeroVector;// Bbvのグリッド範囲のMin座標
-        FIntVector  BbvToroidalOffsetCells = FIntVector::ZeroValue;
-
-
-        // システムがフレームをまたいで管理するリソース群.
-        PersistentRdgPooledBufferSet BitmaskBuffer;
-        PersistentRdgPooledBufferSet BrickDataBuffer;
-        PersistentRdgPooledBufferSet HiBrickDataBuffer;
-        PersistentRdgPooledBufferSet OptionalDataBuffer;
-        PersistentRdgPooledBufferSet RadianceAccumBuffer;
-
-        PersistentRdgPooledBufferSet FspCellDataBuffer;
-        PersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
-        PersistentRdgPooledBufferSet FspProbePoolBuffer;
-        PersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
-        PersistentRdgPooledBufferSet FspActiveProbeListPrevBuffer;
-        PersistentRdgPooledBufferSet FspActiveProbeListCurrBuffer;
-        PersistentRdgPooledBufferSet FspProbeRadianceBuffer;
-        PersistentRdgPooledBufferSet FspPackedSHBuffer;
+        FBbvState bbv{};
+        FFspState fsp{};
     };
 
-    FInstantRdvBbvConfig    Config;
-    FSystemState          SystemState;
-
-    // FSP (Frustum Space Probe) 管理オブジェクト。実装詳細は InstantRdvFsp.* に分離。
-    TUniquePtr<class FInstantRdvFsp> Fsp;
+    struct FConfig
+    {
+        FInstantRdvBbvConfig    bbv{};
+        FInstantRdvFspConfig    fsp{};
+    };
+    FConfig                 Config;
+    FSystemState            SystemState;
 };

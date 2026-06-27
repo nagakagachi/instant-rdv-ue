@@ -133,16 +133,24 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     (void)GraphBuilder;
     (void)InViewFamily;
     FrameViews_RenderThread.Reset();
+
+    /*
     if (BbvSystem.IsValid())
     {
         BbvSystem->BeginFrame_RenderThread(GraphBuilder, InViewFamily);
     }
+    */
 }
 
 void FInstantRdvSceneViewExtension::PreRenderView_RenderThread(FRDGBuilder& GraphBuilder, FSceneView& InView)
 {
     (void)GraphBuilder;
     FrameViews_RenderThread.Add(&InView);
+
+    if (BbvSystem.IsValid())
+    {
+        BbvSystem->BeginFrame_RenderThread(GraphBuilder, InView);
+    }
 }
 
 void FInstantRdvSceneViewExtension::ExecuteBbvGeometryUpdate_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTexture* SceneDepthTexture)

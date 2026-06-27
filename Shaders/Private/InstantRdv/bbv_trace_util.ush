@@ -60,7 +60,7 @@ bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint O
 {
     // Brick 内ローカル座標を bit index に変換し、該当ビットの占有状態を返す。
     OutBitIndex = 0u;
-    const int FineRes = int(BbvPerVoxelResolution);
+    const int FineRes = int(BbvPerBrickResolution);
     if (any(LocalFineCoord < 0) || any(LocalFineCoord >= FineRes))
     {
         return false;
@@ -224,10 +224,10 @@ bool TraceBbvRayReference(
             // Voxel モードでは同じ進入点を使い、参照実装準拠の Brick 内追跡を実行。
             const float DetailBeginT = BrickBeginT;
             const float3 BrickEntryPos = ClampedStartPos + RayDir * DetailBeginT;
-            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(BbvPerVoxelResolution);
+            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(BbvPerBrickResolution);
 
             bool3 DetailStepMask = bool3(false, false, false);
-            const int FineRes = int(BbvPerVoxelResolution);
+            const int FineRes = int(BbvPerBrickResolution);
             const int3 SubMapPos = TraceBitmaskBrickReference(
                 PosInBrick,
                 RayDir,

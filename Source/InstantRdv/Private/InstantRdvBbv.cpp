@@ -43,7 +43,7 @@ TGlobalResource<FEmptyVertexDeclaration, FRenderResource::EInitPhase::Pre> GInst
 
 
 static constexpr uint32 kBbvRadianceAccumComponentCount = 4;
-static constexpr uint32 kFspCellDataU32Count = 4;
+static constexpr uint32 kFspProbeDataU32Count = 4;// Fsp Radiance Bufferの1Probeあたりのu32数
 // 移植時の重要注意（RDG/RHI）:
 // - 再生成したバッファは QueueBufferExtraction 前に必ず produced 状態へする（Clear など）。
 //   produced でない抽出は RDG validation で落ちる。
@@ -59,11 +59,11 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvReset(
 static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionOffsetFineCells(
     TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"),
     2.0f,
-    TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / BbvPerVoxelResolution) で算出。"),
+    TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / BbvPerBrickResolution) で算出。"),
     ECVF_RenderThreadSafe);
 // 移植ミス再発防止:
 // - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
-// - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/BbvPerVoxelResolution で換算する。
+// - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/BbvPerBrickResolution で換算する。
 // - CVarの意味は「ワールド距離」ではなく「fine cell数」を維持すること。
 
 class FInstantRdvBbvBeginUpdateCS final : public FGlobalShader
@@ -114,7 +114,7 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerVoxelResolution)
+        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
@@ -180,7 +180,7 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerVoxelResolution)
+        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
@@ -241,7 +241,7 @@ public:
         SHADER_PARAMETER(uint32, BrickCount)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
         SHADER_PARAMETER(uint32, OptionalDataU32Count)
-        SHADER_PARAMETER(uint32, BbvPerVoxelResolution)
+        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(uint32, UpdateSkipCount)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
@@ -267,7 +267,7 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerVoxelResolution)
+        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
@@ -408,7 +408,7 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
         SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerVoxelResolution)
+        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(float, CellSizeCm)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
@@ -429,7 +429,8 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(FMatrix44f, ViewProjectionMatrix)
-        SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
+        SHADER_PARAMETER(float, ViewAcpectRatio)
+        SHADER_PARAMETER(FVector3f, FspGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
@@ -478,6 +479,8 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardVS, "/InstantRdvShaders/Priv
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardPS, "/InstantRdvShaders/Private/InstantRdv/fsp_probe_billboard.usf", "MainPS", SF_Pixel);
 } // namespace
 
+
+
 uint32 FInstantRdvBbvConfig::GetBbvBrickCount() const
 {
     return static_cast<uint32>(BbvGridResolution.X) * static_cast<uint32>(BbvGridResolution.Y) * static_cast<uint32>(BbvGridResolution.Z);
@@ -485,7 +488,7 @@ uint32 FInstantRdvBbvConfig::GetBbvBrickCount() const
 
 uint32 FInstantRdvBbvConfig::GetBitmaskU32CountPerBrick() const
 {
-    const uint32 PerBrickBitCount = BbvPerVoxelResolution * BbvPerVoxelResolution * BbvPerVoxelResolution;
+    const uint32 PerBrickBitCount = BbvPerBrickResolution * BbvPerBrickResolution * BbvPerBrickResolution;
     return PerBrickBitCount / 32u;
 }
 
@@ -521,16 +524,22 @@ uint32 FInstantRdvBbvConfig::GetRadianceAccumDataElementCount() const
     return GetBbvBrickCount() * kBbvRadianceAccumComponentCount;
 }
 
+
+
+uint32 FInstantRdvFspConfig::GetFspCellCount() const
+{
+    return static_cast<uint32>(ProbeGridResolution.X * ProbeGridResolution.Y * ProbeGridResolution.Z);
+}
+
+
 void FInstantRdvBbv::Initialize()
 {
     {
-        SystemState.BbvGridMinCell = FIntVector::ZeroValue;
-        SystemState.BbvGridMinPositionWs = FVector::ZeroVector;
-        SystemState.BbvToroidalOffsetCells = FIntVector::ZeroValue;
+        SystemState = {};
     }
 }
 
-void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& InViewFamily)
+void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InView)
 {
     // TODO.
     // 各種システムのRenderでのBeginUpdate処理を集約する.
@@ -544,37 +553,86 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
         // フレームクリア.
         SystemState.FrameCount = 0;
 
-        // 必要なリソースをRDGから生成. 寿命はフレームを超えるので, Extractionして管理責任を受け取る.
+        {
+            auto SetupToroidalGrid = [](FToroidalGrid& out_tr_grid, const FIntVector& resolution)
+            {
+                    out_tr_grid = {};
+                    out_tr_grid.GridReso = resolution;
+            };
 
-        const uint32 BitmaskElementCount = Config.GetBitmaskElementCount();
-        const uint32 BrickDataElementCount = Config.GetBrickDataElementCount();
-        const uint32 HiBrickDataElementCount = Config.GetHiBrickDataElementCount();
-        const uint32 OptionalDataElementCount = Config.GetOptionalDataElementCount();
-        const uint32 RadianceAccumElementCount = Config.GetRadianceAccumDataElementCount();
-        const uint32 BrickCount = Config.GetBbvBrickCount();
-        const uint32 BitmaskWordsPerBrick = Config.GetBitmaskU32CountPerBrick();
+            SetupToroidalGrid(SystemState.bbv.TrGrid, Config.bbv.BbvGridResolution);
+            SetupToroidalGrid(SystemState.fsp.TrGrid, Config.fsp.ProbeGridResolution);
+        }
 
-        // RDGPool上に確保. この時点ではまだフレーム(RDG)寿命のリソース.
-        SystemState.BitmaskBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BitmaskElementCount), TEXT("InstantRdv.BbvBitmaskBuffer"));
-        SystemState.BrickDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BrickDataElementCount), TEXT("InstantRdv.BbvBrickDataBuffer"));
-        SystemState.HiBrickDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), HiBrickDataElementCount), TEXT("InstantRdv.BbvHiBrickDataBuffer"));
-        SystemState.OptionalDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), OptionalDataElementCount), TEXT("InstantRdv.BbvOptionalDataBuffer"));
-        SystemState.RadianceAccumBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), RadianceAccumElementCount), TEXT("InstantRdv.BbvRadianceAccumBuffer"));
+        // Bbv
+        {
+            // 必要なリソースをRDGから生成. 寿命はフレームを超えるので, Extractionして管理責任を受け取る.
+            const uint32 BitmaskElementCount = Config.bbv.GetBitmaskElementCount();
+            const uint32 BrickDataElementCount = Config.bbv.GetBrickDataElementCount();
+            const uint32 HiBrickDataElementCount = Config.bbv.GetHiBrickDataElementCount();
+            const uint32 OptionalDataElementCount = Config.bbv.GetOptionalDataElementCount();
+            const uint32 RadianceAccumElementCount = Config.bbv.GetRadianceAccumDataElementCount();
+            const uint32 BrickCount = Config.bbv.GetBbvBrickCount();
+            const uint32 BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
 
-        // 再生成直後の pooled buffer は produced 扱いではないため、
-        // extraction 前に明示的に書き込み（clear）して RDG validation をパスさせる  本当に必要か?要確認.
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.BitmaskBuffer.Handle), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.BrickDataBuffer.Handle), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.HiBrickDataBuffer.Handle), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.OptionalDataBuffer.Handle), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.RadianceAccumBuffer.Handle), 0u);
 
-        // Extractionして永続化.
-        GraphBuilder.QueueBufferExtraction(SystemState.BitmaskBuffer.Handle, &SystemState.BitmaskBuffer.PooledBuffer);
-        GraphBuilder.QueueBufferExtraction(SystemState.BrickDataBuffer.Handle, &SystemState.BrickDataBuffer.PooledBuffer);
-        GraphBuilder.QueueBufferExtraction(SystemState.HiBrickDataBuffer.Handle, &SystemState.HiBrickDataBuffer.PooledBuffer);
-        GraphBuilder.QueueBufferExtraction(SystemState.OptionalDataBuffer.Handle, &SystemState.OptionalDataBuffer.PooledBuffer);
-        GraphBuilder.QueueBufferExtraction(SystemState.RadianceAccumBuffer.Handle, &SystemState.RadianceAccumBuffer.PooledBuffer);
+            // RDGPool上に確保. この時点ではまだフレーム(RDG)寿命のリソース.
+            SystemState.bbv.BitmaskBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BitmaskElementCount), TEXT("InstantRdv.BbvBitmaskBuffer"));
+            SystemState.bbv.BrickDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BrickDataElementCount), TEXT("InstantRdv.BbvBrickDataBuffer"));
+            SystemState.bbv.HiBrickDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), HiBrickDataElementCount), TEXT("InstantRdv.BbvHiBrickDataBuffer"));
+            SystemState.bbv.OptionalDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), OptionalDataElementCount), TEXT("InstantRdv.BbvOptionalDataBuffer"));
+            SystemState.bbv.RadianceAccumBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), RadianceAccumElementCount), TEXT("InstantRdv.BbvRadianceAccumBuffer"));
+
+            // 再生成直後の pooled buffer は produced 扱いではないため、
+            // extraction 前に明示的に書き込み（clear）して RDG validation をパスさせる  本当に必要か?要確認.
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.bbv.BrickDataBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.bbv.HiBrickDataBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.bbv.OptionalDataBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.bbv.RadianceAccumBuffer.Handle), 0u);
+
+            // Extractionして永続化.
+            GraphBuilder.QueueBufferExtraction(SystemState.bbv.BitmaskBuffer.Handle, &SystemState.bbv.BitmaskBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.bbv.BrickDataBuffer.Handle, &SystemState.bbv.BrickDataBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.bbv.HiBrickDataBuffer.Handle, &SystemState.bbv.HiBrickDataBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.bbv.OptionalDataBuffer.Handle, &SystemState.bbv.OptionalDataBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.bbv.RadianceAccumBuffer.Handle, &SystemState.bbv.RadianceAccumBuffer.PooledBuffer);
+        }
+
+        // Fsp
+        {
+            const uint32 FspCellCount =  SystemState.fsp.TrGrid.GetCellCount();
+
+
+            SystemState.fsp.FspCellDataBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount * kFspProbeDataU32Count), TEXT("InstantRdv.fsp.FspCellDataBuffer"));
+            SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1), TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
+            SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount), TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
+            SystemState.fsp.FspProbeFreeStackBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.fsp.FspProbeFreeStackBuffer"));
+            SystemState.fsp.FspActiveProbeListPrevBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeListPrev"));
+            SystemState.fsp.FspActiveProbeListCurrBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeListCurr"));
+            SystemState.fsp.FspProbeRadianceBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32) * kFspProbeDataU32Count, SystemState.fsp.TrGrid.GetCellCount()), TEXT("InstantRdv.fsp.FspProbeRadianceBuffer"));
+            SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, SystemState.fsp.TrGrid.GetCellCount()), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+
+
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellDataBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListPrevBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRadianceBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle), 0u);
+
+
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspCellDataBuffer.Handle, &SystemState.fsp.FspCellDataBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle, &SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbePoolBuffer.Handle, &SystemState.fsp.FspProbePoolBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeFreeStackBuffer.Handle, &SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListPrevBuffer.Handle, &SystemState.fsp.FspActiveProbeListPrevBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle, &SystemState.fsp.FspActiveProbeListCurrBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRadianceBuffer.Handle, &SystemState.fsp.FspProbeRadianceBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspPackedSHBuffer.Handle, &SystemState.fsp.FspPackedSHBuffer.PooledBuffer);
+        }
     }
     else
     {
@@ -582,22 +640,37 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
         ++SystemState.FrameCount;
 
         // Pool されているリソースをこのフレーム用にRDGにRegisterしてハンドル更新.
-        SystemState.BitmaskBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.BitmaskBuffer.PooledBuffer, TEXT("InstantRdv.BbvBitmaskBuffer"));
-        SystemState.BrickDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.BrickDataBuffer.PooledBuffer, TEXT("InstantRdv.BbvBrickDataBuffer"));
-        SystemState.HiBrickDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.HiBrickDataBuffer.PooledBuffer, TEXT("InstantRdv.BbvHiBrickDataBuffer"));
-        SystemState.OptionalDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.OptionalDataBuffer.PooledBuffer, TEXT("InstantRdv.BbvOptionalDataBuffer"));
-        SystemState.RadianceAccumBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.RadianceAccumBuffer.PooledBuffer, TEXT("InstantRdv.BbvRadianceAccumBuffer"));
+        
+        // Bbv
+        {
+            SystemState.bbv.BitmaskBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.bbv.BitmaskBuffer.PooledBuffer, TEXT("InstantRdv.BbvBitmaskBuffer"));
+            SystemState.bbv.BrickDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.bbv.BrickDataBuffer.PooledBuffer, TEXT("InstantRdv.BbvBrickDataBuffer"));
+            SystemState.bbv.HiBrickDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.bbv.HiBrickDataBuffer.PooledBuffer, TEXT("InstantRdv.BbvHiBrickDataBuffer"));
+            SystemState.bbv.OptionalDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.bbv.OptionalDataBuffer.PooledBuffer, TEXT("InstantRdv.BbvOptionalDataBuffer"));
+            SystemState.bbv.RadianceAccumBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.bbv.RadianceAccumBuffer.PooledBuffer, TEXT("InstantRdv.BbvRadianceAccumBuffer"));
+        }
+
+        // Fsp
+        {
+            SystemState.fsp.FspCellDataBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspCellDataBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspCellDataBuffer"));
+            SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
+            SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbePoolBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
+            SystemState.fsp.FspProbeFreeStackBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeFreeStackBuffer"));
+            SystemState.fsp.FspActiveProbeListPrevBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListPrevBuffer.PooledBuffer, TEXT("InstantRdv.FspActiveProbeListPrev"));
+            SystemState.fsp.FspActiveProbeListCurrBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListCurrBuffer.PooledBuffer, TEXT("InstantRdv.FspActiveProbeListCurr"));
+            SystemState.fsp.FspProbeRadianceBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRadianceBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRadianceBuffer"));
+            SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspPackedSHBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+        }
     }
 
 
-    // FSP 管理オブジェクトの遅延初期化。BeginFrame はレンダリング開始時に毎フレーム呼ばれるため
-    // 初回フレームでのみ生成と初期化を行う。
-    // TODO 初期化タイミングへ移動
-    if (!Fsp.IsValid())
+    // グリッド更新.
     {
-        Fsp = MakeUnique<FInstantRdvFsp>();
-        Fsp->Initialize();
+        SystemState.bbv.TrGrid.UpdateDelta(InView.ViewLocation, Config.bbv.BbvBrickSizeCm);
+        SystemState.fsp.TrGrid.UpdateDelta(InView.ViewLocation, Config.fsp.ProbeCellSizeCm);
     }
+
+
 }
 
 void FInstantRdvBbv::ExecuteGeometryUpdate(
@@ -612,37 +685,14 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         return;
     }
 
-    const uint32 BitmaskElementCount = Config.GetBitmaskElementCount();
-    const uint32 BrickDataElementCount = Config.GetBrickDataElementCount();
-    const uint32 HiBrickDataElementCount = Config.GetHiBrickDataElementCount();
-    const uint32 OptionalDataElementCount = Config.GetOptionalDataElementCount();
-    const uint32 RadianceAccumElementCount = Config.GetRadianceAccumDataElementCount();
-    const uint32 BrickCount = Config.GetBbvBrickCount();
-    const uint32 BitmaskWordsPerBrick = Config.GetBitmaskU32CountPerBrick();
+    const uint32 BrickCount = SystemState.bbv.TrGrid.GetCellCount();
+    const uint32 BitmaskElementCount = Config.bbv.GetBitmaskElementCount();
+    const uint32 BrickDataElementCount = Config.bbv.GetBrickDataElementCount();
+    const uint32 HiBrickDataElementCount = Config.bbv.GetHiBrickDataElementCount();
+    const uint32 OptionalDataElementCount = Config.bbv.GetOptionalDataElementCount();
+    const uint32 RadianceAccumElementCount = Config.bbv.GetRadianceAccumDataElementCount();
+    const uint32 BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
 
-
-    const FVector GridExtentCm = FVector(Config.BbvGridResolution) * Config.BbvBrickSizeCm;
-    const FVector GridHalfExtentCm = GridExtentCm * 0.5f;
-    const float Cell = FMath::Max(Config.BbvBrickSizeCm, 0.001f);
-    const FVector DesiredGridMin = View.ViewLocation - GridHalfExtentCm;
-    const FIntVector DesiredMinCell(FMath::FloorToInt(DesiredGridMin.X / Cell), FMath::FloorToInt(DesiredGridMin.Y / Cell), FMath::FloorToInt(DesiredGridMin.Z / Cell));
-
-    const FIntVector CurrentMinCell = SystemState.BbvGridMinCell;
-    const FIntVector GridMoveCellDelta = DesiredMinCell - CurrentMinCell;
-    if (!GridMoveCellDelta.IsZero())
-    {
-        SystemState.BbvGridMinCell = DesiredMinCell;
-        SystemState.BbvGridMinPositionWs = FVector(SystemState.BbvGridMinCell) * Cell;
-        auto WrapOffset = [](int32 Base, int32 Delta, int32 Mod)->int32
-        {
-            const int32 Raw = (Base + Delta) % Mod;
-            return (Raw < 0) ? (Raw + Mod) : Raw;
-        };
-        SystemState.BbvToroidalOffsetCells = FIntVector(
-            WrapOffset(SystemState.BbvToroidalOffsetCells.X, GridMoveCellDelta.X, Config.BbvGridResolution.X),
-            WrapOffset(SystemState.BbvToroidalOffsetCells.Y, GridMoveCellDelta.Y, Config.BbvGridResolution.Y),
-            WrapOffset(SystemState.BbvToroidalOffsetCells.Z, GridMoveCellDelta.Z, Config.BbvGridResolution.Z));
-    }
 
     FRDGBufferRef FrustumBrickCounterBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("InstantRdv.BbvFrustumBrickCounter"));
     FRDGBufferRef FrustumBrickListBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BrickCount), TEXT("InstantRdv.BbvFrustumBrickList"));
@@ -653,27 +703,29 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
     const bool bNeedInitialize = (0 == SystemState.FrameCount) || bForceReset;
     if (bNeedInitialize)
     {
-        const uint32 TotalElementCount = FMath::Max(FMath::Max(BitmaskElementCount, BrickDataElementCount), FMath::Max(HiBrickDataElementCount, OptionalDataElementCount));
-        const uint32 ThreadGroupCount = FMath::DivideAndRoundUp(TotalElementCount, 64u);
-        const FIntVector GroupCount = FComputeShaderUtils::GetGroupCountWrapped(static_cast<int32>(ThreadGroupCount));
-
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.RadianceAccumBuffer.Handle), 0u);
-
-        FInstantRdvBbvBeginUpdateCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvBeginUpdateCS::FParameters>();
         {
-            Parameters->BitmaskElementCount = BitmaskElementCount;
-            Parameters->BrickDataElementCount = BrickDataElementCount;
-            Parameters->HiBrickDataElementCount = HiBrickDataElementCount;
-            Parameters->OptionalDataElementCount = OptionalDataElementCount;
-            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.BitmaskBuffer.Handle);
-            Parameters->RWBrickData = GraphBuilder.CreateUAV(SystemState.BrickDataBuffer.Handle);
-            Parameters->RWHiBrickData = GraphBuilder.CreateUAV(SystemState.HiBrickDataBuffer.Handle);
-            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.OptionalDataBuffer.Handle);
-            Parameters->DispatchLinearWidth = FComputeShaderUtils::WrappedGroupStride * 64u;
-            Parameters->DispatchThreadCount = Parameters->DispatchLinearWidth * GroupCount.Y * GroupCount.Z;
+            const uint32 TotalElementCount = FMath::Max(FMath::Max(BitmaskElementCount, BrickDataElementCount), FMath::Max(HiBrickDataElementCount, OptionalDataElementCount));
+            const uint32 ThreadGroupCount = FMath::DivideAndRoundUp(TotalElementCount, 64u);
+            const FIntVector GroupCount = FComputeShaderUtils::GetGroupCountWrapped(static_cast<int32>(ThreadGroupCount));
+
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.bbv.RadianceAccumBuffer.Handle), 0u);
+
+            FInstantRdvBbvBeginUpdateCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvBeginUpdateCS::FParameters>();
+            {
+                Parameters->BitmaskElementCount = BitmaskElementCount;
+                Parameters->BrickDataElementCount = BrickDataElementCount;
+                Parameters->HiBrickDataElementCount = HiBrickDataElementCount;
+                Parameters->OptionalDataElementCount = OptionalDataElementCount;
+                Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
+                Parameters->RWBrickData = GraphBuilder.CreateUAV(SystemState.bbv.BrickDataBuffer.Handle);
+                Parameters->RWHiBrickData = GraphBuilder.CreateUAV(SystemState.bbv.HiBrickDataBuffer.Handle);
+                Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.bbv.OptionalDataBuffer.Handle);
+                Parameters->DispatchLinearWidth = FComputeShaderUtils::WrappedGroupStride * 64u;
+                Parameters->DispatchThreadCount = Parameters->DispatchLinearWidth * GroupCount.Y * GroupCount.Z;
+            }
+            TShaderMapRef<FInstantRdvBbvBeginUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+            FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvBeginUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, GroupCount);
         }
-        TShaderMapRef<FInstantRdvBbvBeginUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvBeginUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, GroupCount);
     }
 
     {
@@ -696,23 +748,23 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
             Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
-            Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-            Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-            Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
-            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
-            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-            Parameters->CellSizeCm = Config.BbvBrickSizeCm;
+            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+            Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             // 参照実装と同じく「fine cell 数」からワールド距離を算出する。
             const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm = Config.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.BbvPerVoxelResolution), 1.0f);
+            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.bbv.BbvPerBrickResolution), 1.0f);
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
             Parameters->SceneDepthTexture = SceneDepthTexture;
             Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.BitmaskBuffer.Handle);
+            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
         }
         TShaderMapRef<FInstantRdvBbvDepthInjectionCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
@@ -720,20 +772,20 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthInjectionMainView"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
     }
 
-    if (!GridMoveCellDelta.IsZero())
+    if (!SystemState.bbv.TrGrid.FrameCellDelta.IsZero())
     {
         FInstantRdvBbvToroidalClearCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvToroidalClearCS::FParameters>();
         {
             Parameters->BrickCount = BrickCount;
-            Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-            Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-            Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->OptionalDataU32Count = Config.OptionalDataU32Count;
-            Parameters->GridMoveDeltaCells = FIntVector4(GridMoveCellDelta.X, GridMoveCellDelta.Y, GridMoveCellDelta.Z, 0);
-            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
-            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.BitmaskBuffer.Handle);
-            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.OptionalDataBuffer.Handle);
+            Parameters->OptionalDataU32Count = Config.bbv.OptionalDataU32Count;
+            Parameters->GridMoveDeltaCells = FIntVector4(SystemState.bbv.TrGrid.FrameCellDelta, 0);
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
+            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.bbv.OptionalDataBuffer.Handle);
         }
         TShaderMapRef<FInstantRdvBbvToroidalClearCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 GroupX = FMath::DivideAndRoundUp(BrickCount, 64u);
@@ -747,14 +799,14 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             {
                 Parameters->BrickCount = BrickCount;
                 Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-                Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-                Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-                Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
-                Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
-                Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-                Parameters->CellSizeCm = Config.BbvBrickSizeCm;
+                Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+                Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+                Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+                Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+                Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+                Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
                 Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
-                Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.BitmaskBuffer.Handle);
+                Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
                 Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
                 Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
             }
@@ -789,14 +841,14 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
                 Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
                 Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
-                Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-                Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-                Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+                Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+                Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+                Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
                 Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-                Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
-                Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
-                Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-                Parameters->CellSizeCm = Config.BbvBrickSizeCm;
+                Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
+                Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+                Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+                Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
                 Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetWorldToView());
                 Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
                 Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
@@ -804,7 +856,7 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
                 Parameters->FrustumBrickCounter = GraphBuilder.CreateSRV(FrustumBrickCounterBuffer);
                 Parameters->FrustumBrickList = GraphBuilder.CreateSRV(FrustumBrickListBuffer);
-                Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.BitmaskBuffer.Handle);
+                Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
                 Parameters->FrustumBrickIndirectArgBuffer = FrustumBrickIndirectArgBuffer;
             }
             TShaderMapRef<FInstantRdvBbvDepthCarvingCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
@@ -824,8 +876,8 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         {
             Parameters->BrickCount = BrickCount;
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.BitmaskBuffer.Handle);
-            Parameters->RWBrickData = GraphBuilder.CreateUAV(SystemState.BrickDataBuffer.Handle);
+            Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
+            Parameters->RWBrickData = GraphBuilder.CreateUAV(SystemState.bbv.BrickDataBuffer.Handle);
         }
         TShaderMapRef<FInstantRdvBbvBrickCountAggregateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 GroupX = FMath::DivideAndRoundUp(BrickCount, 64u);
@@ -837,13 +889,13 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         {
             Parameters->BrickCount = BrickCount;
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->OptionalDataU32Count = Config.OptionalDataU32Count;
-            Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
+            Parameters->OptionalDataU32Count = Config.bbv.OptionalDataU32Count;
+            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
             Parameters->FrameCount = SystemState.FrameCount;
             Parameters->UpdateSkipCount = kBbvElementUpdateSkipCount;
-            Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.BitmaskBuffer.Handle);
-            Parameters->BrickData = GraphBuilder.CreateSRV(SystemState.BrickDataBuffer.Handle);
-            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.OptionalDataBuffer.Handle);
+            Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
+            Parameters->BrickData = GraphBuilder.CreateSRV(SystemState.bbv.BrickDataBuffer.Handle);
+            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.bbv.OptionalDataBuffer.Handle);
         }
         TShaderMapRef<FInstantRdvBbvElementUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 PerFrameCount = FMath::DivideAndRoundUp(BrickCount, kBbvElementUpdateSkipCount + 1u);
@@ -866,30 +918,12 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
         return;
     }
 
-    FRDGBufferRef BitmaskBuffer = SystemState.BitmaskBuffer.Handle;
-    FRDGBufferRef OptionalDataBuffer = SystemState.OptionalDataBuffer.Handle;
-    FRDGBufferRef RadianceAccumBuffer = SystemState.RadianceAccumBuffer.Handle;
-    /*
-    if (BitmaskBuffer == nullptr && SystemState.BitmaskBuffer.IsValid())
-    {
-        BitmaskBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.BitmaskBuffer, TEXT("InstantRdv.BbvBitmaskBuffer"));
-    }
-    if (OptionalDataBuffer == nullptr && SystemState.OptionalDataBuffer.IsValid())
-    {
-        OptionalDataBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.OptionalDataBuffer, TEXT("InstantRdv.BbvOptionalDataBuffer"));
-    }
-    if (RadianceAccumBuffer == nullptr && SystemState.RadianceAccumBuffer.IsValid())
-    {
-        RadianceAccumBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.RadianceAccumBuffer, TEXT("InstantRdv.BbvRadianceAccumBuffer"));
-    }
-    if (BitmaskBuffer == nullptr || OptionalDataBuffer == nullptr || RadianceAccumBuffer == nullptr)
-    {
-        return;
-    }
-    */
+    FRDGBufferRef BitmaskBuffer = SystemState.bbv.BitmaskBuffer.Handle;
+    FRDGBufferRef OptionalDataBuffer = SystemState.bbv.OptionalDataBuffer.Handle;
+    FRDGBufferRef RadianceAccumBuffer = SystemState.bbv.RadianceAccumBuffer.Handle;
 
-    const uint32 BrickCount = Config.GetBbvBrickCount();
-    const uint32 BitmaskWordsPerBrick = Config.GetBitmaskU32CountPerBrick();
+    const uint32 BrickCount = SystemState.bbv.TrGrid.GetCellCount();
+    const uint32 BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
 
     if (bEnableRadianceInjection)
@@ -902,16 +936,16 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
             Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
-            Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-            Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-            Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
             Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
-            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
-            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-            Parameters->CellSizeCm = Config.BbvBrickSizeCm;
+            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+            Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm = Config.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.BbvPerVoxelResolution), 1.0f);
+            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.bbv.BbvPerBrickResolution), 1.0f);
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
@@ -932,7 +966,7 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
         FInstantRdvBbvRadianceResolveCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvRadianceResolveCS::FParameters>();
         {
             Parameters->BrickCount = BrickCount;
-            Parameters->OptionalDataU32Count = Config.OptionalDataU32Count;
+            Parameters->OptionalDataU32Count = Config.bbv.OptionalDataU32Count;
             Parameters->RWBbvRadianceAccumBuffer = GraphBuilder.CreateUAV(RadianceAccumBuffer);
             Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(OptionalDataBuffer);
         }
@@ -940,10 +974,6 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
         const uint32 GroupX = FMath::DivideAndRoundUp(BrickCount, 64u);
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvRadianceResolve"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
-    /*
-    SystemState.FrameOptionalDataBuffer = OptionalDataBuffer;
-    SystemState.FrameRadianceAccumBuffer = RadianceAccumBuffer;
-    */
 }
 
 void FInstantRdvBbv::ExecuteFspUpdate(
@@ -952,88 +982,35 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     FRDGTexture* SceneDepthTexture,
     bool bEnableFspUpdate)
 {
-#if 0
     if (!bEnableFspUpdate || SceneDepthTexture == nullptr || !SystemState.bRenderInitialized)
     {
         return;
     }
 
-    FRDGBufferRef OptionalDataBuffer = SystemState.OptionalDataBuffer.Handle;
-
-    const uint32 FspCellCount =
-        static_cast<uint32>(Config.ProbeGridResolution.X) *
-        static_cast<uint32>(Config.ProbeGridResolution.Y) *
-        static_cast<uint32>(Config.ProbeGridResolution.Z);
-    const uint32 FspCellDataElementCount = FspCellCount * kFspCellDataU32Count;
-    const uint32 FspVisibleSurfaceListElementCount = FspCellCount + 1u;
-
-    const bool bNeedRecreateFspBuffers =
-        !SystemState.FspCellDataBuffer.IsValid() ||
-        !SystemState.FspVisibleSurfaceListBuffer.IsValid() ||
-        SystemState.CachedFspCellDataElements != FspCellDataElementCount ||
-        SystemState.CachedFspVisibleSurfaceListElements != FspVisibleSurfaceListElementCount;
-
-    FRDGBufferRef FspCellDataBuffer = nullptr;
-    FRDGBufferRef FspVisibleSurfaceListBuffer = nullptr;
-    if (bNeedRecreateFspBuffers)
+    const bool bNeedInitialize = (0 == SystemState.FrameCount);
+    // 初回フレームか, 強制された場合.
+    if (bNeedInitialize)
     {
-        FspCellDataBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellDataElementCount), TEXT("InstantRdv.FspCellDataBuffer"));
-        FspVisibleSurfaceListBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspVisibleSurfaceListElementCount), TEXT("InstantRdv.FspVisibleSurfaceListBuffer"));
-
-        // Probe pool / free stack / active lists の生成（最小構成）
-        const uint32 ProbePoolElementCount = FspCellCount;
-        FRDGBufferRef FspProbePoolBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ProbePoolElementCount), TEXT("InstantRdv.FspProbePoolBuffer"));
-        FRDGBufferRef FspProbeFreeStackBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ProbePoolElementCount + 1u), TEXT("InstantRdv.FspProbeFreeStackBuffer"));
-        FRDGBufferRef FspActivePrevBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ProbePoolElementCount + 1u), TEXT("InstantRdv.FspActiveProbeListPrev"));
-        FRDGBufferRef FspActiveCurrBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ProbePoolElementCount + 1u), TEXT("InstantRdv.FspActiveProbeListCurr"));
-
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspCellDataBuffer), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspVisibleSurfaceListBuffer), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspProbePoolBuffer), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspProbeFreeStackBuffer), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspActivePrevBuffer), 0u);
-        AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspActiveCurrBuffer), 0u);
-
-        // Probe free stack を GPU 側で初期化するパスを追加
         {
+            // Probe free stack を GPU 側で初期化するパスを追加.
             FInstantRdvFspInitPoolCS::FParameters* InitParams = GraphBuilder.AllocParameters<FInstantRdvFspInitPoolCS::FParameters>();
-            InitParams->ProbePoolElementCount = ProbePoolElementCount;
-            InitParams->RWFspProbeFreeStack = GraphBuilder.CreateUAV(FspProbeFreeStackBuffer);
+            InitParams->ProbePoolElementCount = SystemState.fsp.TrGrid.GetCellCount();
+            InitParams->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);
             TShaderMapRef<FInstantRdvFspInitPoolCS> InitShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-            const uint32 InitGroupX = FMath::DivideAndRoundUp(ProbePoolElementCount, 64u);
+            const uint32 InitGroupX = FMath::DivideAndRoundUp(SystemState.fsp.TrGrid.GetCellCount(), 64);
             FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspInitPool"), ERDGPassFlags::Compute, InitShader, InitParams, FIntVector(InitGroupX, 1, 1));
         }
-
-        GraphBuilder.QueueBufferExtraction(FspCellDataBuffer, &SystemState.FspCellDataBuffer);
-        GraphBuilder.QueueBufferExtraction(FspVisibleSurfaceListBuffer, &SystemState.FspVisibleSurfaceListBuffer);
-        GraphBuilder.QueueBufferExtraction(FspProbePoolBuffer, &SystemState.FspProbePoolBuffer);
-        GraphBuilder.QueueBufferExtraction(FspProbeFreeStackBuffer, &SystemState.FspProbeFreeStackBuffer);
-        GraphBuilder.QueueBufferExtraction(FspActivePrevBuffer, &SystemState.FspActiveProbeListPrevBuffer);
-        GraphBuilder.QueueBufferExtraction(FspActiveCurrBuffer, &SystemState.FspActiveProbeListCurrBuffer);
-
-        SystemState.CachedFspCellDataElements = FspCellDataElementCount;
-        SystemState.CachedFspVisibleSurfaceListElements = FspVisibleSurfaceListElementCount;
-        SystemState.CachedFspProbePoolElements = ProbePoolElementCount;
-        SystemState.CachedFspProbeFreeStackElements = ProbePoolElementCount + 1u;
     }
-    else
-    {
-        FspCellDataBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspCellDataBuffer, TEXT("InstantRdv.FspCellDataBuffer"));
-        FspVisibleSurfaceListBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspVisibleSurfaceListBuffer, TEXT("InstantRdv.FspVisibleSurfaceListBuffer"));
-        FRDGBufferRef FspProbePoolBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspProbePoolBuffer, TEXT("InstantRdv.FspProbePoolBuffer"));
-        FRDGBufferRef FspProbeFreeStackBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspProbeFreeStackBuffer, TEXT("InstantRdv.FspProbeFreeStackBuffer"));
-        FRDGBufferRef FspActivePrevBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspActiveProbeListPrevBuffer, TEXT("InstantRdv.FspActiveProbeListPrev"));
-        FRDGBufferRef FspActiveCurrBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspActiveProbeListCurrBuffer, TEXT("InstantRdv.FspActiveProbeListCurr"));
-        (void)FspProbePoolBuffer;
-        (void)FspProbeFreeStackBuffer;
-        (void)FspActivePrevBuffer;
-        (void)FspActiveCurrBuffer;
-    }
+
+
+    FRDGBufferRef OptionalDataBuffer = SystemState.bbv.OptionalDataBuffer.Handle;
+
+
 
     // 参照実装の FspBeginUpdate に相当する最小初期化。
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspVisibleSurfaceListBuffer), 0u);
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
 
-    const FVector FspGridExtentCm = FVector(Config.ProbeGridResolution) * Config.ProbeCellSizeCm;
+    const FVector FspGridExtentCm = FVector(SystemState.fsp.TrGrid.GridReso) * Config.fsp.ProbeCellSizeCm;
     const FVector FspGridMinPositionWs = View.ViewLocation - FspGridExtentCm * 0.5f;
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
 
@@ -1045,16 +1022,16 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
         Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
         Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
-        Parameters->FspGridResolutionX = static_cast<uint32>(Config.ProbeGridResolution.X);
-        Parameters->FspGridResolutionY = static_cast<uint32>(Config.ProbeGridResolution.Y);
-        Parameters->FspGridResolutionZ = static_cast<uint32>(Config.ProbeGridResolution.Z);
-        Parameters->FspVisibleSurfaceListCapacity = FspVisibleSurfaceListElementCount - 1u;
+        Parameters->FspGridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
+        Parameters->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
+        Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
+        Parameters->FspVisibleSurfaceListCapacity = SystemState.fsp.TrGrid.GetCellCount();
         Parameters->FspGridMinPositionWs = FVector3f(FspGridMinPositionWs);
-        Parameters->FspCellSizeCm = Config.ProbeCellSizeCm;
-        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+        Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
         Parameters->SceneDepthTexture = SceneDepthTexture;
-        Parameters->RWFspCellData = GraphBuilder.CreateUAV(FspCellDataBuffer);
-        Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(FspVisibleSurfaceListBuffer);
+        Parameters->RWFspCellData = GraphBuilder.CreateUAV(SystemState.fsp.FspCellDataBuffer.Handle);
+        Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
         TShaderMapRef<FInstantRdvFspScreenSpaceCollectCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
         const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
@@ -1063,94 +1040,50 @@ void FInstantRdvBbv::ExecuteFspUpdate(
 
     {
         FInstantRdvFspRadianceUpdateCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspRadianceUpdateCS::FParameters>();
-        Parameters->FspGridResolutionX = static_cast<uint32>(Config.ProbeGridResolution.X);
-        Parameters->FspGridResolutionY = static_cast<uint32>(Config.ProbeGridResolution.Y);
-        Parameters->FspGridResolutionZ = static_cast<uint32>(Config.ProbeGridResolution.Z);
-        Parameters->FspCellDataU32Count = kFspCellDataU32Count;
-        Parameters->FspVisibleSurfaceListCapacity = FspVisibleSurfaceListElementCount - 1u;
-        Parameters->BbvGridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-        Parameters->BbvGridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-        Parameters->BbvGridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
-        Parameters->BbvOptionalDataU32Count = Config.OptionalDataU32Count;
+        Parameters->FspGridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
+        Parameters->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
+        Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
+        Parameters->FspCellDataU32Count = kFspProbeDataU32Count;
+        Parameters->FspVisibleSurfaceListCapacity = SystemState.fsp.TrGrid.GetCellCount();
+        Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+        Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+        Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+        Parameters->BbvOptionalDataU32Count = Config.bbv.OptionalDataU32Count;
         Parameters->FspGridMinPositionWs = FVector3f(FspGridMinPositionWs);
-        Parameters->FspCellSizeCm = Config.ProbeCellSizeCm;
-        Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-        Parameters->BbvCellSizeCm = Config.BbvBrickSizeCm;
-        Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
+        Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+        Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+        Parameters->BbvCellSizeCm = Config.bbv.BbvBrickSizeCm;
+        Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
         Parameters->BbvOptionalData = GraphBuilder.CreateSRV(OptionalDataBuffer);
-        Parameters->RWFspCellData = GraphBuilder.CreateUAV(FspCellDataBuffer);
-        Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(FspVisibleSurfaceListBuffer);
+        Parameters->RWFspCellData = GraphBuilder.CreateUAV(SystemState.fsp.FspCellDataBuffer.Handle);
+        Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
         TShaderMapRef<FInstantRdvFspRadianceUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(FspVisibleSurfaceListElementCount - 1u, 64u);
+        const uint32 GroupX = FMath::DivideAndRoundUp(SystemState.fsp.TrGrid.GetCellCount(), 64);
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspRadianceUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
+
     // Ray capture (簡易版): 可視 surface list に基づき各セルの ProbeRadiance を書き込む
     {
-        const uint32 ProbePoolElementCount = FspCellCount;
-        const uint32 ProbeRadianceElementCount = ProbePoolElementCount;
-        FRDGBufferRef FspProbeRadianceBuffer = nullptr;
-        if (!SystemState.FspProbeRadianceBuffer.IsValid() || SystemState.CachedFspProbeRadianceElements != ProbeRadianceElementCount)
-        {
-            FspProbeRadianceBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32) * 4, ProbeRadianceElementCount), TEXT("InstantRdv.FspProbeRadianceBuffer"));
-            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspProbeRadianceBuffer), 0u);
-            GraphBuilder.QueueBufferExtraction(FspProbeRadianceBuffer, &SystemState.FspProbeRadianceBuffer);
-            SystemState.CachedFspProbeRadianceElements = ProbeRadianceElementCount;
-        }
-        else
-        {
-            FspProbeRadianceBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspProbeRadianceBuffer, TEXT("InstantRdv.FspProbeRadianceBuffer"));
-        }
-
         // Dispatch ray-capture compute
         FInstantRdvFspRayCaptureCS::FParameters* RayParams = GraphBuilder.AllocParameters<FInstantRdvFspRayCaptureCS::FParameters>();
-        RayParams->FspVisibleSurfaceList = GraphBuilder.CreateSRV(FspVisibleSurfaceListBuffer);
-        RayParams->RWFspProbeRadiance = GraphBuilder.CreateUAV(FspProbeRadianceBuffer);
+        RayParams->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
+        RayParams->RWFspProbeRadiance = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRadianceBuffer.Handle);
         TShaderMapRef<FInstantRdvFspRayCaptureCS> RayShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 VisibleCapacity = FspVisibleSurfaceListElementCount - 1u;
+        const uint32 VisibleCapacity = SystemState.fsp.TrGrid.GetCellCount();
         const uint32 GroupX = FMath::DivideAndRoundUp(VisibleCapacity, 64u);
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspRayCapture"), ERDGPassFlags::Compute, RayShader, RayParams, FIntVector(GroupX, 1, 1));
 
-        SystemState.FrameFspProbeRadianceBuffer = FspProbeRadianceBuffer;
-
         // Packed SH update (簡易): ProbeRadiance -> PackedSH (4 float4 per probe)
         {
-            const uint32 PackedFloat4PerProbe = 4u;
-            const uint32 PackedElementCount = ProbeRadianceElementCount * PackedFloat4PerProbe;
-            FRDGBufferRef PackedSHBuffer = nullptr;
-            if (!SystemState.FspPackedSHBuffer.IsValid() || SystemState.CachedFspPackedSHElems != PackedElementCount)
-            {
-                PackedSHBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, PackedElementCount), TEXT("InstantRdv.FspPackedSHBuffer"));
-                AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(PackedSHBuffer), 0u);
-                GraphBuilder.QueueBufferExtraction(PackedSHBuffer, &SystemState.FspPackedSHBuffer);
-                SystemState.CachedFspPackedSHElems = PackedElementCount;
-            }
-            else
-            {
-                PackedSHBuffer = GraphBuilder.RegisterExternalBuffer(SystemState.FspPackedSHBuffer, TEXT("InstantRdv.FspPackedSHBuffer"));
-            }
-
             FInstantRdvFspShUpdateCS::FParameters* ShParams = GraphBuilder.AllocParameters<FInstantRdvFspShUpdateCS::FParameters>();
-            ShParams->FspProbeRadiance = GraphBuilder.CreateSRV(FspProbeRadianceBuffer);
-            ShParams->RWFspPackedSH = GraphBuilder.CreateUAV(PackedSHBuffer);
+            ShParams->FspProbeRadiance = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeRadianceBuffer.Handle);
+            ShParams->RWFspPackedSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
             TShaderMapRef<FInstantRdvFspShUpdateCS> ShShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-            const uint32 ShGroupX = FMath::DivideAndRoundUp(ProbeRadianceElementCount, 64u);
+            const uint32 ShGroupX = FMath::DivideAndRoundUp(SystemState.fsp.TrGrid.GetCellCount(), 64);
             FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspShUpdate"), ERDGPassFlags::Compute, ShShader, ShParams, FIntVector(ShGroupX, 1, 1));
-
-            SystemState.FrameFspProbeRadianceBuffer = FspProbeRadianceBuffer; // already set
-            SystemState.FrameFspProbeRadianceBuffer = FspProbeRadianceBuffer;
         }
     }
-
-    SystemState.FrameFspCellDataBuffer = FspCellDataBuffer;
-    SystemState.FrameFspVisibleSurfaceListBuffer = FspVisibleSurfaceListBuffer;
-
-    // FSP 管理オブジェクトにフレームRDGを渡して、必要な後処理を委譲する。
-    if (Fsp.IsValid())
-    {
-        Fsp->Tick(GraphBuilder);
-    }
-#endif
 }
 
 void FInstantRdvBbv::ExecuteDebugVisualize(
@@ -1166,9 +1099,9 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
         return;
     }
 
-    FRDGBufferRef BitmaskBuffer = SystemState.BitmaskBuffer.Handle;
-    FRDGBufferRef BrickDataBuffer = SystemState.BrickDataBuffer.Handle;
-    FRDGBufferRef OptionalDataBuffer = SystemState.OptionalDataBuffer.Handle;
+    FRDGBufferRef BitmaskBuffer = SystemState.bbv.BitmaskBuffer.Handle;
+    FRDGBufferRef BrickDataBuffer = SystemState.bbv.BrickDataBuffer.Handle;
+    FRDGBufferRef OptionalDataBuffer = SystemState.bbv.OptionalDataBuffer.Handle;
 
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
 
@@ -1200,15 +1133,15 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
             Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
-            Parameters->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-            Parameters->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-            Parameters->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
-            Parameters->BitmaskWordsPerBrick = Config.GetBitmaskU32CountPerBrick();
-            Parameters->BbvPerVoxelResolution = Config.BbvPerVoxelResolution;
-            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.BbvToroidalOffsetCells);
-            Parameters->CellSizeCm = Config.BbvBrickSizeCm;
-            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-            Parameters->MaxTraceDistanceCm = Config.BbvBrickSizeCm * static_cast<float>(Config.BbvGridResolution.GetMax());
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+            Parameters->BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
+            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
+            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+            Parameters->MaxTraceDistanceCm = Config.bbv.BbvBrickSizeCm * static_cast<float>(SystemState.bbv.TrGrid.GridReso.GetMax());
             Parameters->DebugMode = DebugMode;
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
             Parameters->BrickData = GraphBuilder.CreateSRV(BrickDataBuffer);
@@ -1229,28 +1162,28 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             PixelShader,
             Parameters);
     }
-    /*
+    
     // スプライト描画系デバッグ表示.
     if (DebugMode == 5)
     {
-        const uint32 ProbeCount = static_cast<uint32>(Config.ProbeGridResolution.X * Config.ProbeGridResolution.Y * Config.ProbeGridResolution.Z);
-
+        const uint32 ProbeCount = SystemState.fsp.TrGrid.GridReso.X * SystemState.fsp.TrGrid.GridReso.Y * SystemState.fsp.TrGrid.GridReso.Z;
         {
             FInstantRdvFspProbeBillboard_Parameters* Params = GraphBuilder.AllocParameters<FInstantRdvFspProbeBillboard_Parameters>();
 
             FInstantRdvFspProbeBillboardVS::FParameters* VSParams = &Params->VS;
             {
-                VSParams->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
-                VSParams->BbvGridMinPositionWs = FVector3f(SystemState.BbvGridMinPositionWs);
-                VSParams->CellSizeCm = Config.BbvBrickSizeCm;
-                VSParams->GridResolutionX = static_cast<uint32>(Config.BbvGridResolution.X);
-                VSParams->GridResolutionY = static_cast<uint32>(Config.BbvGridResolution.Y);
-                VSParams->GridResolutionZ = static_cast<uint32>(Config.BbvGridResolution.Z);
+                VSParams->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
+                VSParams->ViewAcpectRatio = View.ViewMatrices.GetProjectionMatrix().GetColumn(1)[1] / View.ViewMatrices.GetProjectionMatrix().GetColumn(0)[0];
+                VSParams->FspGridMinPositionWs = FVector3f(SystemState.fsp.TrGrid.MinPositionWs);
+                VSParams->CellSizeCm = Config.fsp.ProbeCellSizeCm;
+                VSParams->GridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
+                VSParams->GridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
+                VSParams->GridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
             }
 
             FInstantRdvFspProbeBillboardPS::FParameters* PSParams = &Params->PS;
             {
-                PSParams->FspProbeRadiance = GraphBuilder.CreateSRV(SystemState.FrameFspProbeRadianceBuffer);
+                PSParams->FspProbeRadiance = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeRadianceBuffer.Handle);
 
                 // GlobalShaderのGraphicsPipelineでRasterをする場合はShaderParameterにRENDER_TARGET_BINDING_SLOTSでRenderTargetSlotを定義しておいてターゲットを設定し, GraphBuilder.AddPass() のShaderParameter引数有バージョンに引き渡すことでRenderTarget設定される.
                 {
@@ -1293,5 +1226,5 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             });
         }
     }
-    */
+    
 }

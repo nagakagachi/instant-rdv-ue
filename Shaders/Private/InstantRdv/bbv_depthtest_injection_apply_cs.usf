@@ -22,7 +22,7 @@ uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
-uint BbvPerVoxelResolution;
+uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float3 BbvGridMinPositionWs;
 float CellSizeCm;
@@ -110,8 +110,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 const uint BrickIndex = FlattenBrickCoord(BrickCoord);
                 const float3 BrickLocal = frac(GridPos);
                 const uint3 FineCoord = min(
-                    uint3(BrickLocal * BbvPerVoxelResolution),
-                    uint3(BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1, BbvPerVoxelResolution - 1));
+                    uint3(BrickLocal * BbvPerBrickResolution),
+                    uint3(BbvPerBrickResolution - 1, BbvPerBrickResolution - 1, BbvPerBrickResolution - 1));
 
                 const uint BitIndex = CalcFineBitIndex(FineCoord);
                 const uint WordOffset = (BitIndex / 32u);

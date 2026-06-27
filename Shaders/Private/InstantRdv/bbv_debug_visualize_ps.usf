@@ -21,7 +21,7 @@ uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
-uint BbvPerVoxelResolution;
+uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float CellSizeCm;
 float3 BbvGridMinPositionWs;
@@ -68,7 +68,7 @@ uint HashInt3(int3 V)
 
 bool IsFineVoxelOccupied(int3 LogicalFineCoord)
 {
-    const int FineRes = int(BbvPerVoxelResolution);
+    const int FineRes = int(BbvPerBrickResolution);
     const int3 LogicalBrickCoord = LogicalFineCoord / FineRes;
     const int3 LocalFineCoord = LogicalFineCoord - LogicalBrickCoord * FineRes;
 
@@ -178,9 +178,9 @@ PsOut MainPS(VsOutput Input)
 
     if (DebugMode == 1)
     {
-        const uint FineDimX = GridResolutionX * BbvPerVoxelResolution;
-        const uint FineDimY = GridResolutionY * BbvPerVoxelResolution;
-        const uint FineDimZ = GridResolutionZ * BbvPerVoxelResolution;
+        const uint FineDimX = GridResolutionX * BbvPerBrickResolution;
+        const uint FineDimY = GridResolutionY * BbvPerBrickResolution;
+        const uint FineDimZ = GridResolutionZ * BbvPerBrickResolution;
 
         const uint FineX = min((uint)(ViewUv.x * FineDimX), FineDimX - 1u);
         const uint FineY = min((uint)((1.0 - ViewUv.y) * FineDimY), FineDimY - 1u);
@@ -265,7 +265,7 @@ PsOut MainPS(VsOutput Input)
     }
     else
     {
-        const float FineCellSizeCm = CellSizeCm / max(float(BbvPerVoxelResolution), 1.0);
+        const float FineCellSizeCm = CellSizeCm / max(float(BbvPerBrickResolution), 1.0);
 		const int3 GridOriginFineCoord = int3(floor(BbvGridMinPositionWs / max(FineCellSizeCm, 0.001)));
         const int3 WorldFineCoord = GridOriginFineCoord + HitLogicalFineCoord;
         HitColor = HashColor(HashInt3(WorldFineCoord));

@@ -7,7 +7,7 @@ RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
 uint BrickCount;
 uint BitmaskWordsPerBrick;
 uint OptionalDataU32Count;
-uint BbvPerVoxelResolution;
+uint BbvPerBrickResolution;
 uint FrameCount;
 uint UpdateSkipCount;
 
@@ -30,7 +30,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     const uint OptionalStart = BrickIndex * OptionalDataU32Count;
     const uint OccupiedVoxelCount = BrickData[BrickIndex * 4u + 0u];
-    const uint Denominator = max(BbvPerVoxelResolution * BbvPerVoxelResolution * BbvPerVoxelResolution, 1u);
+    const uint Denominator = max(BbvPerBrickResolution * BbvPerBrickResolution * BbvPerBrickResolution, 1u);
     const uint OccupancyByte = min((OccupiedVoxelCount * 255u) / Denominator, 255u);
     const uint EncodedOptionalWord = OccupancyByte | (OccupiedVoxelCount << 8u);
 

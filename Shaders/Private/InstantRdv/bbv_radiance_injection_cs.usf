@@ -18,7 +18,7 @@ uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
 uint BitmaskWordsPerBrick;
-uint BbvPerVoxelResolution;
+uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float3 BbvGridMinPositionWs;
 float CellSizeCm;
