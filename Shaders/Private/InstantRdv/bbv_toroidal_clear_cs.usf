@@ -1,5 +1,7 @@
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
 RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
 
@@ -7,12 +9,9 @@ uint BrickCount;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-uint BitmaskWordsPerBrick;
 int4 GridMoveDeltaCells;
 float3 BbvToroidalOffsetCells;
-uint OptionalDataU32Count;
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
@@ -43,16 +42,16 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    const uint3 PhysicalCoord = WrapBrickCoord(LogicalCoord);
-    const uint PhysicalBrickIndex = FlattenBrickCoord(PhysicalCoord);
-    const uint WordStart = PhysicalBrickIndex * BitmaskWordsPerBrick;
-    const uint OptionalStart = PhysicalBrickIndex * OptionalDataU32Count;
+    const uint3 PhysicalCoord = LogicalToPhysicalGridCoord(LogicalCoord, int3(BbvToroidalOffsetCells), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+    const uint PhysicalBrickIndex = FlattenGridCoord(PhysicalCoord, uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+	const uint WordStart = PhysicalBrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick;
+	const uint OptionalStart = PhysicalBrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
     [loop]
-    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+	for (uint WordOffset = 0; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
     {
         const uint ElementIndex = WordStart + WordOffset;
         RWBitmaskBrickVoxel[ElementIndex] = 0u;
-        if (WordOffset < OptionalDataU32Count)
+		if (WordOffset < k_irdv_bbv_brick_optional_data_u32_count)
         {
             RWBitmaskBrickVoxelOptionData[OptionalStart + WordOffset] = 0u;
         }

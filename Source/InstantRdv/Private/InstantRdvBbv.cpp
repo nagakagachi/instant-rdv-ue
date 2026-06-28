@@ -59,11 +59,11 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvReset(
 static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionOffsetFineCells(
     TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"),
     2.0f,
-    TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / BbvPerBrickResolution) で算出。"),
+    TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / k_irdv_bbv_brick_reso) で算出。"),
     ECVF_RenderThreadSafe);
 // 移植ミス再発防止:
 // - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
-// - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/BbvPerBrickResolution で換算する。
+// - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/k_irdv_bbv_brick_reso で換算する。
 // - CVarの意味は「ワールド距離」ではなく「fine cell数」を維持すること。
 
 class FInstantRdvBbvBeginUpdateCS final : public FGlobalShader
@@ -113,8 +113,6 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
@@ -135,7 +133,6 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, BrickCount)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
@@ -157,7 +154,6 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrustumBrickCounter)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
         SHADER_PARAMETER(uint32, ThreadGroupSizeX)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RWFrustumBrickIndirectArg)
     END_SHADER_PARAMETER_STRUCT()
@@ -179,8 +175,6 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
@@ -208,8 +202,6 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, OptionalDataU32Count)
         SHADER_PARAMETER(FIntVector4, GridMoveDeltaCells)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBitmaskBrickVoxel)
@@ -225,7 +217,6 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, BrickCount)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBrickData)
     END_SHADER_PARAMETER_STRUCT()
@@ -239,9 +230,6 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, BrickCount)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, OptionalDataU32Count)
-        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(uint32, UpdateSkipCount)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
@@ -266,8 +254,6 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
@@ -290,7 +276,6 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, BrickCount)
-        SHADER_PARAMETER(uint32, OptionalDataU32Count)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBbvRadianceAccumBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBitmaskBrickVoxelOptionData)
     END_SHADER_PARAMETER_STRUCT()
@@ -337,7 +322,6 @@ public:
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
         SHADER_PARAMETER(uint32, BbvGridResolutionY)
         SHADER_PARAMETER(uint32, BbvGridResolutionZ)
-        SHADER_PARAMETER(uint32, BbvOptionalDataU32Count)
         SHADER_PARAMETER(FVector3f, FspGridMinPositionWs)
         SHADER_PARAMETER(float, FspCellSizeCm)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
@@ -407,8 +391,6 @@ public:
         SHADER_PARAMETER(uint32, GridResolutionX)
         SHADER_PARAMETER(uint32, GridResolutionY)
         SHADER_PARAMETER(uint32, GridResolutionZ)
-        SHADER_PARAMETER(uint32, BitmaskWordsPerBrick)
-        SHADER_PARAMETER(uint32, BbvPerBrickResolution)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER(float, CellSizeCm)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
@@ -486,20 +468,14 @@ uint32 FInstantRdvBbvConfig::GetBbvBrickCount() const
     return static_cast<uint32>(BbvGridResolution.X) * static_cast<uint32>(BbvGridResolution.Y) * static_cast<uint32>(BbvGridResolution.Z);
 }
 
-uint32 FInstantRdvBbvConfig::GetBitmaskU32CountPerBrick() const
-{
-    const uint32 PerBrickBitCount = BbvPerBrickResolution * BbvPerBrickResolution * BbvPerBrickResolution;
-    return PerBrickBitCount / 32u;
-}
-
 uint32 FInstantRdvBbvConfig::GetBitmaskElementCount() const
 {
-    return GetBbvBrickCount() * GetBitmaskU32CountPerBrick();
+    return GetBbvBrickCount() * k_irdv_bbv_bitmask_u32_count_per_brick;
 }
 
 uint32 FInstantRdvBbvConfig::GetBrickDataElementCount() const
 {
-    return GetBbvBrickCount() * BrickDataU32Count;
+    return GetBbvBrickCount() * k_irdv_bbv_brick_data_u32_count;
 }
 
 uint32 FInstantRdvBbvConfig::GetHiBrickBrickCount() const
@@ -512,12 +488,12 @@ uint32 FInstantRdvBbvConfig::GetHiBrickBrickCount() const
 
 uint32 FInstantRdvBbvConfig::GetHiBrickDataElementCount() const
 {
-    return GetHiBrickBrickCount() * HiBrickDataU32Count;
+    return GetHiBrickBrickCount() * k_irdv_bbv_hi_brick_data_u32_count;
 }
 
 uint32 FInstantRdvBbvConfig::GetOptionalDataElementCount() const
 {
-    return GetBbvBrickCount() * OptionalDataU32Count;
+    return GetBbvBrickCount() * k_irdv_bbv_brick_optional_data_u32_count;
 }
 uint32 FInstantRdvBbvConfig::GetRadianceAccumDataElementCount() const
 {
@@ -573,7 +549,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             const uint32 OptionalDataElementCount = Config.bbv.GetOptionalDataElementCount();
             const uint32 RadianceAccumElementCount = Config.bbv.GetRadianceAccumDataElementCount();
             const uint32 BrickCount = Config.bbv.GetBbvBrickCount();
-            const uint32 BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
 
 
             // RDGPool上に確保. この時点ではまだフレーム(RDG)寿命のリソース.
@@ -691,7 +666,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
     const uint32 HiBrickDataElementCount = Config.bbv.GetHiBrickDataElementCount();
     const uint32 OptionalDataElementCount = Config.bbv.GetOptionalDataElementCount();
     const uint32 RadianceAccumElementCount = Config.bbv.GetRadianceAccumDataElementCount();
-    const uint32 BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
 
 
     FRDGBufferRef FrustumBrickCounterBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("InstantRdv.BbvFrustumBrickCounter"));
@@ -751,14 +725,12 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
             Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-            Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
             Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             // 参照実装と同じく「fine cell 数」からワールド距離を算出する。
             const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.bbv.BbvPerBrickResolution), 1.0f);
+            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f);
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
@@ -780,8 +752,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
             Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-            Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->OptionalDataU32Count = Config.bbv.OptionalDataU32Count;
             Parameters->GridMoveDeltaCells = FIntVector4(SystemState.bbv.TrGrid.FrameCellDelta, 0);
             Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
             Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
@@ -798,7 +768,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             FInstantRdvBbvDepthFrustumCullCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthFrustumCullCS::FParameters>();
             {
                 Parameters->BrickCount = BrickCount;
-                Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
                 Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
                 Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
                 Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
@@ -823,7 +792,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             FInstantRdvBbvDepthCarvingIndirectArgBuildCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthCarvingIndirectArgBuildCS::FParameters>();
             {
                 Parameters->FrustumBrickCounter = GraphBuilder.CreateSRV(FrustumBrickCounterBuffer);
-                Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
                 Parameters->ThreadGroupSizeX = 64u;
                 Parameters->RWFrustumBrickIndirectArg = GraphBuilder.CreateUAV(FRDGBufferUAVDesc(FrustumBrickIndirectArgBuffer, PF_R32_UINT));
             }
@@ -844,8 +812,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
                 Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
                 Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-                Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-                Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
                 Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
                 Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
                 Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
@@ -875,7 +841,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         FInstantRdvBbvBrickCountAggregateCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvBrickCountAggregateCS::FParameters>();
         {
             Parameters->BrickCount = BrickCount;
-            Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
             Parameters->RWBrickData = GraphBuilder.CreateUAV(SystemState.bbv.BrickDataBuffer.Handle);
         }
@@ -888,9 +853,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         FInstantRdvBbvElementUpdateCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvElementUpdateCS::FParameters>();
         {
             Parameters->BrickCount = BrickCount;
-            Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->OptionalDataU32Count = Config.bbv.OptionalDataU32Count;
-            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
             Parameters->FrameCount = SystemState.FrameCount;
             Parameters->UpdateSkipCount = kBbvElementUpdateSkipCount;
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
@@ -923,7 +885,6 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
     FRDGBufferRef RadianceAccumBuffer = SystemState.bbv.RadianceAccumBuffer.Handle;
 
     const uint32 BrickCount = SystemState.bbv.TrGrid.GetCellCount();
-    const uint32 BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
 
     if (bEnableRadianceInjection)
@@ -939,13 +900,11 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
             Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-            Parameters->BitmaskWordsPerBrick = BitmaskWordsPerBrick;
-            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
             Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(Config.bbv.BbvPerBrickResolution), 1.0f);
+            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f);
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
@@ -966,7 +925,6 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
         FInstantRdvBbvRadianceResolveCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvRadianceResolveCS::FParameters>();
         {
             Parameters->BrickCount = BrickCount;
-            Parameters->OptionalDataU32Count = Config.bbv.OptionalDataU32Count;
             Parameters->RWBbvRadianceAccumBuffer = GraphBuilder.CreateUAV(RadianceAccumBuffer);
             Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(OptionalDataBuffer);
         }
@@ -1048,7 +1006,6 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
         Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
         Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-        Parameters->BbvOptionalDataU32Count = Config.bbv.OptionalDataU32Count;
         Parameters->FspGridMinPositionWs = FVector3f(FspGridMinPositionWs);
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
@@ -1136,8 +1093,6 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
             Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-            Parameters->BitmaskWordsPerBrick = Config.bbv.GetBitmaskU32CountPerBrick();
-            Parameters->BbvPerBrickResolution = Config.bbv.BbvPerBrickResolution;
             Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
@@ -1173,7 +1128,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             FInstantRdvFspProbeBillboardVS::FParameters* VSParams = &Params->VS;
             {
                 VSParams->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
-                VSParams->ViewAcpectRatio = View.ViewMatrices.GetProjectionMatrix().GetColumn(1)[1] / View.ViewMatrices.GetProjectionMatrix().GetColumn(0)[0];
+                VSParams->ViewAcpectRatio = View.ViewMatrices.GetViewToClip().GetColumn(1)[1] / View.ViewMatrices.GetViewToClip().GetColumn(0)[0];
                 VSParams->FspGridMinPositionWs = FVector3f(SystemState.fsp.TrGrid.MinPositionWs);
                 VSParams->CellSizeCm = Config.fsp.ProbeCellSizeCm;
                 VSParams->GridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);

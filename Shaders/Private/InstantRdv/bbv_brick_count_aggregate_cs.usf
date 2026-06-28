@@ -1,10 +1,11 @@
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 StructuredBuffer<uint> BitmaskBrickVoxel;
 RWStructuredBuffer<uint> RWBrickData;
 
 uint BrickCount;
-uint BitmaskWordsPerBrick;
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
@@ -15,10 +16,10 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    const uint WordStart = BrickIndex * BitmaskWordsPerBrick;
+	const uint WordStart = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick;
     uint OccupiedFineVoxelCount = 0u;
     [loop]
-    for (uint WordOffset = 0; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+	for (uint WordOffset = 0; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
     {
         const uint Word = BitmaskBrickVoxel[WordStart + WordOffset];
         OccupiedFineVoxelCount += countbits(Word);

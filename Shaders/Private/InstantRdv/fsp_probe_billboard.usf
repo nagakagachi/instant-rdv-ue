@@ -3,6 +3,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 
 
 

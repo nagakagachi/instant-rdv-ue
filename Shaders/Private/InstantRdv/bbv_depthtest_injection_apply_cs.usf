@@ -8,6 +8,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 Texture2D<float> SceneDepthTexture;
 SamplerState SceneDepthSampler;
 RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
@@ -21,8 +23,6 @@ uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-uint BitmaskWordsPerBrick;
-uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float3 BbvGridMinPositionWs;
 float CellSizeCm;
@@ -30,7 +30,7 @@ float DepthtestInjectionWorldOffsetWs;
 float3 CameraPositionWs;
 float4x4 InvViewProjectionMatrix;
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
+
 
 float3 ReconstructWorldPos(uint2 ViewPixelCoord, float DeviceDepth)
 {
@@ -106,16 +106,16 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 LogicalBrickCoord.y < int(GridResolutionY) &&
                 LogicalBrickCoord.z < int(GridResolutionZ))
             {
-                const uint3 BrickCoord = WrapBrickCoord(LogicalBrickCoord);
-                const uint BrickIndex = FlattenBrickCoord(BrickCoord);
+                const uint3 BrickCoord = LogicalToPhysicalGridCoord(LogicalBrickCoord, int3(BbvToroidalOffsetCells), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+                const uint BrickIndex = FlattenGridCoord(BrickCoord, uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
                 const float3 BrickLocal = frac(GridPos);
                 const uint3 FineCoord = min(
-                    uint3(BrickLocal * BbvPerBrickResolution),
-                    uint3(BbvPerBrickResolution - 1, BbvPerBrickResolution - 1, BbvPerBrickResolution - 1));
+                    uint3(BrickLocal * k_irdv_bbv_brick_reso),
+                    uint3(k_irdv_bbv_brick_reso - 1, k_irdv_bbv_brick_reso - 1, k_irdv_bbv_brick_reso - 1));
 
                 const uint BitIndex = CalcFineBitIndex(FineCoord);
                 const uint WordOffset = (BitIndex / 32u);
-                TargetWordAddress = BrickIndex * BitmaskWordsPerBrick + WordOffset;
+				TargetWordAddress = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + WordOffset;
                 TargetBitMask = 1u << (BitIndex & 31u);
                 bHasInjection = true;
             }

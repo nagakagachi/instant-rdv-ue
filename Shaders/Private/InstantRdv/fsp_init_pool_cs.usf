@@ -1,6 +1,8 @@
 // FSP probe pool / free stack 初期化シェーダ
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 RWStructuredBuffer<uint> RWFspProbeFreeStack; // [0] = count, [1..N] = free indices
 uint ProbePoolElementCount;
 

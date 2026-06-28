@@ -1,0 +1,51 @@
+/*
+    instant_rdv_util.ush
+*/
+#if !defined(INSTANT_RDV_UTIL_USH)
+#define INSTANT_RDV_UTIL_USH
+
+#include "instant_rdv_common.ush"
+
+uint FlattenGridCoord(uint3 BrickCoord, uint3 Resolution)
+{
+    return BrickCoord.x + BrickCoord.y * Resolution.x + BrickCoord.z * Resolution.x * Resolution.y;
+}
+// ToroidalMapping.
+uint3 LogicalToPhysicalGridCoord(int3 LogicalCoord, int3 ToroidalOffset, uint3 Resolution)
+{
+    int3 Wrapped = LogicalCoord + ToroidalOffset;
+    Wrapped.x = ((Wrapped.x % int(Resolution.x)) + int(Resolution.x)) % int(Resolution.x);
+    Wrapped.y = ((Wrapped.y % int(Resolution.y)) + int(Resolution.y)) % int(Resolution.y);
+    Wrapped.z = ((Wrapped.z % int(Resolution.z)) + int(Resolution.z)) % int(Resolution.z);
+    return uint3(Wrapped);
+}
+// ToroidalMapping.
+int3 PhysicalToLogicalGridCoord(int3 PhysicalCoord, int3 ToroidalOffset, uint3 Resolution)
+{
+    int3 Logical = PhysicalCoord - ToroidalOffset;
+    Logical.x = ((Logical.x % int(Resolution.x)) + int(Resolution.x)) % int(Resolution.x);
+    Logical.y = ((Logical.y % int(Resolution.y)) + int(Resolution.y)) % int(Resolution.y);
+    Logical.z = ((Logical.z % int(Resolution.z)) + int(Resolution.z)) % int(Resolution.z);
+    return Logical;
+}
+
+
+uint CalcSubbrickMortonBitIndex(uint3 P)
+{
+    return ((P.x >> 0u) & 1u) << 0u
+         | ((P.y >> 0u) & 1u) << 1u
+         | ((P.z >> 0u) & 1u) << 2u
+         | ((P.x >> 1u) & 1u) << 3u
+         | ((P.y >> 1u) & 1u) << 4u
+         | ((P.z >> 1u) & 1u) << 5u;
+}
+
+uint CalcFineBitIndex(uint3 FineCoord)
+{
+    const uint3 SubbrickCoord = FineCoord / 4u;
+    const uint3 SubbrickLocal = FineCoord % 4u;
+    const uint SubbrickIndex = SubbrickCoord.x + SubbrickCoord.y * 2u + SubbrickCoord.z * 4u;
+    return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
+}
+
+#endif // INSTANT_RDV_UTIL_USH

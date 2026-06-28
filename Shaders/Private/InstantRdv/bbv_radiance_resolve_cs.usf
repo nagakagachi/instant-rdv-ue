@@ -3,11 +3,12 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 RWStructuredBuffer<uint> RWBbvRadianceAccumBuffer;
 RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
 
 uint BrickCount;
-uint OptionalDataU32Count;
 
 static const uint kRadianceAccumComponentCount = 4u;
 static const float kRadianceFixedPointScale = 256.0;
@@ -21,7 +22,7 @@ uint RadianceAccumAddress(uint BrickIndex, uint Component)
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint BrickIndex = DispatchThreadId.x;
-    if (BrickIndex >= BrickCount || OptionalDataU32Count < 4u)
+	if (BrickIndex >= BrickCount || k_irdv_bbv_brick_optional_data_u32_count < 4u)
     {
         return;
     }
@@ -35,7 +36,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 1u)],
             RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 2u)]) * InvDenominator;
 
-        const uint OptionalStart = BrickIndex * OptionalDataU32Count;
+		const uint OptionalStart = BrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
         const float3 PrevRadiance = float3(
             asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 1u]),
             asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 2u]),

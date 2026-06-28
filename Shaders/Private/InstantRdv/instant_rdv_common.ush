@@ -1,0 +1,24 @@
+/*
+    instant_rdv_common.ush
+*/
+
+#if !defined(INSTANT_RDV_COMMON_USH)
+#define INSTANT_RDV_COMMON_USH
+
+// BbvのBrickの解像度. 8固定の8bit bitmask Voxel Brickとして扱う.
+#define k_irdv_bbv_brick_reso 8u
+
+// BbvのBrickの1辺のセル数. 4固定.
+#define k_irdv_bbv_brick_data_u32_count 4u
+
+// Bbv HiBrickあたりのu32データの個数. 1固定.
+#define k_irdv_bbv_hi_brick_data_u32_count 1u
+
+// Bbv Brickあたりの追加属性データのU32数. 4固定.
+#define k_irdv_bbv_brick_optional_data_u32_count 4u
+
+// Bbv BrickのBitmask表現で必要なu32数.
+#define k_irdv_bbv_bitmask_u32_count_per_brick ((k_irdv_bbv_brick_reso * k_irdv_bbv_brick_reso * k_irdv_bbv_brick_reso) / 32u)
+
+
+#endif // INSTANT_RDV_COMMON_USH

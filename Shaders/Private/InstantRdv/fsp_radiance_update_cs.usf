@@ -3,6 +3,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 StructuredBuffer<uint> BbvOptionalData;
 StructuredBuffer<uint> FspVisibleSurfaceList;
 RWStructuredBuffer<uint> RWFspCellData;
@@ -15,7 +17,6 @@ uint FspVisibleSurfaceListCapacity;
 uint BbvGridResolutionX;
 uint BbvGridResolutionY;
 uint BbvGridResolutionZ;
-uint BbvOptionalDataU32Count;
 float3 FspGridMinPositionWs;
 float FspCellSizeCm;
 float3 BbvGridMinPositionWs;
@@ -54,13 +55,13 @@ bool TryReadBbvRadiance(float3 WorldPos, out float3 OutRadiance)
         LogicalCoord.x >= int(BbvGridResolutionX) ||
         LogicalCoord.y >= int(BbvGridResolutionY) ||
         LogicalCoord.z >= int(BbvGridResolutionZ) ||
-        BbvOptionalDataU32Count < 4u)
+        k_irdv_bbv_brick_optional_data_u32_count < 4u)
     {
         return false;
     }
 
     const uint BrickIndex = FlattenBbvCoord(WrapBbvCoord(LogicalCoord));
-    const uint OptionalStart = BrickIndex * BbvOptionalDataU32Count;
+	const uint OptionalStart = BrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
     OutRadiance = max(float3(
         asfloat(BbvOptionalData[OptionalStart + 1u]),
         asfloat(BbvOptionalData[OptionalStart + 2u]),

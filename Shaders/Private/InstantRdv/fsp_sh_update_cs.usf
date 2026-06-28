@@ -4,6 +4,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 StructuredBuffer<uint4> FspProbeRadiance; // per-probe encoded as uint4(asuint(float4(r,g,b,a)))
 RWStructuredBuffer<float4> RWFspPackedSH; // per-probe packed SH: [probeIndex * k + 0 .. k-1]
 

@@ -9,7 +9,8 @@
 // - ハッシュ色など可視化用途でも、判定座標は浮動小数位置ではなく論理セル座標を基準にする。
 //   これを守らないとカメラ微動で色が点滅し、診断結果が不安定になる。
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
+
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
 
 float3 SafeInv(float3 Value)
 {
@@ -60,7 +61,7 @@ bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint O
 {
     // Brick 内ローカル座標を bit index に変換し、該当ビットの占有状態を返す。
     OutBitIndex = 0u;
-    const int FineRes = int(BbvPerBrickResolution);
+    const int FineRes = int(k_irdv_bbv_brick_reso);
     if (any(LocalFineCoord < 0) || any(LocalFineCoord >= FineRes))
     {
         return false;
@@ -68,7 +69,7 @@ bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint O
 
     const uint3 FineCoord = uint3(LocalFineCoord);
     OutBitIndex = CalcFineBitIndex(FineCoord);
-    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (OutBitIndex / 32u);
+	const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (OutBitIndex / 32u);
     const uint WordMask = 1u << (OutBitIndex & 31u);
     return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
 }
@@ -139,6 +140,11 @@ bool TraceBbvRayReference(
     float3 RayDirWs,
     float MaxDistanceCm,
     const bool IsBrickMode,
+
+    uint3 GridResolution,
+    float GridCellSize,
+    int3 ToroidalOffset,
+
     out float OutHitDistanceCm,
     out int3 OutLogicalBrickCoord,
     out int3 OutLogicalFineCoord,
@@ -152,9 +158,9 @@ bool TraceBbvRayReference(
     OutBrickIndex = 0u;
     OutBitIndex = 0u;
 
-    const float CellSize = max(CellSizeCm, 0.001);
+    const float CellSize = max(GridCellSize, 0.001);
     const float CellSizeInv = 1.0 / CellSize;
-    const int3 GridResI = int3(GridResolutionX, GridResolutionY, GridResolutionZ);
+    const int3 GridResI = GridResolution;
 
 	const float3 RayOrigin = (RayOriginWs - BbvGridMinPositionWs) * CellSizeInv;
     const float3 RayDir = RayDirWs;
@@ -207,8 +213,8 @@ bool TraceBbvRayReference(
         const float BrickEndT = min(min(min(BrickNextT.x, BrickNextT.y), BrickNextT.z), TraceTEnd);
 
         // 論理座標をトロイダル物理座標へ写像して実データへアクセスする。
-        const uint3 PhysicalCoord = WrapBrickCoord(MapPos);
-        const uint BrickIndex = FlattenBrickCoord(PhysicalCoord);
+        const uint3 PhysicalCoord = LogicalToPhysicalGridCoord(MapPos, ToroidalOffset, GridResolution);
+        const uint BrickIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
         const bool bBrickOccupied = (BrickData[BrickIndex * 4u + 0u] != 0u);
         if (bBrickOccupied)
         {
@@ -224,10 +230,10 @@ bool TraceBbvRayReference(
             // Voxel モードでは同じ進入点を使い、参照実装準拠の Brick 内追跡を実行。
             const float DetailBeginT = BrickBeginT;
             const float3 BrickEntryPos = ClampedStartPos + RayDir * DetailBeginT;
-            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(BbvPerBrickResolution);
+            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(k_irdv_bbv_brick_reso);
 
             bool3 DetailStepMask = bool3(false, false, false);
-            const int FineRes = int(BbvPerBrickResolution);
+            const int FineRes = int(k_irdv_bbv_brick_reso);
             const int3 SubMapPos = TraceBitmaskBrickReference(
                 PosInBrick,
                 RayDir,

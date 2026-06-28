@@ -3,6 +3,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 Texture2D<float> SceneDepthTexture;
 Texture2D SceneColorTexture;
 StructuredBuffer<uint> BitmaskBrickVoxel;
@@ -17,8 +19,6 @@ uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-uint BitmaskWordsPerBrick;
-uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float3 BbvGridMinPositionWs;
 float CellSizeCm;
@@ -27,7 +27,6 @@ float SceneColorPreExposure;
 float3 CameraPositionWs;
 float4x4 InvViewProjectionMatrix;
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_coord_util.ush"
 
 static const uint kRadianceAccumComponentCount = 4u;
 static const float kRadianceFixedPointScale = 256.0;
@@ -64,17 +63,17 @@ bool TryCalcBrickIndexFromWorldPos(float3 WorldPos, out uint OutBrickIndex)
         return false;
     }
 
-    const uint3 PhysicalBrickCoord = WrapBrickCoord(LogicalBrickCoord);
-    OutBrickIndex = FlattenBrickCoord(PhysicalBrickCoord);
+    const uint3 PhysicalBrickCoord = LogicalToPhysicalGridCoord(LogicalBrickCoord, int3(BbvToroidalOffsetCells), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+    OutBrickIndex = FlattenGridCoord(PhysicalBrickCoord, uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
     return true;
 }
 
 bool IsBrickOccupied(uint BrickIndex)
 {
     [loop]
-    for (uint WordOffset = 0u; WordOffset < BitmaskWordsPerBrick; ++WordOffset)
+	for (uint WordOffset = 0u; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
     {
-        if (BitmaskBrickVoxel[BrickIndex * BitmaskWordsPerBrick + WordOffset] != 0u)
+		if (BitmaskBrickVoxel[BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + WordOffset] != 0u)
         {
             return true;
         }

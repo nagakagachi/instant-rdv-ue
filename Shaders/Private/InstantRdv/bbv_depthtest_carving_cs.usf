@@ -8,6 +8,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 Texture2D<float> SceneDepthTexture;
 SamplerState SceneDepthSampler;
 StructuredBuffer<uint> FrustumBrickCounter;
@@ -23,8 +25,6 @@ uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-uint BitmaskWordsPerBrick;
-uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float3 BbvGridMinPositionWs;
 float CellSizeCm;
@@ -35,15 +35,6 @@ float4x4 InvViewProjectionMatrix;
 bool IsValidDepth(float DeviceDepth)
 {
     return (0.0 < DeviceDepth) && (DeviceDepth < 1.0);
-}
-
-int3 UnwrapLogicalBrickCoord(uint3 PhysicalCoord)
-{
-    int3 Logical = int3(PhysicalCoord) - int3(BbvToroidalOffsetCells + 0.5);
-    Logical.x = ((Logical.x % int(GridResolutionX)) + int(GridResolutionX)) % int(GridResolutionX);
-    Logical.y = ((Logical.y % int(GridResolutionY)) + int(GridResolutionY)) % int(GridResolutionY);
-    Logical.z = ((Logical.z % int(GridResolutionZ)) + int(GridResolutionZ)) % int(GridResolutionZ);
-    return Logical;
 }
 
 uint3 DecodeSubbrickMortonBitIndex(uint MortonBitIndex)
@@ -57,24 +48,14 @@ uint3 DecodeSubbrickMortonBitIndex(uint MortonBitIndex)
 
 uint3 DecodeFineBitIndex(uint BitIndex)
 {
-    if (BbvPerBrickResolution == 8u)
-    {
-        const uint SubbrickIndex = BitIndex / 64u;
-        const uint MortonBitIndex = BitIndex % 64u;
-        const uint3 SubbrickCoord = uint3(
-            SubbrickIndex & 1u,
-            (SubbrickIndex >> 1u) & 1u,
-            (SubbrickIndex >> 2u) & 1u);
-        const uint3 SubbrickLocal = DecodeSubbrickMortonBitIndex(MortonBitIndex);
-        return SubbrickCoord * 4u + SubbrickLocal;
-    }
-
-    const uint XY = BbvPerBrickResolution * BbvPerBrickResolution;
-    const uint Z = BitIndex / XY;
-    const uint Rem = BitIndex - Z * XY;
-    const uint Y = Rem / BbvPerBrickResolution;
-    const uint X = Rem - Y * BbvPerBrickResolution;
-    return uint3(X, Y, Z);
+    const uint SubbrickIndex = BitIndex / 64u;
+    const uint MortonBitIndex = BitIndex % 64u;
+    const uint3 SubbrickCoord = uint3(
+        SubbrickIndex & 1u,
+        (SubbrickIndex >> 1u) & 1u,
+        (SubbrickIndex >> 2u) & 1u);
+    const uint3 SubbrickLocal = DecodeSubbrickMortonBitIndex(MortonBitIndex);
+    return SubbrickCoord * 4u + SubbrickLocal;
 }
 
 float3 ReconstructWorldPos(float2 Uv, float DeviceDepth)
@@ -90,7 +71,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     // 1. Active Brick List を (Brick, U32Offset) ジョブへ展開する。
     const uint ActiveBrickCount = FrustumBrickCounter[0];
-    const uint U32PerBrick = BitmaskWordsPerBrick;
+	const uint U32PerBrick = k_irdv_bbv_bitmask_u32_count_per_brick;
     const uint TotalU32Jobs = ActiveBrickCount * U32PerBrick;
     if (DispatchThreadId.x >= TotalU32Jobs)
     {
@@ -114,7 +95,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         const uint Rem = BrickIndex - PhysicalZ * SliceStride;
         const uint PhysicalY = Rem / GridResolutionX;
         const uint PhysicalX = Rem - PhysicalY * GridResolutionX;
-        LogicalCoord = UnwrapLogicalBrickCoord(uint3(PhysicalX, PhysicalY, PhysicalZ));
+        LogicalCoord = PhysicalToLogicalGridCoord(uint3(PhysicalX, PhysicalY, PhysicalZ), int3(BbvToroidalOffsetCells + 0.5), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
     }
     LogicalCoord.x = WaveReadLaneAt(LogicalCoord.x, SlotFirstLane);
     LogicalCoord.y = WaveReadLaneAt(LogicalCoord.y, SlotFirstLane);
@@ -122,8 +103,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     // 3. このlane担当u32ブロックを取り出し、立っているbitのみ走査する。
 	const float3 BrickOriginWs = BbvGridMinPositionWs + float3(LogicalCoord) * CellSizeCm;
-    const float3 BitCellStepWs = CellSizeCm / max(float(BbvPerBrickResolution), 1.0);
-    const uint WordAddress = BrickIndex * BitmaskWordsPerBrick + U32Offset;
+    const float3 BitCellStepWs = CellSizeCm / max(float(k_irdv_bbv_brick_reso), 1.0);
+	const uint WordAddress = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + U32Offset;
 
     uint BitBlock = RWBitmaskBrickVoxel[WordAddress];
     if (WaveActiveCountBits(BitBlock != 0u) == 0u)

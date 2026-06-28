@@ -2,6 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "RenderGraphFwd.h"
+
+#include "../../../Shaders/Private/InstantRdv/instant_rdv_common.ush"
+
 #include "InstantRdvFsp.h"
 
 class FRDGBuilder;
@@ -14,16 +17,7 @@ struct FInstantRdvBbvConfig
     FIntVector BbvGridResolution = FIntVector(64, 64, 64);
     float BbvBrickSizeCm = 300.0f;// NxNxNのVoxelクラスタをBrickと称し, そのサイズを指定するパラメータ.
 
-    uint32 BbvPerBrickResolution = 8;
-    // BrickData は 1 Brick あたり 4 uint を前提に各シェーダがアクセスする。
-    // ここを 1 などに変更すると、occupied count や各種属性の参照先が壊れる。
-    uint32 BrickDataU32Count = 4;
-    uint32 HiBrickDataU32Count = 1;
-    uint32 OptionalDataU32Count = 4;
-
-
     uint32 GetBbvBrickCount() const;
-    uint32 GetBitmaskU32CountPerBrick() const;
     uint32 GetBitmaskElementCount() const;
     uint32 GetBrickDataElementCount() const;
     uint32 GetHiBrickBrickCount() const;

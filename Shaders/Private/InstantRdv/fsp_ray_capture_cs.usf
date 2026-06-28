@@ -4,6 +4,8 @@
 
 #include "/Engine/Public/Platform.ush"
 
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
 StructuredBuffer<uint> FspVisibleSurfaceList; // [0]=count, [1..N]=cellIndex
 RWStructuredBuffer<uint4> RWFspProbeRadiance; // per-cell RGBA float encoded as uint4
 

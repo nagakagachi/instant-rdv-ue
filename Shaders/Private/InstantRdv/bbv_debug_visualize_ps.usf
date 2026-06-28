@@ -1,5 +1,7 @@
 #include "/Engine/Private/Common.ush"
 
+
+
 Texture2D<float> SceneDepthTexture;
 Texture2D SceneColorTexture;
 SamplerState PointClampSampler;
@@ -20,15 +22,12 @@ uint ViewRectSizeY;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-uint BitmaskWordsPerBrick;
-uint BbvPerBrickResolution;
 float3 BbvToroidalOffsetCells;
 float CellSizeCm;
 float3 BbvGridMinPositionWs;
 float MaxTraceDistanceCm;
 int DebugMode;
 
-// 本番用途（GI 等）でも共有する BBV レイトレコアを利用する。
 #include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
 
 float3 HashColor(uint Value)
@@ -68,16 +67,16 @@ uint HashInt3(int3 V)
 
 bool IsFineVoxelOccupied(int3 LogicalFineCoord)
 {
-    const int FineRes = int(BbvPerBrickResolution);
+    const int FineRes = int(k_irdv_bbv_brick_reso);
     const int3 LogicalBrickCoord = LogicalFineCoord / FineRes;
     const int3 LocalFineCoord = LogicalFineCoord - LogicalBrickCoord * FineRes;
 
-    const uint3 PhysicalBrickCoord = WrapBrickCoord(LogicalBrickCoord);
-    const uint BrickIndex = FlattenBrickCoord(PhysicalBrickCoord);
+    const uint3 PhysicalBrickCoord = LogicalToPhysicalGridCoord(LogicalBrickCoord, int3(BbvToroidalOffsetCells), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+    const uint BrickIndex = FlattenGridCoord(PhysicalBrickCoord, uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
 
     const uint3 FineCoord = uint3(LocalFineCoord);
     const uint BitIndex = CalcFineBitIndex(FineCoord);
-    const uint WordIndex = BrickIndex * BitmaskWordsPerBrick + (BitIndex / 32u);
+	const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (BitIndex / 32u);
     const uint WordMask = 1u << (BitIndex & 31u);
     return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
 }
@@ -106,6 +105,9 @@ bool TraceBbvVoxelRayReference(
     float3 RayOriginWs,
     float3 RayDirWs,
     float MaxDistanceCm,
+    uint3 GridResolution,
+    float GridCellSize,
+    int3 ToroidalOffset,
     out float OutHitDistanceCm,
     out int3 OutLogicalBrickCoord,
     out int3 OutLogicalFineCoord,
@@ -117,6 +119,9 @@ bool TraceBbvVoxelRayReference(
         RayDirWs,
         MaxDistanceCm,
         false,
+        GridResolution,
+        GridCellSize,
+        ToroidalOffset,
         OutHitDistanceCm,
         OutLogicalBrickCoord,
         OutLogicalFineCoord,
@@ -129,6 +134,9 @@ bool TraceBbvBrickRayReference(
     float3 RayOriginWs,
     float3 RayDirWs,
     float MaxDistanceCm,
+    uint3 GridResolution,
+    float GridCellSize,
+    int3 ToroidalOffset,
     out float OutHitDistanceCm,
     out int3 OutLogicalBrickCoord,
     out uint OutBrickIndex)
@@ -140,6 +148,9 @@ bool TraceBbvBrickRayReference(
         RayDirWs,
         MaxDistanceCm,
         true,
+        GridResolution,
+        GridCellSize,
+        ToroidalOffset,
         OutHitDistanceCm,
         OutLogicalBrickCoord,
         DummyFineCoord,
@@ -178,9 +189,9 @@ PsOut MainPS(VsOutput Input)
 
     if (DebugMode == 1)
     {
-        const uint FineDimX = GridResolutionX * BbvPerBrickResolution;
-        const uint FineDimY = GridResolutionY * BbvPerBrickResolution;
-        const uint FineDimZ = GridResolutionZ * BbvPerBrickResolution;
+        const uint FineDimX = GridResolutionX * k_irdv_bbv_brick_reso;
+        const uint FineDimY = GridResolutionY * k_irdv_bbv_brick_reso;
+        const uint FineDimZ = GridResolutionZ * k_irdv_bbv_brick_reso;
 
         const uint FineX = min((uint)(ViewUv.x * FineDimX), FineDimX - 1u);
         const uint FineY = min((uint)((1.0 - ViewUv.y) * FineDimY), FineDimY - 1u);
@@ -222,6 +233,9 @@ PsOut MainPS(VsOutput Input)
             CameraPositionWs,
             RayDirWs,
             maxTraceDistanceCm,
+            uint3(GridResolutionX, GridResolutionY, GridResolutionZ),
+            CellSizeCm,
+            int3(BbvToroidalOffsetCells),
             HitDistanceCm,
             HitLogicalBrickCoord,
             HitBrickIndex);
@@ -232,6 +246,9 @@ PsOut MainPS(VsOutput Input)
             CameraPositionWs,
             RayDirWs,
             maxTraceDistanceCm,
+            uint3(GridResolutionX, GridResolutionY, GridResolutionZ),
+            CellSizeCm,
+            int3(BbvToroidalOffsetCells),
             HitDistanceCm,
             HitLogicalBrickCoord,
             HitLogicalFineCoord,
@@ -265,7 +282,7 @@ PsOut MainPS(VsOutput Input)
     }
     else
     {
-        const float FineCellSizeCm = CellSizeCm / max(float(BbvPerBrickResolution), 1.0);
+        const float FineCellSizeCm = CellSizeCm / max(float(k_irdv_bbv_brick_reso), 1.0);
 		const int3 GridOriginFineCoord = int3(floor(BbvGridMinPositionWs / max(FineCellSizeCm, 0.001)));
         const int3 WorldFineCoord = GridOriginFineCoord + HitLogicalFineCoord;
         HitColor = HashColor(HashInt3(WorldFineCoord));
