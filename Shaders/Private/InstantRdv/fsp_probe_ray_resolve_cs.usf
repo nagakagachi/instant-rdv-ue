@@ -1,0 +1,68 @@
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+
+// FSP probe ray resolve pass。
+// Trace結果をprobe atlas(OctMap)へtemporal blendし、hit時はBBV optional radiance、miss時はsky visibility=1を格納する。
+
+StructuredBuffer<uint> FspProbeRayResultBuffer;
+StructuredBuffer<uint> BbvOptionalData;
+RWStructuredBuffer<uint> RWFspProbePool;
+RWStructuredBuffer<uint4> RWFspProbeAtlas;
+
+uint FspProbePoolElementCount;
+uint FrameCount;
+
+static const float kFspOctaUpdateTemporalRate = 0.95;
+
+[numthreads(128, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint ResultIndex = DispatchThreadId.x;
+    const uint ResultCount = min(FspProbeRayResultBuffer[0], FspProbePoolElementCount * kFspRayCountPerProbe);
+    if (ResultIndex >= ResultCount)
+    {
+        return;
+    }
+
+    const uint ResultWordOffset = 1u + ResultIndex * kFspRayResultStride;
+    const uint PackedKey = FspProbeRayResultBuffer[ResultWordOffset + 0u];
+    const uint HitInfo = FspProbeRayResultBuffer[ResultWordOffset + 1u];
+    const uint ProbeIndex = FspUnpackRayRequestProbeIndex(PackedKey);
+    const uint OctCellIndex = FspUnpackRayRequestOctCellIndex(PackedKey);
+    if (ProbeIndex >= FspProbePoolElementCount || OctCellIndex >= kFspRayCountPerProbe)
+    {
+        return;
+    }
+
+    FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(RWFspProbePool, ProbeIndex);
+    if (Data.OwnerCellIndex == k_irdv_fsp_invalid_probe_index)
+    {
+        return;
+    }
+
+    float3 HitRadiance = 0.0.xxx;
+    const float SkyVisibility = (HitInfo == 0u) ? 1.0 : 0.0;
+    if (HitInfo != 0u)
+    {
+        // HitInfoはtrace passでbrick index + 1として保存している。0はmiss/sky。
+        const uint BrickIndex = HitInfo - 1u;
+        const uint OptionalStart = BrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
+        HitRadiance = max(float3(
+            asfloat(BbvOptionalData[OptionalStart + 1u]),
+            asfloat(BbvOptionalData[OptionalStart + 2u]),
+            asfloat(BbvOptionalData[OptionalStart + 3u])), 0.0.xxx);
+    }
+
+    const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);
+    const uint AtlasAddress = FspProbeAtlasAddress(ProbeIndex, OctCellId);
+    const float4 Prev = asfloat(RWFspProbeAtlas[AtlasAddress]);
+    const float4 Curr = float4(HitRadiance, SkyVisibility);
+    // 参照実装のOctaMap履歴更新に合わせ、急なradiance変化を抑える。
+    RWFspProbeAtlas[AtlasAddress] = asuint(lerp(Curr, Prev, kFspOctaUpdateTemporalRate));
+
+    if (OctCellIndex == 0u)
+    {
+        Data.LastUpdateFrame = FrameCount;
+        FspStoreProbePoolData(RWFspProbePool, ProbeIndex, Data);
+    }
+}

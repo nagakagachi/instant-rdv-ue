@@ -1,0 +1,349 @@
+#ifndef INSTANT_RDV_FSP_COMMON_USH
+#define INSTANT_RDV_FSP_COMMON_USH
+
+#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+
+// InstantRDV参照実装のFSPは「論理グリッド座標」と「物理(toroidal)格納座標」を分ける。
+// Buffer上のcell indexは物理座標ベースで安定させ、カメラ移動時はtoroidal offsetだけを進めることで
+// Probeがカメラに完全追従せず、ワールドにアラインした配置を維持する。
+static const uint kFspProbePoolDataU32Count = 8u;
+static const uint kFspRayCountPerProbe = k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width;
+static const uint kFspRayResultStride = 2u;
+static const uint kFspRayRequestOctCellBits = 8u;
+static const uint kFspRayRequestOctCellMask = (1u << kFspRayRequestOctCellBits) - 1u;
+
+uint FspGridResolutionX;
+uint FspGridResolutionY;
+uint FspGridResolutionZ;
+uint FspCascadeCount;
+float FspCellSizeCm;
+float3 FspGridCenterPositionWs;
+float3 FspPrevGridCenterPositionWs;
+
+uint FspCellCountPerCascade()
+{
+    return FspGridResolutionX * FspGridResolutionY * FspGridResolutionZ;
+}
+
+uint FspTotalCellCount()
+{
+    return FspCellCountPerCascade() * max(FspCascadeCount, 1u);
+}
+
+uint FspEncodeGlobalCellIndex(uint CascadeIndex, uint LocalCellIndex)
+{
+    return CascadeIndex * FspCellCountPerCascade() + LocalCellIndex;
+}
+
+bool FspDecodeGlobalCellIndex(uint GlobalCellIndex, out uint OutCascadeIndex, out uint OutLocalCellIndex)
+{
+    const uint CellCountPerCascade = FspCellCountPerCascade();
+    OutCascadeIndex = 0u;
+    OutLocalCellIndex = 0u;
+    if (CellCountPerCascade == 0u || GlobalCellIndex >= FspTotalCellCount())
+    {
+        return false;
+    }
+
+    OutCascadeIndex = GlobalCellIndex / CellCountPerCascade;
+    OutLocalCellIndex = GlobalCellIndex - OutCascadeIndex * CellCountPerCascade;
+    return OutCascadeIndex < FspCascadeCount;
+}
+
+uint3 FspLocalCellIndexToCoord(uint LocalCellIndex)
+{
+    const uint Slice = FspGridResolutionX * FspGridResolutionY;
+    const uint Z = LocalCellIndex / Slice;
+    const uint Rem = LocalCellIndex - Z * Slice;
+    const uint Y = Rem / FspGridResolutionX;
+    const uint X = Rem - Y * FspGridResolutionX;
+    return uint3(X, Y, Z);
+}
+
+uint FspPhysicalCellCoordToLocalIndex(uint3 PhysicalCoord)
+{
+    return PhysicalCoord.x + PhysicalCoord.y * FspGridResolutionX + PhysicalCoord.z * FspGridResolutionX * FspGridResolutionY;
+}
+
+float FspCascadeCellSizeCm(uint CascadeIndex)
+{
+    return FspCellSizeCm * exp2(float(CascadeIndex));
+}
+
+int3 FspCascadeCenterCellIdFromPosition(uint CascadeIndex, float3 CenterPositionWs)
+{
+    const float CellSize = FspCascadeCellSizeCm(CascadeIndex);
+    // 参照InstantRDVのToroidalGridUpdater::UpdateGridと同じく、cascade中心をcell単位へ量子化する。
+    return int3(floor(CenterPositionWs / max(CellSize, 0.001)));
+}
+
+int3 FspCascadeCenterCellId(uint CascadeIndex)
+{
+    return FspCascadeCenterCellIdFromPosition(CascadeIndex, FspGridCenterPositionWs);
+}
+
+int3 FspCascadePrevCenterCellId(uint CascadeIndex)
+{
+    return FspCascadeCenterCellIdFromPosition(CascadeIndex, FspPrevGridCenterPositionWs);
+}
+
+int3 FspCascadeToroidalOffset(uint CascadeIndex)
+{
+    const int3 Resolution = int3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ);
+    const int3 CenterCellId = FspCascadeCenterCellId(CascadeIndex);
+    return ((CenterCellId % Resolution) + Resolution) % Resolution;
+}
+
+int3 FspCascadePrevToroidalOffset(uint CascadeIndex)
+{
+    const int3 Resolution = int3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ);
+    const int3 CenterCellId = FspCascadePrevCenterCellId(CascadeIndex);
+    return ((CenterCellId % Resolution) + Resolution) % Resolution;
+}
+
+int3 FspCascadeMoveCellDelta(uint CascadeIndex)
+{
+    return FspCascadeCenterCellId(CascadeIndex) - FspCascadePrevCenterCellId(CascadeIndex);
+}
+
+float3 FspCascadeGridMinPositionWs(uint CascadeIndex)
+{
+    const float CellSize = FspCascadeCellSizeCm(CascadeIndex);
+    const float3 Extent = float3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ) * CellSize;
+    return float3(FspCascadeCenterCellId(CascadeIndex)) * CellSize - Extent * 0.5.xxx;
+}
+
+int3 FspPhysicalToLinearCoord(uint3 PhysicalCoord, uint CascadeIndex)
+{
+    const int3 Resolution = int3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ);
+    return PhysicalToLogicalGridCoord(int3(PhysicalCoord), FspCascadeToroidalOffset(CascadeIndex), uint3(Resolution));
+}
+
+uint3 FspLinearToPhysicalCoord(int3 LinearCoord, uint CascadeIndex)
+{
+    return LogicalToPhysicalGridCoord(LinearCoord, FspCascadeToroidalOffset(CascadeIndex), uint3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ));
+}
+
+float3 FspCalcCellCenterWs(uint CascadeIndex, uint LocalCellIndex)
+{
+    const float CellSize = FspCascadeCellSizeCm(CascadeIndex);
+    // LocalCellIndexは物理格納座標なので、現在のtoroidal offsetで論理座標へ戻してからworld位置にする。
+    const int3 LinearCoord = FspPhysicalToLinearCoord(FspLocalCellIndexToCoord(LocalCellIndex), CascadeIndex);
+    return FspCascadeGridMinPositionWs(CascadeIndex) + (float3(LinearCoord) + 0.5.xxx) * CellSize;
+}
+
+bool FspTryGetGlobalCellIndexFromWorldPos(float3 WorldPos, uint CascadeIndex, out uint OutGlobalCellIndex)
+{
+    OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
+    const float CellSize = FspCascadeCellSizeCm(CascadeIndex);
+    const int3 LinearCoord = int3(floor((WorldPos - FspCascadeGridMinPositionWs(CascadeIndex)) / max(CellSize, 0.001)));
+    if (any(LinearCoord < 0) ||
+        LinearCoord.x >= int(FspGridResolutionX) ||
+        LinearCoord.y >= int(FspGridResolutionY) ||
+        LinearCoord.z >= int(FspGridResolutionZ))
+    {
+        return false;
+    }
+
+    // World位置から求めた論理座標を、Bufferアクセス用の物理(toroidal)座標へ変換してglobal cell index化する。
+    OutGlobalCellIndex = FspEncodeGlobalCellIndex(CascadeIndex, FspPhysicalCellCoordToLocalIndex(FspLinearToPhysicalCoord(LinearCoord, CascadeIndex)));
+    return true;
+}
+
+bool FspTryGetFinestCascadeCellFromWorldPos(float3 WorldPos, out uint OutCascadeIndex, out uint OutGlobalCellIndex)
+{
+    OutCascadeIndex = 0u;
+    OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
+
+    [loop]
+    for (uint CascadeIndex = 0u; CascadeIndex < FspCascadeCount; ++CascadeIndex)
+    {
+        uint CellIndex = k_irdv_fsp_invalid_probe_index;
+        if (FspTryGetGlobalCellIndexFromWorldPos(WorldPos, CascadeIndex, CellIndex))
+        {
+            OutCascadeIndex = CascadeIndex;
+            OutGlobalCellIndex = CellIndex;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+float FspCalcCascadeBoundaryDitherRate(float3 WorldPos, uint CascadeIndex)
+{
+    if ((CascadeIndex + 1u) >= FspCascadeCount)
+    {
+        return 0.0;
+    }
+
+    const float CellSize = FspCascadeCellSizeCm(CascadeIndex);
+    const float CoarseCellSize = FspCascadeCellSizeCm(CascadeIndex + 1u);
+    const float3 GridMin = FspCascadeGridMinPositionWs(CascadeIndex);
+    const float3 GridMax = GridMin + float3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ) * CellSize;
+    const float3 DistToMin = WorldPos - GridMin;
+    const float3 DistToMax = GridMax - WorldPos;
+    const float BoundaryDist = min(min(DistToMin.x, DistToMax.x), min(min(DistToMin.y, DistToMax.y), min(DistToMin.z, DistToMax.z)));
+    const float DitherWidth = max(CoarseCellSize, CellSize);
+    const float DitherRate = 1.0 - saturate(BoundaryDist / max(DitherWidth, 1.0e-5));
+    if (DitherRate <= 0.0)
+    {
+        return 0.0;
+    }
+
+    uint CoarseCellIndex = k_irdv_fsp_invalid_probe_index;
+    return FspTryGetGlobalCellIndexFromWorldPos(WorldPos, CascadeIndex + 1u, CoarseCellIndex) ? DitherRate : 0.0;
+}
+
+uint FspGetSurfaceOwnerCells(float3 WorldPos, out uint2 OutGlobalCellIndices)
+{
+    OutGlobalCellIndices = k_irdv_fsp_invalid_probe_index.xx;
+
+    uint OwnerCascadeIndex = 0u;
+    uint OwnerCellIndex = k_irdv_fsp_invalid_probe_index;
+    if (!FspTryGetFinestCascadeCellFromWorldPos(WorldPos, OwnerCascadeIndex, OwnerCellIndex))
+    {
+        return 0u;
+    }
+
+    OutGlobalCellIndices.x = OwnerCellIndex;
+    // Cascade境界付近だけ次cascadeにもowner cellを作る。参照実装のboundary dither相当で、
+    // 遠方cascadeへの接続を保ちつつ、通常はfinest cascadeだけをActiveProbe候補にする。
+    if (FspCalcCascadeBoundaryDitherRate(WorldPos, OwnerCascadeIndex) <= 0.0)
+    {
+        return 1u;
+    }
+
+    uint CoarseCellIndex = k_irdv_fsp_invalid_probe_index;
+    if (!FspTryGetGlobalCellIndexFromWorldPos(WorldPos, OwnerCascadeIndex + 1u, CoarseCellIndex))
+    {
+        return 1u;
+    }
+
+    OutGlobalCellIndices.y = CoarseCellIndex;
+    return 2u;
+}
+
+uint FspProbePoolDataAddress(uint ProbeIndex, uint WordIndex)
+{
+    return ProbeIndex * kFspProbePoolDataU32Count + WordIndex;
+}
+
+FInstantRdvFspProbePoolData FspLoadProbePoolData(StructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex)
+{
+    FInstantRdvFspProbePoolData Data;
+    Data.OwnerCellIndex = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 0u)];
+    Data.ProbeOffsetV3 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 1u)];
+    Data.LastSeenFrame = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 2u)];
+    Data.Reserved0 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 3u)];
+    Data.LastUpdateFrame = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 4u)];
+    Data.Reserved1 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 5u)];
+    Data.Reserved2 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 6u)];
+    Data.Reserved3 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 7u)];
+    return Data;
+}
+
+FInstantRdvFspProbePoolData FspLoadProbePoolData(RWStructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex)
+{
+    FInstantRdvFspProbePoolData Data;
+    Data.OwnerCellIndex = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 0u)];
+    Data.ProbeOffsetV3 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 1u)];
+    Data.LastSeenFrame = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 2u)];
+    Data.Reserved0 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 3u)];
+    Data.LastUpdateFrame = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 4u)];
+    Data.Reserved1 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 5u)];
+    Data.Reserved2 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 6u)];
+    Data.Reserved3 = ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 7u)];
+    return Data;
+}
+
+void FspStoreProbePoolData(RWStructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex, FInstantRdvFspProbePoolData Data)
+{
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 0u)] = Data.OwnerCellIndex;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 1u)] = Data.ProbeOffsetV3;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 2u)] = Data.LastSeenFrame;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 3u)] = Data.Reserved0;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 4u)] = Data.LastUpdateFrame;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 5u)] = Data.Reserved1;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 6u)] = Data.Reserved2;
+    ProbePoolBuffer[FspProbePoolDataAddress(ProbeIndex, 7u)] = Data.Reserved3;
+}
+
+float3 FspDecodeProbeOffset(uint Encoded)
+{
+    const uint X = Encoded & 1023u;
+    const uint Y = (Encoded >> 10u) & 1023u;
+    const uint Z = (Encoded >> 20u) & 1023u;
+    return float3(X, Y, Z) / 511.5.xxx - 1.0.xxx;
+}
+
+uint FspEncodeProbeOffset(float3 Offset)
+{
+    const uint3 Enc = uint3(clamp(Offset, -1.0.xxx, 1.0.xxx) * 511.5.xxx + 511.5.xxx + 0.5.xxx);
+    return (Enc.x & 1023u) | ((Enc.y & 1023u) << 10u) | ((Enc.z & 1023u) << 20u);
+}
+
+uint FspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)
+{
+    return ProbeIndex * kFspRayCountPerProbe + OctCellId.x + OctCellId.y * k_irdv_fsp_probe_octmap_width;
+}
+
+uint FspIrradianceVolumeSHAddress(uint CellIndex, uint CoeffIndex)
+{
+    return CellIndex * k_irdv_fsp_irradiance_volume_sh_float4_count + CoeffIndex;
+}
+
+uint FspPackRayRequestKey(uint ProbeIndex, uint OctCellIndex)
+{
+    return (ProbeIndex << kFspRayRequestOctCellBits) | (OctCellIndex & kFspRayRequestOctCellMask);
+}
+
+uint FspUnpackRayRequestProbeIndex(uint PackedKey)
+{
+    return PackedKey >> kFspRayRequestOctCellBits;
+}
+
+uint FspUnpackRayRequestOctCellIndex(uint PackedKey)
+{
+    return PackedKey & kFspRayRequestOctCellMask;
+}
+
+float3 FspOctDecode(float2 Uv)
+{
+    float2 F = Uv * 2.0 - 1.0;
+    float3 N = float3(F.x, F.y, 1.0 - abs(F.x) - abs(F.y));
+    const float T = saturate(-N.z);
+    N.xy += select(N.xy >= 0.0, -T.xx, T.xx);
+    return normalize(N);
+}
+
+float2 FspOctEncode(float3 N)
+{
+    N /= max(abs(N.x) + abs(N.y) + abs(N.z), 1.0e-6);
+    float2 Enc = N.xy;
+    if (N.z < 0.0)
+    {
+        Enc = (1.0 - abs(Enc.yx)) * select(Enc.xy >= 0.0, 1.0.xx, -1.0.xx);
+    }
+    return Enc * 0.5 + 0.5;
+}
+
+float4 FspEvaluateL1ShBasis(float3 Dir)
+{
+    return float4(
+        0.2820947918,
+        0.4886025119 * Dir.y,
+        0.4886025119 * Dir.z,
+        0.4886025119 * Dir.x);
+}
+
+bool FspIrradianceVolumeHasValidSH(StructuredBuffer<float4> SHBuffer, uint CellIndex)
+{
+    const float4 C0 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 0u)];
+    const float4 C1 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 1u)];
+    const float4 C2 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 2u)];
+    const float4 C3 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 3u)];
+    return any(abs(C0) > 0.0.xxxx) || any(abs(C1) > 0.0.xxxx) || any(abs(C2) > 0.0.xxxx) || any(abs(C3) > 0.0.xxxx);
+}
+
+#endif // INSTANT_RDV_FSP_COMMON_USH

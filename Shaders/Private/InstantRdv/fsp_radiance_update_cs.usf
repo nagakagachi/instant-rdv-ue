@@ -1,5 +1,6 @@
 // ファイル説明: 可視FSP cellへBBV resolved radianceを写す初期更新パス。
-// フル移植時はProbe pool / oct atlas / SH更新へ拡張するが、BBV radianceとの接続点はここで確立する。
+// 現在のFSP本線はprobe pool / oct atlas / SH更新へ移行済み。
+// このシェーダは初期移植時のBBV radiance接続確認用として残しており、再利用時はtoroidal FSP helperへ寄せること。
 
 #include "/Engine/Public/Platform.ush"
 

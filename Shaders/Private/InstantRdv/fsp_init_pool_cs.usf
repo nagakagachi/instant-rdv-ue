@@ -1,9 +1,14 @@
-// FSP probe pool / free stack 初期化シェーダ
+// FSP probe pool / free stack 初期化シェーダ。
+// 参照InstantRDVと同じく、probeはcell数分のpoolからfree stack経由で割り当てる。
+// CellProbeIndexはcell -> probe ownership、ProbePoolはprobe -> owner/offset/frame情報を保持する。
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
 
 RWStructuredBuffer<uint> RWFspProbeFreeStack; // [0] = count, [1..N] = free indices
+RWStructuredBuffer<uint> RWFspCellProbeIndex;
+RWStructuredBuffer<uint> RWFspProbePool;
+RWStructuredBuffer<float4> RWFspIrradianceVolumeSH;
 uint ProbePoolElementCount;
 
 [numthreads(64, 1, 1)]
@@ -15,10 +20,28 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    // LIFO になるように逆順で格納する。
+    // LIFO になるように逆順で格納する。初回popが0番probeになり、debug時の対応を追いやすい。
     RWFspProbeFreeStack[1 + idx] = ProbePoolElementCount - 1u - idx;
+    RWFspCellProbeIndex[idx] = k_irdv_fsp_invalid_probe_index;
 
-    // スレッド0 がカウンタをセットする。
+    FInstantRdvFspProbePoolData Data;
+    Data.OwnerCellIndex = k_irdv_fsp_invalid_probe_index;
+    Data.ProbeOffsetV3 = 0u;
+    Data.LastSeenFrame = 0u;
+    Data.Reserved0 = 0u;
+    Data.LastUpdateFrame = 0u;
+    Data.Reserved1 = 0u;
+    Data.Reserved2 = 0u;
+    Data.Reserved3 = 0u;
+    FspStoreProbePoolData(RWFspProbePool, idx, Data);
+
+    [unroll]
+    for (uint CoeffIndex = 0u; CoeffIndex < k_irdv_fsp_irradiance_volume_sh_float4_count; ++CoeffIndex)
+    {
+        RWFspIrradianceVolumeSH[FspIrradianceVolumeSHAddress(idx, CoeffIndex)] = 0.0.xxxx;
+    }
+
+    // stack payloadを書き終えた後、スレッド0 がcountをセットする。
     if (idx == 0u)
     {
         RWFspProbeFreeStack[0] = ProbePoolElementCount;

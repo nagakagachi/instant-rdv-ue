@@ -32,6 +32,7 @@ struct FInstantRdvFspConfig
     uint32 ProbeCascadeCount = 5;
 
     uint32 GetFspCellCount() const;
+    uint32 GetFspTotalCellCount() const;
 };
 
 
@@ -154,14 +155,29 @@ private:
         struct FFspState
         {
             FToroidalGrid TrGrid{};
+            // FSPは参照InstantRDVと同じくtoroidal grid移動量で古いphysical slotを無効化する。
+            // 前フレームのgrid centerを保持し、BeginUpdate shaderへ渡してslotの押し出し判定に使う。
+            FVector PreviousGridCenterPositionWs = FVector::ZeroVector;
 
+            // FspCellDataBuffer:
+            //   一時的なcell payload。現状は[0]をscreen-space collectのフレーム内dedupe flagとして使う。
+            // FspCellProbeIndexBuffer:
+            //   global cell index -> owning active probe index。未所有はinvalid probe index。
+            // FspVisibleSurfaceListBuffer:
+            //   [0]=count, [1..]=depth surfaceから選ばれたowner cell index。
             FPersistentRdgPooledBufferSet FspCellDataBuffer;
+            FPersistentRdgPooledBufferSet FspCellProbeIndexBuffer;
             FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
+            // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
+            // ActiveProbeListPrevをBeginUpdateの入力、ActiveProbeListCurrを当フレームのray/SH更新入力として使う。
             FPersistentRdgPooledBufferSet FspProbePoolBuffer;
             FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
             FPersistentRdgPooledBufferSet FspActiveProbeListPrevBuffer;
             FPersistentRdgPooledBufferSet FspActiveProbeListCurrBuffer;
-            FPersistentRdgPooledBufferSet FspProbeRadianceBuffer;
+            // ProbeAtlasはActiveProbeごとの6x6 OctMap、PackedSHはdense IrradianceVolume cellごとのL1 SH。
+            FPersistentRdgPooledBufferSet FspProbeAtlasBuffer;
+            FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
+            FPersistentRdgPooledBufferSet FspProbeRayResultBuffer;
             FPersistentRdgPooledBufferSet FspPackedSHBuffer;
         };
 

@@ -1,0 +1,117 @@
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+
+// ActiveProbeが直接更新しないIrradianceVolume cellへ、近傍cellのSHを伝播する。
+// Checkerboard更新にして、毎フレームの全cell書き換えと隣接cell同時更新のフィードバックを抑える。
+
+StructuredBuffer<uint> FspCellProbeIndex;
+StructuredBuffer<uint> FspProbePool;
+RWStructuredBuffer<float4> RWFspPackedSH;
+
+uint FspProbePoolElementCount;
+uint FrameCount;
+
+bool FspIsActiveProbeOwnedCell(uint CellIndex)
+{
+    if (CellIndex >= FspTotalCellCount())
+    {
+        return false;
+    }
+
+    const uint ProbeIndex = FspCellProbeIndex[CellIndex];
+    if (ProbeIndex == k_irdv_fsp_invalid_probe_index || ProbeIndex >= FspProbePoolElementCount)
+    {
+        return false;
+    }
+
+    const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+    return Data.OwnerCellIndex == CellIndex;
+}
+
+bool FspTryLoadNeighborSH(out float4 C0, out float4 C1, out float4 C2, out float4 C3, uint CascadeIndex, int3 Coord)
+{
+    C0 = 0.0.xxxx;
+    C1 = 0.0.xxxx;
+    C2 = 0.0.xxxx;
+    C3 = 0.0.xxxx;
+    if (any(Coord < 0) ||
+        Coord.x >= int(FspGridResolutionX) ||
+        Coord.y >= int(FspGridResolutionY) ||
+        Coord.z >= int(FspGridResolutionZ))
+    {
+        return false;
+    }
+
+    // Coordは論理座標なので、dense bufferのglobal cell indexへ戻す前にtoroidal物理座標へ変換する。
+    const uint CellIndex = FspEncodeGlobalCellIndex(CascadeIndex, FspPhysicalCellCoordToLocalIndex(FspLinearToPhysicalCoord(Coord, CascadeIndex)));
+    C0 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)];
+    C1 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)];
+    C2 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)];
+    C3 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)];
+    return any(abs(C0) > 0.0.xxxx) || any(abs(C1) > 0.0.xxxx) || any(abs(C2) > 0.0.xxxx) || any(abs(C3) > 0.0.xxxx);
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint CellIndex = DispatchThreadId.x;
+    if (CellIndex >= FspTotalCellCount() || FspIsActiveProbeOwnedCell(CellIndex))
+    {
+        return;
+    }
+
+    uint CascadeIndex = 0u;
+    uint LocalCellIndex = 0u;
+    if (!FspDecodeGlobalCellIndex(CellIndex, CascadeIndex, LocalCellIndex))
+    {
+        return;
+    }
+
+    const int3 Coord = FspPhysicalToLinearCoord(FspLocalCellIndexToCoord(LocalCellIndex), CascadeIndex);
+    const uint Parity = uint((Coord.x + Coord.y + Coord.z) & 1);
+    // 偶奇cellを交互に更新することで、同一frame内に伝播結果をさらに伝播する連鎖を弱める。
+    if (Parity != (FrameCount & 1u))
+    {
+        return;
+    }
+
+    const int3 Offsets[6] =
+    {
+        int3( 1,  0,  0),
+        int3(-1,  0,  0),
+        int3( 0,  1,  0),
+        int3( 0, -1,  0),
+        int3( 0,  0,  1),
+        int3( 0,  0, -1)
+    };
+
+    float4 Accum0 = 0.0.xxxx;
+    float4 Accum1 = 0.0.xxxx;
+    float4 Accum2 = 0.0.xxxx;
+    float4 Accum3 = 0.0.xxxx;
+    uint Count = 0u;
+    [unroll]
+    for (uint I = 0u; I < 6u; ++I)
+    {
+        float4 C0, C1, C2, C3;
+        if (FspTryLoadNeighborSH(C0, C1, C2, C3, CascadeIndex, Coord + Offsets[I]))
+        {
+            Accum0 += C0;
+            Accum1 += C1;
+            Accum2 += C2;
+            Accum3 += C3;
+            ++Count;
+        }
+    }
+
+    if (Count == 0u)
+    {
+        return;
+    }
+
+    const float InvCount = rcp(float(Count));
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)] = Accum0 * InvCount;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)] = Accum1 * InvCount;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)] = Accum2 * InvCount;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)] = Accum3 * InvCount;
+}

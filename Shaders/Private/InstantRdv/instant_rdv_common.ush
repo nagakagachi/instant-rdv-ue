@@ -20,5 +20,29 @@
 // Bbv BrickのBitmask表現で必要なu32数.
 #define k_irdv_bbv_bitmask_u32_count_per_brick ((k_irdv_bbv_brick_reso * k_irdv_bbv_brick_reso * k_irdv_bbv_brick_reso) / 32u)
 
+// FSP probeあたりのOctahedralMap Atlas解像度.
+#define k_irdv_fsp_probe_octmap_width 6u
+
+// FSP IrradianceVolume SH payload. 1 cell = float4 * 4.
+#define k_irdv_fsp_irradiance_volume_sh_float4_count 4u
+
+// FSP無効probe index.
+#define k_irdv_fsp_invalid_probe_index 0xffffffffu
+
+// FSP ActiveProbe lifecycle用のprobe poolエントリ.
+// C++側のStructuredBuffer strideと一致させるため8 uint固定にする.
+#if !defined(__cplusplus)
+struct FInstantRdvFspProbePoolData
+{
+    uint OwnerCellIndex;
+    uint ProbeOffsetV3;
+    uint LastSeenFrame;
+    uint Reserved0;
+    uint LastUpdateFrame;
+    uint Reserved1;
+    uint Reserved2;
+    uint Reserved3;
+};
+#endif
 
 #endif // INSTANT_RDV_COMMON_USH

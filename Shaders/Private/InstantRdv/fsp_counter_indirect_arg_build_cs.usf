@@ -1,0 +1,18 @@
+#include "/Engine/Public/Platform.ush"
+
+// FSP各リストの [0] counter から DispatchIndirect 用のgroup countを作る。
+// 参照InstantRDV同様、ActiveProbe数やRayRequest数に比例したdispatchにして全cell全ray実行を避ける。
+
+StructuredBuffer<uint> CounterBuffer;
+RWBuffer<uint> RWIndirectArg;
+
+uint ThreadGroupSizeX;
+
+[numthreads(1, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint WorkCount = CounterBuffer[0];
+    RWIndirectArg[0] = (WorkCount + ThreadGroupSizeX - 1u) / ThreadGroupSizeX;
+    RWIndirectArg[1] = 1u;
+    RWIndirectArg[2] = 1u;
+}

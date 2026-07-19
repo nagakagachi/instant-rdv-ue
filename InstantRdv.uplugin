@@ -3,7 +3,7 @@
   "Version": 1,
   "VersionName": "0.1.0",
   "FriendlyName": "Instant-RDV",
-  "Description": "Instant Raster Derived Voxel scene rendering base plugin using SceneViewExtension hooks for future GI features.",
+  "Description": "Instant Raster Derived Voxel scene rendering plugin with BBV and FSP ActiveProbe rendering hooks.",
   "Category": "Rendering",
   "CreatedBy": "@nagakagachi",
   "CanContainContent": false,
@@ -16,5 +16,5 @@
       "LoadingPhase": "PostConfigInit"
     }
   ],
-  "EngineVersion": "5.7.0"
+  "EngineVersion": "5.8.0"
 }

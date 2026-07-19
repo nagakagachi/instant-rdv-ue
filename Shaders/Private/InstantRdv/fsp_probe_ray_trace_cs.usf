@@ -1,0 +1,83 @@
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+
+// FSP probe ray trace pass。
+// RayRequestBufferに積まれたActiveProbeのOctMap方向だけをBBVへtraceする。
+// 全cell x 全方向ではなく、ActiveProbe由来のrequest数でdispatchする点がFSPのレイ数削減の要。
+
+StructuredBuffer<uint> FspProbeRayRequestBuffer;
+RWStructuredBuffer<uint> RWFspProbeRayResultBuffer;
+StructuredBuffer<uint> FspProbePool;
+StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BrickData;
+
+#include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
+
+uint FspProbePoolElementCount;
+uint BbvGridResolutionX;
+uint BbvGridResolutionY;
+uint BbvGridResolutionZ;
+float3 BbvGridMinPositionWs;
+float BbvCellSizeCm;
+float3 BbvToroidalOffsetCells;
+float FspTraceDistanceCm;
+
+[numthreads(128, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint RequestIndex = DispatchThreadId.x;
+    const uint RequestCount = min(FspProbeRayRequestBuffer[0], FspProbePoolElementCount * kFspRayCountPerProbe);
+    if (RequestIndex >= RequestCount)
+    {
+        return;
+    }
+
+    const uint PackedKey = FspProbeRayRequestBuffer[RequestIndex + 1u];
+    const uint ProbeIndex = FspUnpackRayRequestProbeIndex(PackedKey);
+    const uint OctCellIndex = FspUnpackRayRequestOctCellIndex(PackedKey);
+
+    uint HitInfo = 0u;
+    if (ProbeIndex < FspProbePoolElementCount && OctCellIndex < kFspRayCountPerProbe)
+    {
+        const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+        uint CascadeIndex = 0u;
+        uint LocalCellIndex = 0u;
+        if (Data.OwnerCellIndex != k_irdv_fsp_invalid_probe_index && FspDecodeGlobalCellIndex(Data.OwnerCellIndex, CascadeIndex, LocalCellIndex))
+        {
+            const float3 ProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45;
+            const float3 ProbePositionWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex) + ProbeOffset;
+            const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);
+            const float2 OctUv = (float2(OctCellId) + 0.5.xx) / float(k_irdv_fsp_probe_octmap_width);
+            const float3 RayDirWs = FspOctDecode(OctUv);
+
+            // BBV側のbitmask/brick dataを参照して、最初に当たったbrickだけをresolveへ渡す。
+            // 参照実装の詳細なhit payloadに比べ、現段階ではradiance取得に必要なbrick indexを保持する。
+            float HitDistanceCm = -1.0;
+            int3 LogicalBrickCoord = int3(-1, -1, -1);
+            int3 LogicalFineCoord = int3(-1, -1, -1);
+            uint BrickIndex = 0u;
+            uint BitIndex = 0u;
+            const bool bHit = TraceBbvRayReference(
+                ProbePositionWs,
+                RayDirWs,
+                FspTraceDistanceCm,
+                false,
+                uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+                BbvCellSizeCm,
+                int3(BbvToroidalOffsetCells),
+                HitDistanceCm,
+                LogicalBrickCoord,
+                LogicalFineCoord,
+                BrickIndex,
+                BitIndex);
+            HitInfo = bHit ? (BrickIndex + 1u) : 0u;
+        }
+    }
+
+    uint ResultIndex = 0u;
+    InterlockedAdd(RWFspProbeRayResultBuffer[0], 1u, ResultIndex);
+    // ResultBufferも [0]=count, [1..]=stride付きpayload。PackedKeyを残してresolveでprobe/octへ戻す。
+    const uint ResultWordOffset = 1u + ResultIndex * kFspRayResultStride;
+    RWFspProbeRayResultBuffer[ResultWordOffset + 0u] = PackedKey;
+    RWFspProbeRayResultBuffer[ResultWordOffset + 1u] = HitInfo;
+}

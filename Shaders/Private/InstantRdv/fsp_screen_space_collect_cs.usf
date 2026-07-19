@@ -1,9 +1,10 @@
 // ファイル説明: Frustum Space Probe(FSP) の可視Surface Cell収集パス。
-// 参照実装 fsp_screen_space_pass_cs の初期移植として、DepthからWorld位置を復元しFSP cell listへ追加する。
+// 参照InstantRDVのsurface mask ownership inject/compact相当をUEのSceneDepth入力に合わせてまとめたもの。
+// Depthからworld位置を復元し、そのsurfaceを代表するFSP cellだけをvisible listへ追加する。
 
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
 
 Texture2D<float> SceneDepthTexture;
 RWStructuredBuffer<uint> RWFspCellData;
@@ -15,18 +16,8 @@ uint ViewRectMinX;
 uint ViewRectMinY;
 uint ViewRectSizeX;
 uint ViewRectSizeY;
-uint FspGridResolutionX;
-uint FspGridResolutionY;
-uint FspGridResolutionZ;
 uint FspVisibleSurfaceListCapacity;
-float3 FspGridMinPositionWs;
-float FspCellSizeCm;
 float4x4 InvViewProjectionMatrix;
-
-uint FlattenFspCoord(uint3 Coord)
-{
-    return Coord.x + Coord.y * FspGridResolutionX + Coord.z * FspGridResolutionX * FspGridResolutionY;
-}
 
 bool IsValidDepth(float DeviceDepth)
 {
@@ -63,22 +54,33 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     const float2 ViewUv = (float2(DispatchThreadId.xy) + 0.5) / float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
     const float3 WorldPos = ReconstructWorldPos(ViewUv, DeviceDepth);
-    const int3 CellCoord = int3(floor((WorldPos - FspGridMinPositionWs) / max(FspCellSizeCm, 0.001)));
-    if (any(CellCoord < 0) ||
-        CellCoord.x >= int(FspGridResolutionX) ||
-        CellCoord.y >= int(FspGridResolutionY) ||
-        CellCoord.z >= int(FspGridResolutionZ))
-    {
-        return;
-    }
 
-    const uint CellIndex = FlattenFspCoord(uint3(CellCoord));
-    uint WriteIndex = 0u;
-    InterlockedAdd(RWFspVisibleSurfaceList[0], 1u, WriteIndex);
-    if (WriteIndex < FspVisibleSurfaceListCapacity)
+    // FSPは全cellではなく、depth surfaceが属するowner cellだけをActiveProbe候補にする。
+    // ここが0になるとLastSeenFrameが更新されず、ActiveProbeはstale threshold後に消える。
+    uint2 OwnerCellIndices = k_irdv_fsp_invalid_probe_index.xx;
+    const uint OwnerCellCount = FspGetSurfaceOwnerCells(WorldPos, OwnerCellIndices);
+
+    [unroll]
+    for (uint OwnerIndex = 0u; OwnerIndex < 2u; ++OwnerIndex)
     {
-        RWFspVisibleSurfaceList[1u + WriteIndex] = CellIndex;
+        if (OwnerIndex >= OwnerCellCount)
+        {
+            continue;
+        }
+
+        const uint CellIndex = OwnerCellIndices[OwnerIndex];
         const uint CellDataStart = CellIndex * 4u;
-        RWFspCellData[CellDataStart + 0u] = 1u;
+        uint OriginalVisibleFlag = 0u;
+        // CellData[0]はこのフレーム内のdedupe flag。C++側で毎フレームclearすることが必須。
+        InterlockedCompareExchange(RWFspCellData[CellDataStart + 0u], 0u, 1u, OriginalVisibleFlag);
+        if (OriginalVisibleFlag == 0u)
+        {
+            uint WriteIndex = 0u;
+            InterlockedAdd(RWFspVisibleSurfaceList[0], 1u, WriteIndex);
+            if (WriteIndex < FspVisibleSurfaceListCapacity)
+            {
+                RWFspVisibleSurfaceList[1u + WriteIndex] = CellIndex;
+            }
+        }
     }
 }

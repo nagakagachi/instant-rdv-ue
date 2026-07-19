@@ -1,0 +1,36 @@
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+
+// ActiveProbeごとにOctMap 6x6方向のray requestを生成する。
+// Requestは probe index と oct cell index を1wordへpackし、後続のtrace/resolveをcounter-drivenにする。
+
+StructuredBuffer<uint> FspActiveProbeListCurr;
+RWStructuredBuffer<uint> RWFspProbeRayRequestBuffer;
+
+uint FspProbePoolElementCount;
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint ActiveIndex = DispatchThreadId.x;
+    const uint ActiveProbeCount = min(FspActiveProbeListCurr[0], FspProbePoolElementCount);
+    if (ActiveIndex >= ActiveProbeCount)
+    {
+        return;
+    }
+
+    const uint ProbeIndex = FspActiveProbeListCurr[ActiveIndex + 1u];
+    if (ProbeIndex >= FspProbePoolElementCount)
+    {
+        return;
+    }
+
+    [unroll]
+    for (uint OctCellIndex = 0u; OctCellIndex < kFspRayCountPerProbe; ++OctCellIndex)
+    {
+        // [0]をcounter、[1..]をrequest payloadとして使う。
+        uint RequestIndex = 0u;
+        InterlockedAdd(RWFspProbeRayRequestBuffer[0], 1u, RequestIndex);
+        RWFspProbeRayRequestBuffer[RequestIndex + 1u] = FspPackRayRequestKey(ProbeIndex, OctCellIndex);
+    }
+}

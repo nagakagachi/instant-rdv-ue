@@ -1,171 +1,219 @@
-// Vertex shader: Probe billboard generated from SV_VertexID
-// Each probe uses 6 vertices (2 triangles) — VertexID / 6 = probeIndex, VertexID % 6 = corner
+// FSP ActiveProbe / IrradianceVolume probe sphere debug rendering.
+// 各FSP cellを1インスタンス相当のcamera-facing quadとして描き、pixel shaderで球面に見せる。
+// ActiveProbe debugではprobe poolのoffset込み位置、IrradianceVolume debugではcell centerを描画する。
 
 #include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
-
-
-
-
-// https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin/blob/914b91596cd119eda85fbc1d3c7ee6ac391b1452/src/core/src/components/random_number_generator/random_number_generator.hlsl
-class RandomInstance
-{
-	uint rngState;
-
-	void initSeed(uint seed)
-	{
-		rngState = seed;
-	}
-	
-	uint randInt()
-	{
-        // Using PCG hash function
-		uint state = rngState;
-		rngState = rngState * 747796405u + 2891336453u;
-		uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-		word = (word >> 22u) ^ word;
-		return word;
-	}
-	
-	uint randInt(uint max)
-	{
-		uint ret = randInt() % max; // Has some bias depending on value of max
-		return ret;
-	}
-	
-	// range [0,1.0)
-	float rand()
-	{
-        // Note: Use the upper 24 bits to avoid a bias due to floating point rounding error.
-        float ret = (float)(randInt() >> 8) * 0x1.0p-24f;
-		return ret;
-	}	
-	// range [0,1.0)
-	float2 rand2()
-	{
-		return float2(rand(), rand());
-	}
-
-	// range [0,1.0)
-	float3 rand3()
-	{
-		return float3(rand(), rand(), rand());
-	}
-	// range [0,1.0)
-	float4 rand4()
-	{
-		return float4(rand(), rand(), rand(), rand());
-	}
-};
-
-
-
-
-
-
-
-
+float4x4 ViewMatrix;
 float4x4 ViewProjectionMatrix;
-float ViewAcpectRatio;
-float3 FspGridMinPositionWs;
-float CellSizeCm;
+float3 CameraRightWs;
+float3 CameraUpWs;
+float3 CameraPositionWs;
+float DebugProbeRadiusCm;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
+uint FspProbePoolElementCount;
+uint FrameCount;
+uint DebugMode;
 
-
-StructuredBuffer<uint4> FspProbeRadiance;
-
+StructuredBuffer<uint> FspCellProbeIndex;
+StructuredBuffer<uint> FspProbePool;
+StructuredBuffer<uint4> FspProbeAtlas;
+StructuredBuffer<float4> FspPackedSH;
 
 struct VS_OUTPUT
 {
     float4 Pos : SV_Position;
     float2 UV : TEXCOORD0;
-    //nointerpolation uint ProbeIndex : TEXCOORD1;
+    float3 ProbePosWs : TEXCOORD1;
+    nointerpolation uint GlobalCellIndex : TEXCOORD2;
+    nointerpolation uint ProbeIndex : TEXCOORD3;
+    nointerpolation uint ProbeFlags : TEXCOORD4;
 };
 
-// entry
+bool FspTryGetActiveProbeForCell(out uint OutProbeIndex, out FInstantRdvFspProbePoolData OutData, uint GlobalCellIndex)
+{
+    OutProbeIndex = k_irdv_fsp_invalid_probe_index;
+    OutData = (FInstantRdvFspProbePoolData)0;
+    if (GlobalCellIndex >= FspTotalCellCount())
+    {
+        return false;
+    }
+
+    const uint ProbeIndex = FspCellProbeIndex[GlobalCellIndex];
+    if (ProbeIndex == k_irdv_fsp_invalid_probe_index || ProbeIndex >= FspProbePoolElementCount)
+    {
+        return false;
+    }
+
+    // CellProbeIndexだけでは古いownershipが残る可能性があるため、ProbePool側のOwnerCellIndexでも検証する。
+    const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+    if (Data.OwnerCellIndex != GlobalCellIndex)
+    {
+        return false;
+    }
+
+    OutProbeIndex = ProbeIndex;
+    OutData = Data;
+    return true;
+}
+
 VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
 {
-    // 6頂点でフルスクリーンクアッド（2トライアングル）
-	const float2 pos[6] =
-	{
-		float2(-1.0, -1.0), // 0
-        float2(-1.0, 1.0), // 1
-        float2(1.0, 1.0), // 2
-        float2(-1.0, -1.0), // 3
-        float2(1.0, 1.0), // 4
-        float2(1.0, -1.0) // 5
-	};
+    const float2 QuadPos[6] =
+    {
+        float2(-1.0, -1.0),
+        float2(-1.0,  1.0),
+        float2( 1.0,  1.0),
+        float2(-1.0, -1.0),
+        float2( 1.0,  1.0),
+        float2( 1.0, -1.0)
+    };
+    const float2 QuadUv[6] =
+    {
+        float2(0.0, 1.0),
+        float2(0.0, 0.0),
+        float2(1.0, 0.0),
+        float2(0.0, 1.0),
+        float2(1.0, 0.0),
+        float2(1.0, 1.0)
+    };
 
-	const float2 uv[6] =
-	{
-		float2(0.0, 1.0), // 0
-        float2(0.0, 0.0), // 1
-        float2(1.0, 0.0), // 2
-        float2(0.0, 1.0), // 3
-        float2(1.0, 0.0), // 4
-        float2(1.0, 1.0) // 5
-	};
-	
-	
-	VS_OUTPUT o;
-	
-	
-	const uint k_per_instance_prim_count = 2;
-	const uint k_per_instance_vtx_count = k_per_instance_prim_count * 3;
-	
-	const uint global_prim_index = VertexId / 3;
-	
-	const uint instance_index = global_prim_index / k_per_instance_prim_count;
-	const uint local_prim_index = global_prim_index - (instance_index * k_per_instance_prim_count);
-	const uint local_prim_vtx_index = VertexId - (instance_index * k_per_instance_vtx_count) - (local_prim_index * 3);
-	const uint local_vtx_index = local_prim_vtx_index + (local_prim_index * 3);
-	
-	
-	// 乱数初期化.
-	RandomInstance rnd;
-	rnd.initSeed(instance_index);
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    const uint GlobalCellIndex = VertexId / 6u;
+    const uint LocalVertexIndex = VertexId % 6u;
 
+    uint CascadeIndex = 0u;
+    uint LocalCellIndex = 0u;
+    if (!FspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
+    {
+        Out.Pos = 0.0.xxxx;
+        Out.ProbeIndex = k_irdv_fsp_invalid_probe_index;
+        return Out;
+    }
 
-	// ProbeGrid上の位置.
-	const int grid_pos_z = instance_index / (GridResolutionX * GridResolutionY);
-	const int grid_pos_y = (instance_index - (grid_pos_z * (GridResolutionX * GridResolutionY))) / (GridResolutionX);
-	const int grid_pos_x = instance_index % GridResolutionX;
-	
-	float3 instance_pos_ws = float3(grid_pos_x, grid_pos_y, grid_pos_z) * CellSizeCm + FspGridMinPositionWs;
-	
-	
-	const float k_radius_ws = 10.0;
-	
-	#if 0
-		float3 instance_vtx_pos_ws = instance_pos_ws + (float3(pos[local_vtx_index] * k_radius_ws, 0.0)); // 本当はビルボード風にする.
-		float4 instance_pos_cs = mul(float4(instance_vtx_pos_ws, 1.0), ViewProjectionMatrix);
-	#else
-		float3 instance_vtx_pos_ws = instance_pos_ws;
-		float4 instance_pos_cs = mul(float4(instance_vtx_pos_ws, 1.0), ViewProjectionMatrix);
-		// ClipSpaceでビルボードの頂点座標に補正する.
-	instance_pos_cs.xy += pos[local_vtx_index] * float2(1.0 / ViewAcpectRatio, 1.0) * k_radius_ws; // / instance_pos_cs.z;
-	#endif
-	
-	
-	o.Pos = instance_pos_cs;
-	o.UV = uv[local_vtx_index];
-	
-	return o;
+    uint ProbeIndex = k_irdv_fsp_invalid_probe_index;
+    FInstantRdvFspProbePoolData ProbeData = (FInstantRdvFspProbePoolData)0;
+    const bool bActiveProbe = FspTryGetActiveProbeForCell(ProbeIndex, ProbeData, GlobalCellIndex);
+    const bool bIrradianceVolumeDebug = DebugMode == 8u || DebugMode == 9u;
+    const bool bHasVolumeSH = FspIrradianceVolumeHasValidSH(FspPackedSH, GlobalCellIndex);
+    // FspCalcCellCenterWsはtoroidal物理indexから現在のworld-aligned cell centerへ戻す。
+    // ここがずれるとprobe球がカメラ追従に見えるため、更新パスと同じhelperを使う。
+    const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+    const float3 ProbeOffset = bActiveProbe ? FspDecodeProbeOffset(ProbeData.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45 : 0.0.xxx;
+    const float3 ProbePosWs = bIrradianceVolumeDebug ? CellCenterWs : CellCenterWs + ProbeOffset;
+    const float DrawScale = ((bIrradianceVolumeDebug && bHasVolumeSH) || ((!bIrradianceVolumeDebug) && bActiveProbe)) ? DebugProbeRadiusCm : 0.0;
+    const float2 Corner = QuadPos[LocalVertexIndex];
+    const float3 VertexPosWs = ProbePosWs + (CameraRightWs * Corner.x + CameraUpWs * Corner.y) * DrawScale;
+
+    Out.Pos = mul(float4(VertexPosWs, 1.0), ViewProjectionMatrix);
+    Out.UV = QuadUv[LocalVertexIndex];
+    Out.ProbePosWs = ProbePosWs;
+    Out.GlobalCellIndex = GlobalCellIndex;
+    Out.ProbeIndex = ProbeIndex;
+    Out.ProbeFlags = bActiveProbe ? 1u : 0u;
+    return Out;
 }
 
-float4 MainPS(VS_OUTPUT vertex_output) : SV_Target0
-{	
-	if (0.5 <= length(vertex_output.UV.xy - 0.5))
-	{
-		discard;
-	}	
-	return float4(vertex_output.UV.xy, 0.0, 1.0);
+float4 MainPS(VS_OUTPUT Input) : SV_Target0
+{
+    const float2 UnitDist = (Input.UV - 0.5.xx) * float2(2.0, -2.0);
+    const float UnitDistLenSq = dot(UnitDist, UnitDist);
+    if (UnitDistLenSq > 1.0)
+    {
+        discard;
+    }
 
+    const bool bIrradianceVolumeDebug = DebugMode == 8u || DebugMode == 9u;
+    if ((!bIrradianceVolumeDebug) && Input.ProbeIndex == k_irdv_fsp_invalid_probe_index)
+    {
+        discard;
+    }
+
+    const float3 DirToCamera = normalize(CameraPositionWs - Input.ProbePosWs);
+    const float3 QuadSide = normalize(cross(CameraUpWs, -DirToCamera));
+    const float3 QuadUp = normalize(cross(-DirToCamera, QuadSide));
+    float3 NormalWs = float3(UnitDist.x, UnitDist.y, sqrt(saturate(1.0 - UnitDistLenSq)));
+    NormalWs = normalize(NormalWs.x * QuadSide + NormalWs.y * QuadUp + NormalWs.z * DirToCamera);
+
+    const float4 ShBasis = FspEvaluateL1ShBasis(NormalWs);
+    const uint CellIndex = Input.GlobalCellIndex;
+    // SH bufferは各係数をfloat4(sky, r, g, b)で保持しているため、表示時はcomponentごとに係数ベクトルへ戻す。
+    const float4 ShSkyVis = float4(
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].r,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].r,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].r,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].r);
+    const float4 ShRadianceR = float4(
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].g,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].g,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].g,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].g);
+    const float4 ShRadianceG = float4(
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].b,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].b,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].b,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].b);
+    const float4 ShRadianceB = float4(
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].a,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].a,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].a,
+        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].a);
+
+    float4 Color = float4(NormalWs * 0.5 + 0.5, 1.0);
+    if (DebugMode == 0u)
+    {
+        const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, Input.ProbeIndex);
+        Color = (Data.LastSeenFrame == FrameCount) ? float4(0.2, 1.0, 0.3, 1.0) : float4(1.0, 0.85, 0.2, 1.0);
+    }
+    else if (DebugMode == 1u)
+    {
+        const float H = frac(float(Input.ProbeIndex) * 0.61803398875);
+        Color = float4(H, frac(H * 1.37), frac(H * 2.11), 1.0);
+    }
+    else if (DebugMode == 2u)
+    {
+        const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, Input.ProbeIndex);
+        const float AgeNorm = saturate(float(FrameCount - Data.LastSeenFrame) / 30.0);
+        Color = lerp(float4(0.2, 1.0, 0.3, 1.0), float4(1.0, 0.2, 0.1, 1.0), AgeNorm);
+    }
+    else if (DebugMode == 3u)
+    {
+        uint CascadeIndex = 0u;
+        uint LocalCellIndex = 0u;
+        FspDecodeGlobalCellIndex(CellIndex, CascadeIndex, LocalCellIndex);
+        const float H = frac(float(CascadeIndex) * 0.38196601125);
+        Color = float4(H, frac(H * 1.71), frac(H * 2.37), 1.0);
+    }
+    else if (DebugMode == 4u || DebugMode == 5u)
+    {
+        // OctMap表示は球面normalをoct encodeしてatlas texelを参照する。
+        // DebugMode 4=Radiance, 5=SkyVisibility。
+        const uint2 OctCellId = min(uint2(FspOctEncode(NormalWs) * float(k_irdv_fsp_probe_octmap_width)), uint2(k_irdv_fsp_probe_octmap_width - 1u, k_irdv_fsp_probe_octmap_width - 1u));
+        const float4 Atlas = asfloat(FspProbeAtlas[FspProbeAtlasAddress(Input.ProbeIndex, OctCellId)]);
+        if (DebugMode == 4u)
+        {
+            const float3 Mapped = Atlas.rgb / (1.0.xxx + Atlas.rgb);
+            Color = float4(pow(max(Mapped, 0.0.xxx), 1.0 / 2.2), 1.0);
+        }
+        else
+        {
+            const float SkyVis = Atlas.a;
+            Color = float4(max(float3(SkyVis, SkyVis, SkyVis), float3(0.04, 0.04, 0.04)), 1.0);
+        }
+    }
+    else if (DebugMode == 6u || DebugMode == 8u)
+    {
+        const float3 Radiance = max(0.0.xxx, float3(dot(ShRadianceR, ShBasis), dot(ShRadianceG, ShBasis), dot(ShRadianceB, ShBasis)));
+        const float3 Mapped = Radiance / (1.0.xxx + Radiance);
+        Color = float4(pow(Mapped, 1.0 / 2.2), 1.0);
+    }
+    else if (DebugMode == 7u || DebugMode == 9u)
+    {
+        Color = max(0.0, dot(ShSkyVis, ShBasis)).xxxx;
+    }
+
+    return Color;
 }
-
-
-
-

@@ -1,6 +1,6 @@
 # instant-rdv-ue
 
-**Instant-RDV (Instant Raster Derived Voxel scene)** の UE5.7 相当向け CodePlugin 雛形です。  
+**Instant-RDV (Instant Raster Derived Voxel scene)** の UE5.8 相当向け CodePlugin 雛形です。  
 SceneViewExtension を基盤に、GI 機能を積み上げるための最小構成を提供します。
 
 ## 構成
@@ -16,7 +16,8 @@ SceneViewExtension を基盤に、GI 機能を積み上げるための最小構�
 - `r.InstantRdv.Bbv.MainViewInjection` / `r.InstantRdv.Bbv.MainViewRemoval` で各BBV更新フェーズを個別に切り替え可能
 - `r.InstantRdv.Bbv.MainViewUpdate` で Injection + Removal を同時にON/OFF可能（更新停止確認用）
 - Main View の DepthBuffer を入力に BBV更新（Begin / BeginView / Injection / FrustumCull / Carving / BrickCountAggregate）を実行
-- `r.InstantRdv.Bbv.DebugMode` で BBVデバッグ可視化（0:OFF, 1:レントゲン, 2:Brickレイトレ, 3:Voxelレイトレ）
+- `r.InstantRdv.Bbv.DebugMode` で BBV/FSPデバッグ可視化（0:OFF, 1:レントゲン, 2:Brickレイトレ, 3:Voxelレイトレ, 5-14:FSP ActiveProbe / IrradianceVolume）
+- FSP は InstantRDV 参照実装の ActiveProbe lifecycle（visible surface収集、probe pool/free stack、ray request/trace/resolve、OctMap、SH更新、IrradianceVolume伝播）をUE RDG passへ移植中
 - 既存パイプラインへの影響を最小化した初期実装
 
 ## 初期パラメータ（native InstantRdv 準拠 + UE単位換算）

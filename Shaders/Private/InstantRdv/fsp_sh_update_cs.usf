@@ -1,26 +1,68 @@
-// FSP: Packed SH update (簡易化)
-// 入力: 各ProbeのRadiance(encode as uint4 in RWFspProbeRadiance)
-// 出力: Packed SH (RWStructuredBuffer<float4>) を Probe 単位で kPackedSHFloat4Count 分格納する
+// FSP: ActiveProbe OctMap -> IrradianceVolume SH update。
+// 参照InstantRDVと同じく、ActiveProbeの6x6 oct atlasをL1 SHへ積分し、owner cellのdense SHへ格納する。
+// SHの各係数は float4(sky visibility, radiance.r, radiance.g, radiance.b) を保持する。
 
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
 
-StructuredBuffer<uint4> FspProbeRadiance; // per-probe encoded as uint4(asuint(float4(r,g,b,a)))
-RWStructuredBuffer<float4> RWFspPackedSH; // per-probe packed SH: [probeIndex * k + 0 .. k-1]
+StructuredBuffer<uint> FspActiveProbeListCurr;
+StructuredBuffer<uint> FspProbePool;
+StructuredBuffer<uint4> FspProbeAtlas;
+RWStructuredBuffer<float4> RWFspPackedSH;
+
+uint FspProbePoolElementCount;
 
 [numthreads(64,1,1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    uint probeIdx = DispatchThreadId.x;
-    // 呼び出し側でプローブ数に合わせて Dispatch グループを計算すること
+    const uint ActiveIndex = DispatchThreadId.x;
+    const uint ActiveProbeCount = min(FspActiveProbeListCurr[0], FspProbePoolElementCount);
+    if (ActiveIndex >= ActiveProbeCount)
+    {
+        return;
+    }
 
-    uint4 enc = FspProbeRadiance[probeIdx];
-    float4 rgb = asfloat(enc);
+    const uint ProbeIndex = FspActiveProbeListCurr[ActiveIndex + 1u];
+    if (ProbeIndex >= FspProbePoolElementCount)
+    {
+        return;
+    }
 
-    // 簡易: L0 にそのまま radiance を入れ、他係数は 0 とする
-    RWFspPackedSH[probeIdx * 4u + 0u] = rgb; // L0
-    RWFspPackedSH[probeIdx * 4u + 1u] = float4(0,0,0,0);
-    RWFspPackedSH[probeIdx * 4u + 2u] = float4(0,0,0,0);
-    RWFspPackedSH[probeIdx * 4u + 3u] = float4(0,0,0,0);
+    const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+    if (Data.OwnerCellIndex == k_irdv_fsp_invalid_probe_index || Data.OwnerCellIndex >= FspTotalCellCount())
+    {
+        return;
+    }
+
+    float4 Coeff0 = 0.0.xxxx;
+    float4 Coeff1 = 0.0.xxxx;
+    float4 Coeff2 = 0.0.xxxx;
+    float4 Coeff3 = 0.0.xxxx;
+
+    [unroll]
+    for (uint Oy = 0u; Oy < k_irdv_fsp_probe_octmap_width; ++Oy)
+    {
+        [unroll]
+        for (uint Ox = 0u; Ox < k_irdv_fsp_probe_octmap_width; ++Ox)
+        {
+            const float4 ProbeValue = asfloat(FspProbeAtlas[FspProbeAtlasAddress(ProbeIndex, uint2(Ox, Oy))]);
+            // Atlasは resolve passで float4(radiance.rgb, sky visibility) として保存しているため、
+            // SH側では参照実装のpayload順に合わせて sky を先頭componentへ移す。
+            const float4 PackedSample = float4(ProbeValue.a, ProbeValue.rgb);
+            const float2 OctUv = (float2(Ox, Oy) + 0.5.xx) / float(k_irdv_fsp_probe_octmap_width);
+            const float4 Basis = FspEvaluateL1ShBasis(FspOctDecode(OctUv));
+            Coeff0 += PackedSample * Basis.x;
+            Coeff1 += PackedSample * Basis.y;
+            Coeff2 += PackedSample * Basis.z;
+            Coeff3 += PackedSample * Basis.w;
+        }
+    }
+
+    const float SolidAngle = (4.0 * 3.14159265359) / float(kFspRayCountPerProbe);
+    // Dense IrradianceVolumeはcell indexで直接引ける。ActiveProbeが存在するcellはここで最新SHを上書きする。
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 0u)] = Coeff0 * SolidAngle;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 1u)] = Coeff1 * SolidAngle;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 2u)] = Coeff2 * SolidAngle;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 3u)] = Coeff3 * SolidAngle;
 }

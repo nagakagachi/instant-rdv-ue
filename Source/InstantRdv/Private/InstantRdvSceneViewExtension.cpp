@@ -32,7 +32,10 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvDebugMode(
     TEXT("1: XY fine-voxel Z-count map (no raytrace)\n")
     TEXT("2: Brick raytrace debug\n")
     TEXT("3: Voxel raytrace debug\n")
-    TEXT("4: Voxel radiance debug"),
+    TEXT("4: Voxel radiance debug\n")
+    TEXT("5-14: FSP probe debug modes 0-9\n")
+    TEXT("       FSP 5: active/liveness, 9-10: active OctMap, 11-14: SH/IrradianceVolume\n")
+    TEXT("       FSP modes also draw counters at top-left: cyan=visible cells, green=active probes, yellow=ray requests, orange=ray results, purple=free probes"),
     ECVF_RenderThreadSafe);
 
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewInjection(
@@ -86,7 +89,7 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceResolve(
 static TAutoConsoleVariable<int32> CVarInstantRdvFspUpdate(
     TEXT("r.InstantRdv.Fsp.Update"),
     1,
-    TEXT("Frustum Space Probe(FSP) 初期更新の有効化。\n")
+    TEXT("Frustum Space Probe(FSP) lifecycle / ray trace / SH update の有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled after BBV Radiance Resolve"),
     ECVF_RenderThreadSafe);

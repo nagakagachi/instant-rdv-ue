@@ -1,0 +1,155 @@
+#include "/Engine/Public/Platform.ush"
+
+// FSP debug counter overlay。
+// GPU counterをCPU readbackせず画面に出すため、数値部分だけ簡易7セグメントで描く。
+// ラベルはC++側のAddDrawCanvasPassでUE標準文字列として描画する。
+
+StructuredBuffer<uint> FspVisibleSurfaceList;
+StructuredBuffer<uint> FspActiveProbeListCurr;
+StructuredBuffer<uint> FspProbeRayRequestBuffer;
+StructuredBuffer<uint> FspProbeRayResultBuffer;
+StructuredBuffer<uint> FspProbeFreeStack;
+
+uint ViewRectSizeX;
+uint ViewRectSizeY;
+uint FspProbePoolElementCount;
+
+struct VsOutput
+{
+    float4 UVAndScreenPos : TEXCOORD0;
+    float4 OutPosition : SV_POSITION;
+};
+
+bool DigitSegment(uint Digit, uint Segment)
+{
+    const uint Masks[10] =
+    {
+        0x3Fu, // 0
+        0x06u, // 1
+        0x5Bu, // 2
+        0x4Fu, // 3
+        0x66u, // 4
+        0x6Du, // 5
+        0x7Du, // 6
+        0x07u, // 7
+        0x7Fu, // 8
+        0x6Fu  // 9
+    };
+    return (Masks[min(Digit, 9u)] & (1u << Segment)) != 0u;
+}
+
+bool DrawDigit(float2 PixelInDigit, uint Digit)
+{
+    const float2 P = PixelInDigit;
+    const float Thickness = 2.0;
+    bool bOn = false;
+    bOn = bOn || (DigitSegment(Digit, 0u) && P.y < Thickness && P.x >= Thickness && P.x <= 10.0 - Thickness);
+    bOn = bOn || (DigitSegment(Digit, 1u) && P.x > 10.0 - Thickness && P.y >= Thickness && P.y <= 10.0 - Thickness);
+    bOn = bOn || (DigitSegment(Digit, 2u) && P.x > 10.0 - Thickness && P.y >= 10.0 + Thickness && P.y <= 20.0 - Thickness);
+    bOn = bOn || (DigitSegment(Digit, 3u) && P.y > 20.0 - Thickness && P.x >= Thickness && P.x <= 10.0 - Thickness);
+    bOn = bOn || (DigitSegment(Digit, 4u) && P.x < Thickness && P.y >= 10.0 + Thickness && P.y <= 20.0 - Thickness);
+    bOn = bOn || (DigitSegment(Digit, 5u) && P.x < Thickness && P.y >= Thickness && P.y <= 10.0 - Thickness);
+    bOn = bOn || (DigitSegment(Digit, 6u) && abs(P.y - 10.0) < Thickness && P.x >= Thickness && P.x <= 10.0 - Thickness);
+    return bOn;
+}
+
+uint Pow10(uint Exp)
+{
+    uint Result = 1u;
+    [unroll]
+    for (uint I = 0u; I < 10u; ++I)
+    {
+        if (I >= Exp)
+        {
+            break;
+        }
+        Result *= 10u;
+    }
+    return Result;
+}
+
+bool DrawUInt(float2 Pixel, uint Value, uint MaxDigits)
+{
+    const float DigitWidth = 12.0;
+    const float DigitHeight = 22.0;
+    if (Pixel.y < 0.0 || Pixel.y >= DigitHeight || Pixel.x < 0.0 || Pixel.x >= DigitWidth * MaxDigits)
+    {
+        return false;
+    }
+
+    const uint DigitIndex = uint(Pixel.x / DigitWidth);
+    const uint Divisor = Pow10(MaxDigits - 1u - DigitIndex);
+    const uint Digit = (Value / Divisor) % 10u;
+    return DrawDigit(float2(fmod(Pixel.x, DigitWidth), Pixel.y), Digit);
+}
+
+uint GetCounterValue(uint Row)
+{
+    if (Row == 0u)
+    {
+        return min(FspVisibleSurfaceList[0], FspProbePoolElementCount);
+    }
+    if (Row == 1u)
+    {
+        return min(FspActiveProbeListCurr[0], FspProbePoolElementCount);
+    }
+    if (Row == 2u)
+    {
+        return min(FspProbeRayRequestBuffer[0], FspProbePoolElementCount * 36u);
+    }
+    if (Row == 3u)
+    {
+        return min(FspProbeRayResultBuffer[0], FspProbePoolElementCount * 36u);
+    }
+    return min(FspProbeFreeStack[0], FspProbePoolElementCount);
+}
+
+float3 GetCounterColor(uint Row)
+{
+    if (Row == 0u)
+    {
+        return float3(0.2, 0.8, 1.0);
+    }
+    if (Row == 1u)
+    {
+        return float3(0.2, 1.0, 0.3);
+    }
+    if (Row == 2u)
+    {
+        return float3(1.0, 0.8, 0.2);
+    }
+    if (Row == 3u)
+    {
+        return float3(1.0, 0.4, 0.2);
+    }
+    return float3(0.8, 0.5, 1.0);
+}
+
+float4 MainPS(VsOutput Input) : SV_Target0
+{
+    const float2 Pixel = Input.UVAndScreenPos.xy * float2(ViewRectSizeX, ViewRectSizeY);
+    const float2 Origin = float2(12.0, 12.0);
+    const float RowHeight = 26.0;
+    const float ValueX = 156.0;
+
+    [unroll]
+    for (uint Row = 0u; Row < 5u; ++Row)
+    {
+        const float2 RowPixel = Pixel - Origin - float2(0.0, RowHeight * Row);
+        const float3 RowColor = GetCounterColor(Row);
+        if (RowPixel.y >= 0.0 && RowPixel.y < 22.0)
+        {
+            if (RowPixel.x >= 0.0 && RowPixel.x < 10.0 && RowPixel.y >= 6.0 && RowPixel.y < 16.0)
+            {
+                return float4(RowColor, 1.0);
+            }
+            if (DrawUInt(RowPixel - float2(ValueX, 0.0), GetCounterValue(Row), 7u))
+            {
+                return float4(RowColor, 1.0);
+            }
+        }
+    }
+
+    discard;
+    return float4(0.0, 0.0, 0.0, 0.0);
+}
