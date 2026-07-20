@@ -2,6 +2,7 @@
 
 // フレーム末尾でCurr ActiveProbe listをPrevへコピーする。
 // 次フレームのBeginUpdateはPrevを入力にして、stale/toroidal invalidationを行いながら新しいCurrを作る。
+// TODO. Curr-PrevをPingPong形式で入れ替えればここのコピーは不要になるはず.
 
 StructuredBuffer<uint> FspActiveProbeListCurr;
 RWStructuredBuffer<uint> RWFspActiveProbeListPrev;

@@ -5,7 +5,6 @@
 
 #include "../../../Shaders/Private/InstantRdv/instant_rdv_common.ush"
 
-#include "InstantRdvFsp.h"
 
 class FRDGBuilder;
 class FRDGTexture;

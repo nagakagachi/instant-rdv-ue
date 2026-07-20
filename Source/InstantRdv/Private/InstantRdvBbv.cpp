@@ -322,35 +322,6 @@ public:
     END_SHADER_PARAMETER_STRUCT()
 };
 
-// 以下のFSP shader群は、参照InstantRDVのActiveProbe pipelineをRDG passへ分割している。
-// ScreenSpaceCollect -> BeginUpdate -> PreUpdate -> RayRequest -> RayTrace -> RayResolve -> SHUpdate -> Propagate -> ActiveListCopy
-// の順に実行し、counter bufferから作るindirect dispatchでActiveProbe由来の作業だけを走らせる。
-class FInstantRdvFspRadianceUpdateCS final : public FGlobalShader
-{
-public:
-    DECLARE_GLOBAL_SHADER(FInstantRdvFspRadianceUpdateCS);
-    SHADER_USE_PARAMETER_STRUCT(FInstantRdvFspRadianceUpdateCS, FGlobalShader);
-
-    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-        SHADER_PARAMETER(uint32, FspGridResolutionX)
-        SHADER_PARAMETER(uint32, FspGridResolutionY)
-        SHADER_PARAMETER(uint32, FspGridResolutionZ)
-        SHADER_PARAMETER(uint32, FspCellDataU32Count)
-        SHADER_PARAMETER(uint32, FspVisibleSurfaceListCapacity)
-        SHADER_PARAMETER(uint32, BbvGridResolutionX)
-        SHADER_PARAMETER(uint32, BbvGridResolutionY)
-        SHADER_PARAMETER(uint32, BbvGridResolutionZ)
-        SHADER_PARAMETER(FVector3f, FspGridMinPositionWs)
-        SHADER_PARAMETER(float, FspCellSizeCm)
-        SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
-        SHADER_PARAMETER(float, BbvCellSizeCm)
-        SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvOptionalData)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspCellData)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceList)
-    END_SHADER_PARAMETER_STRUCT()
-};
-
 class FInstantRdvFspInitPoolCS final : public FGlobalShader
 {
 public:
@@ -673,6 +644,7 @@ END_SHADER_PARAMETER_STRUCT()
 
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBeginUpdateCS, "/InstantRdvShaders/Private/InstantRdv/bbv_begin_update_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBeginViewUpdateCS, "/InstantRdvShaders/Private/InstantRdv/bbv_begin_view_update_cs.usf", "MainCS", SF_Compute);
+
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthInjectionCS, "/InstantRdvShaders/Private/InstantRdv/bbv_depthtest_injection_apply_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthFrustumCullCS, "/InstantRdvShaders/Private/InstantRdv/bbv_depthtest_frustum_cull_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthCarvingIndirectArgBuildCS, "/InstantRdvShaders/Private/InstantRdv/bbv_depthtest_carving_indirect_arg_build_cs.usf", "MainCS", SF_Compute);
@@ -682,8 +654,8 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBrickCountAggregateCS, "/InstantRdvShaders
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvElementUpdateCS, "/InstantRdvShaders/Private/InstantRdv/bbv_element_update_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvRadianceInjectionCS, "/InstantRdvShaders/Private/InstantRdv/bbv_radiance_injection_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvRadianceResolveCS, "/InstantRdvShaders/Private/InstantRdv/bbv_radiance_resolve_cs.usf", "MainCS", SF_Compute);
+
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspScreenSpaceCollectCS, "/InstantRdvShaders/Private/InstantRdv/fsp_screen_space_collect_cs.usf", "MainCS", SF_Compute);
-IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspRadianceUpdateCS, "/InstantRdvShaders/Private/InstantRdv/fsp_radiance_update_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspInitPoolCS, "/InstantRdvShaders/Private/InstantRdv/fsp_init_pool_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspCounterIndirectArgBuildCS, "/InstantRdvShaders/Private/InstantRdv/fsp_counter_indirect_arg_build_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspBeginUpdateCS, "/InstantRdvShaders/Private/InstantRdv/fsp_begin_update_cs.usf", "MainCS", SF_Compute);
@@ -694,6 +666,7 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeRayResolveCS, "/InstantRdvShaders/Pri
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspShUpdateCS, "/InstantRdvShaders/Private/InstantRdv/fsp_sh_update_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspIrradianceVolumePropagateCS, "/InstantRdvShaders/Private/InstantRdv/fsp_irradiance_volume_propagate_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspActiveListCopyCS, "/InstantRdvShaders/Private/InstantRdv/fsp_active_list_copy_cs.usf", "MainCS", SF_Compute);
+
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDebugVisualizePS, "/InstantRdvShaders/Private/InstantRdv/bbv_debug_visualize_ps.usf", "MainPS", SF_Pixel);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardVS, "/InstantRdvShaders/Private/InstantRdv/fsp_probe_billboard.usf", "MainVS", SF_Vertex);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardPS, "/InstantRdvShaders/Private/InstantRdv/fsp_probe_billboard.usf", "MainPS", SF_Pixel);
