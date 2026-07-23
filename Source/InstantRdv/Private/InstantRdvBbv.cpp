@@ -375,6 +375,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayRequestBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayResultBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspIrradianceVolumeSH)
+        RDG_BUFFER_ACCESS(FspPrevActiveProbeIndirectArgBuffer, ERHIAccess::IndirectArgs)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -511,19 +512,6 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspCellProbeIndex)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspPackedSH)
-    END_SHADER_PARAMETER_STRUCT()
-};
-
-class FInstantRdvFspActiveListCopyCS final : public FGlobalShader
-{
-public:
-    DECLARE_GLOBAL_SHADER(FInstantRdvFspActiveListCopyCS);
-    SHADER_USE_PARAMETER_STRUCT(FInstantRdvFspActiveListCopyCS, FGlobalShader);
-
-    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-        SHADER_PARAMETER(uint32, FspProbePoolElementCount)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspActiveProbeListCurr)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspActiveProbeListPrev)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -665,8 +653,6 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeRayTraceCS, "/InstantRdvShaders/Priva
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeRayResolveCS, "/InstantRdvShaders/Private/InstantRdv/fsp_probe_ray_resolve_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspShUpdateCS, "/InstantRdvShaders/Private/InstantRdv/fsp_sh_update_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspIrradianceVolumePropagateCS, "/InstantRdvShaders/Private/InstantRdv/fsp_irradiance_volume_propagate_cs.usf", "MainCS", SF_Compute);
-IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspActiveListCopyCS, "/InstantRdvShaders/Private/InstantRdv/fsp_active_list_copy_cs.usf", "MainCS", SF_Compute);
-
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDebugVisualizePS, "/InstantRdvShaders/Private/InstantRdv/bbv_debug_visualize_ps.usf", "MainPS", SF_Pixel);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardVS, "/InstantRdvShaders/Private/InstantRdv/fsp_probe_billboard.usf", "MainVS", SF_Vertex);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardPS, "/InstantRdvShaders/Private/InstantRdv/fsp_probe_billboard.usf", "MainPS", SF_Pixel);
@@ -802,8 +788,10 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1), TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
             SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount * kFspProbePoolDataU32Count), TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
             SystemState.fsp.FspProbeFreeStackBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.fsp.FspProbeFreeStackBuffer"));
-            SystemState.fsp.FspActiveProbeListPrevBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeListPrev"));
-            SystemState.fsp.FspActiveProbeListCurrBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeListCurr"));
+            // 参照InstantRDVと同じくActiveProbeListは2本だけ確保し、毎フレームcurr/prev indexを入れ替える。
+            // 固定Prev/Currへ末尾コピーすると不要な全ActiveProbeコピーpassが発生するため避ける。
+            SystemState.fsp.FspActiveProbeListBuffers[0].Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeList0"));
+            SystemState.fsp.FspActiveProbeListBuffers[1].Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeList1"));
             SystemState.fsp.FspProbeAtlasBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32) * 4, FspRayWorkCount), TEXT("InstantRdv.fsp.FspProbeAtlasBuffer"));
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount + 1u), TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount * kFspRayResultStride + 1u), TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
@@ -816,8 +804,8 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle), 0u);
-            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListPrevBuffer.Handle), 0u);
-            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListBuffers[0].Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListBuffers[1].Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeAtlasBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle), 0u);
@@ -829,8 +817,8 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle, &SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbePoolBuffer.Handle, &SystemState.fsp.FspProbePoolBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeFreeStackBuffer.Handle, &SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer);
-            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListPrevBuffer.Handle, &SystemState.fsp.FspActiveProbeListPrevBuffer.PooledBuffer);
-            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle, &SystemState.fsp.FspActiveProbeListCurrBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListBuffers[0].Handle, &SystemState.fsp.FspActiveProbeListBuffers[0].PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListBuffers[1].Handle, &SystemState.fsp.FspActiveProbeListBuffers[1].PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeAtlasBuffer.Handle, &SystemState.fsp.FspProbeAtlasBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayRequestBuffer.Handle, &SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayResultBuffer.Handle, &SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer);
@@ -860,8 +848,8 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
             SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbePoolBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
             SystemState.fsp.FspProbeFreeStackBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeFreeStackBuffer"));
-            SystemState.fsp.FspActiveProbeListPrevBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListPrevBuffer.PooledBuffer, TEXT("InstantRdv.FspActiveProbeListPrev"));
-            SystemState.fsp.FspActiveProbeListCurrBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListCurrBuffer.PooledBuffer, TEXT("InstantRdv.FspActiveProbeListCurr"));
+            SystemState.fsp.FspActiveProbeListBuffers[0].Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListBuffers[0].PooledBuffer, TEXT("InstantRdv.FspActiveProbeList0"));
+            SystemState.fsp.FspActiveProbeListBuffers[1].Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListBuffers[1].PooledBuffer, TEXT("InstantRdv.FspActiveProbeList1"));
             SystemState.fsp.FspProbeAtlasBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeAtlasBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeAtlasBuffer"));
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
@@ -1180,6 +1168,12 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     const uint32 FspCascadeCount = FMath::Max(Config.fsp.ProbeCascadeCount, 1u);
     const FVector3f FspGridCenterPositionWs(View.ViewLocation);
     const FVector3f FspPrevGridCenterPositionWs(SystemState.FrameCount == 0 ? View.ViewLocation : SystemState.fsp.PreviousGridCenterPositionWs);
+    // 参照InstantRDVと同じActiveProbeList double buffering。
+    // frame_count & 1 をCurr、反対側をPrevにして、フレーム末尾のCurr->Prev全コピーを不要にする。
+    const uint32 FspActiveProbeCurrListIndex = SystemState.FrameCount & 1u;
+    const uint32 FspActiveProbePrevListIndex = 1u - FspActiveProbeCurrListIndex;
+    FRDGBufferRef FspActiveProbeListCurrBuffer = SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbeCurrListIndex].Handle;
+    FRDGBufferRef FspActiveProbeListPrevBuffer = SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbePrevListIndex].Handle;
     // FSPの主要passは [0]=count のlist bufferを入力にする。
     // countからDispatchIndirect引数を毎回GPU上で作り、全cell/全rayをdispatchしない参照設計を保つ。
     auto AddFspCounterIndirectArgBuildPass =
@@ -1221,9 +1215,14 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     // LastSeenFrameが更新されないため、静止カメラでもActiveProbeがstaleで消える。
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellDataBuffer.Handle), 0u);
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle), 0u);
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle), 0u);
+
+    FRDGBufferRef FspPrevActiveProbeIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
+        TEXT("InstantRdv.FspPrevActiveProbeIndirectArg"),
+        FspActiveProbeListPrevBuffer,
+        kFspProbeUpdateThreadGroupSize);
 
     {
         // Prev ActiveProbe listを検査し、生存probeだけCurrへ引き継ぐ。
@@ -1238,8 +1237,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspPrevGridCenterPositionWs = FspPrevGridCenterPositionWs;
-        Parameters->FspActiveProbeListPrev = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListPrevBuffer.Handle);
-        Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle);
+        Parameters->FspActiveProbeListPrev = GraphBuilder.CreateSRV(FspActiveProbeListPrevBuffer);
+        Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);
         Parameters->RWFspCellProbeIndex = GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
         Parameters->RWFspProbePool = GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle);
@@ -1247,8 +1246,9 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->RWFspProbeRayRequestBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle);
         Parameters->RWFspProbeRayResultBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle);
         Parameters->RWFspIrradianceVolumeSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
+        Parameters->FspPrevActiveProbeIndirectArgBuffer = FspPrevActiveProbeIndirectArgBuffer;
         TShaderMapRef<FInstantRdvFspBeginUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspBeginUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(FMath::DivideAndRoundUp(FspCellCount, 64u), 1, 1));
+        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspBeginUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FspPrevActiveProbeIndirectArgBuffer, 0);
     }
 
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
@@ -1299,7 +1299,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
         Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
-        Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle);
+        Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);
         Parameters->RWFspCellProbeIndex = GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
         Parameters->RWFspProbePool = GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle);
@@ -1311,7 +1311,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
 
     FRDGBufferRef FspActiveProbeIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
         TEXT("InstantRdv.FspActiveProbeIndirectArg"),
-        SystemState.fsp.FspActiveProbeListCurrBuffer.Handle,
+        FspActiveProbeListCurrBuffer,
         kFspProbeUpdateThreadGroupSize);
 
     {
@@ -1319,7 +1319,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         // 以降のtrace/resolveはrequest/result counterで間接dispatchする。
         FInstantRdvFspProbeRayRequestCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspProbeRayRequestCS::FParameters>();
         Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle);
+        Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeRayRequestBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle);
         Parameters->FspActiveProbeIndirectArgBuffer = FspActiveProbeIndirectArgBuffer;
         TShaderMapRef<FInstantRdvFspProbeRayRequestCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
@@ -1393,7 +1393,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspProbePoolElementCount = FspCellCount;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
-        Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle);
+        Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(FspActiveProbeListCurrBuffer);
         Parameters->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
         Parameters->FspProbeAtlas = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeAtlasBuffer.Handle);
         Parameters->RWFspPackedSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
@@ -1418,16 +1418,6 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->RWFspPackedSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
         TShaderMapRef<FInstantRdvFspIrradianceVolumePropagateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspIrradianceVolumePropagate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(FMath::DivideAndRoundUp(FspCellCount, 64u), 1, 1));
-    }
-
-    {
-        // Curr listを次フレームのBeginUpdate入力としてPrevへ保存する。
-        FInstantRdvFspActiveListCopyCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspActiveListCopyCS::FParameters>();
-        Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle);
-        Parameters->RWFspActiveProbeListPrev = GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListPrevBuffer.Handle);
-        TShaderMapRef<FInstantRdvFspActiveListCopyCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspActiveListCopy"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(FMath::DivideAndRoundUp(FspCellCount, 64u), 1, 1));
     }
 
     // 次フレームのtoroidal invalidationで「前回のgrid center」として使う。
@@ -1608,8 +1598,9 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
             Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
             Parameters->FspProbePoolElementCount = ProbeCount;
+            const uint32 FspActiveProbeCurrListIndex = SystemState.FrameCount & 1u;
             Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
-            Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListCurrBuffer.Handle);
+            Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbeCurrListIndex].Handle);
             Parameters->FspProbeRayRequestBuffer = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeRayRequestBuffer.Handle);
             Parameters->FspProbeRayResultBuffer = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeRayResultBuffer.Handle);
             Parameters->FspProbeFreeStack = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);

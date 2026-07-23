@@ -168,11 +168,10 @@ private:
             FPersistentRdgPooledBufferSet FspCellProbeIndexBuffer;
             FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
             // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
-            // ActiveProbeListPrevをBeginUpdateの入力、ActiveProbeListCurrを当フレームのray/SH更新入力として使う。
+            // ActiveProbeListは参照InstantRDVと同じダブルバッファで、FrameCount & 1 をCurr、反対側をPrevとして使う。
             FPersistentRdgPooledBufferSet FspProbePoolBuffer;
             FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
-            FPersistentRdgPooledBufferSet FspActiveProbeListPrevBuffer;
-            FPersistentRdgPooledBufferSet FspActiveProbeListCurrBuffer;
+            FPersistentRdgPooledBufferSet FspActiveProbeListBuffers[2];
             // ProbeAtlasはActiveProbeごとの6x6 OctMap、PackedSHはdense IrradianceVolume cellごとのL1 SH。
             FPersistentRdgPooledBufferSet FspProbeAtlasBuffer;
             FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
