@@ -8,8 +8,6 @@
 
 namespace
 {
-DEFINE_LOG_CATEGORY_STATIC(LogInstantRdv, Log, All);
-
 static TAutoConsoleVariable<int32> CVarInstantRdvEnable(
     TEXT("r.InstantRdv.GI"),
     1,
@@ -94,14 +92,6 @@ static TAutoConsoleVariable<int32> CVarInstantRdvFspUpdate(
     TEXT("Frustum Space Probe(FSP) lifecycle / ray trace / SH update の有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled after BBV Radiance Resolve"),
-    ECVF_RenderThreadSafe);
-
-static TAutoConsoleVariable<int32> CVarInstantRdvViewFamilyDiagnostics(
-    TEXT("r.InstantRdv.ViewFamily.Diagnostics"),
-    0,
-    TEXT("Log Instant-RDV ViewFamily owner selection on the render thread.\n")
-    TEXT("0: Disabled\n")
-    TEXT("1: Log accepted/skipped ViewFamily decisions"),
     ECVF_RenderThreadSafe);
 
 static FRDGTextureRef GetViewSceneDepthTexture_RenderThread(const FSceneView& View)
@@ -218,31 +208,6 @@ bool FInstantRdvSceneViewExtension::IsRdvFamilyAlreadyUpdated_RenderThread(const
         LastRdvUpdateFrameNumber_RenderThread == ViewFamily.FrameNumber;
 }
 
-void FInstantRdvSceneViewExtension::LogRdvViewFamilyDecision_RenderThread(const TCHAR* Reason, const FSceneViewFamily& ViewFamily, const FSceneView* View) const
-{
-    if (CVarInstantRdvViewFamilyDiagnostics.GetValueOnRenderThread() == 0)
-    {
-        return;
-    }
-
-    UE_LOG(
-        LogInstantRdv,
-        Log,
-        TEXT("RDV ViewFamily %s Family=%p Scene=%p FrameCounter=%llu FrameNumber=%u Views=%d View=%p ViewState=%p Game=%d Capture=%d Reflection=%d Planar=%d"),
-        Reason,
-        &ViewFamily,
-        ViewFamily.Scene,
-        ViewFamily.FrameCounter,
-        ViewFamily.FrameNumber,
-        ViewFamily.Views.Num(),
-        View,
-        View ? View->State : nullptr,
-        View ? static_cast<int32>(View->bIsGameView) : 0,
-        View ? static_cast<int32>(View->bIsSceneCapture) : 0,
-        View ? static_cast<int32>(View->bIsReflectionCapture) : 0,
-        View ? static_cast<int32>(View->bIsPlanarReflection) : 0);
-}
-
 void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily)
 {
     FrameViews_RenderThread.Reset();
@@ -253,19 +218,16 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     const FSceneView* OwnerView = FindRdvUpdateView_RenderThread(InViewFamily);
     if (OwnerView == nullptr)
     {
-        LogRdvViewFamilyDecision_RenderThread(TEXT("SkipNoEligibleOwner"), InViewFamily, nullptr);
         return;
     }
 
     if (IsRdvFamilyAlreadyUpdated_RenderThread(InViewFamily))
     {
-        LogRdvViewFamilyDecision_RenderThread(TEXT("SkipAlreadyUpdatedFrame"), InViewFamily, OwnerView);
         return;
     }
 
     if (!BbvSystem.IsValid())
     {
-        LogRdvViewFamilyDecision_RenderThread(TEXT("SkipNoSystem"), InViewFamily, OwnerView);
         return;
     }
 
@@ -277,8 +239,6 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     UpdateOwnerView_RenderThread = OwnerView;
     LastRdvUpdateFrameCounter_RenderThread = InViewFamily.FrameCounter;
     LastRdvUpdateFrameNumber_RenderThread = InViewFamily.FrameNumber;
-
-    LogRdvViewFamilyDecision_RenderThread(TEXT("AcceptOwner"), InViewFamily, OwnerView);
 }
 
 void FInstantRdvSceneViewExtension::PreRenderView_RenderThread(FRDGBuilder& GraphBuilder, FSceneView& InView)

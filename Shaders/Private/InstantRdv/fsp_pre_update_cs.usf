@@ -138,7 +138,6 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float3 ToCamera = CameraPositionWs - CellCenterWs;
     const float ToCameraLenSq = dot(ToCamera, ToCamera);
     const float3 DirToCamera = (ToCameraLenSq > 1.0e-6) ? ToCamera * rsqrt(ToCameraLenSq) : float3(0.0, 0.0, 1.0);
-    const float RelocationDistance = FspCascadeCellSizeCm(CascadeIndex) * 0.45;
     Data.ProbeOffsetV3 = FspEncodeProbeOffset(DirToCamera * 0.45);
     Data.OwnerCellIndex = GlobalCellIndex;
     Data.LastSeenFrame = FrameCount;
