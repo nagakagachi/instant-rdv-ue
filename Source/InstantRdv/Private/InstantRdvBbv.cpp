@@ -431,6 +431,7 @@ public:
         SHADER_PARAMETER(uint32, FspGridResolutionZ)
         SHADER_PARAMETER(uint32, FspCascadeCount)
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
+        SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
         SHADER_PARAMETER(uint32, BbvGridResolutionY)
         SHADER_PARAMETER(uint32, BbvGridResolutionZ)
@@ -1341,6 +1342,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
+        Parameters->FrameCount = SystemState.FrameCount;
         Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
         Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
         Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);

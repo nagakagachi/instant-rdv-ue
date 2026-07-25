@@ -14,7 +14,10 @@
 
 float3 SafeInv(float3 Value)
 {
-    // 0 除算を避けるため、極小成分には十分大きい近似逆数を使う。
+    // 参照InstantRDVのcalc_safe_trace_ray_dir_inv相当。
+    // FSP OctMapのセル中心rayは +X / +Y など軸平行に近い方向を頻繁に作るため、
+    // 0除算でinfをDDAへ流さず、境界比較が安定する有限の大きい値へ置き換える。
+    // 符号はDDAのRayDirSign/RayStepで別管理するので、無効軸の逆数は正の大値でよい。
     const float3 Inv = 1.0 / Value;
     return select(abs(Value) < 1e-6, float3(1e6, 1e6, 1e6), Inv);
 }

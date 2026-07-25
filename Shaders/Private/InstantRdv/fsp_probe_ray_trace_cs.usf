@@ -11,8 +11,6 @@ StructuredBuffer<uint> FspProbePool;
 StructuredBuffer<uint> BitmaskBrickVoxel;
 StructuredBuffer<uint> BrickData;
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
-
 uint FspProbePoolElementCount;
 uint BbvGridResolutionX;
 uint BbvGridResolutionY;
@@ -21,6 +19,21 @@ float3 BbvGridMinPositionWs;
 float BbvCellSizeCm;
 float3 BbvToroidalOffsetCells;
 float FspTraceDistanceCm;
+uint FrameCount;
+
+#include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
+
+float FspHash01(uint Seed)
+{
+    // 参照実装はOctMap cell内ジッタで、低解像度OctMapの中心rayが軸/折り返し線へ固定されるのを避けている。
+    // UE側も1 cell = 1 rayの構造は維持し、cell内だけを小さく揺らしてDDAの境界固定missを防ぐ。
+    Seed ^= Seed >> 16u;
+    Seed *= 0x7feb352du;
+    Seed ^= Seed >> 15u;
+    Seed *= 0x846ca68bu;
+    Seed ^= Seed >> 16u;
+    return float(Seed & 0x00ffffffu) / 16777216.0;
+}
 
 [numthreads(128, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
@@ -47,7 +60,13 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             const float3 ProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45;
             const float3 ProbePositionWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex) + ProbeOffset;
             const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);
-            const float2 OctUv = (float2(OctCellId) + 0.5.xx) / float(k_irdv_fsp_probe_octmap_width);
+            const float2 Jitter01 = float2(
+                FspHash01(ProbeIndex * 1664525u + OctCellIndex * 1013904223u + FrameCount * 131u),
+                FspHash01(ProbeIndex * 22695477u + OctCellIndex * 1103515245u + FrameCount * 73u));
+            const float2 OctUv = clamp(
+                (float2(OctCellId) + 0.5.xx + (Jitter01 - 0.5.xx)) / float(k_irdv_fsp_probe_octmap_width),
+                1.0e-4.xx,
+                (1.0 - 1.0e-4).xx);
             const float3 RayDirWs = FspOctDecode(OctUv);
 
             // BBV側のbitmask/brick dataを参照して、最初に当たったbrickだけをresolveへ渡す。
