@@ -862,6 +862,9 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
     {
         SystemState.bbv.TrGrid.UpdateDelta(InView.ViewLocation, Config.bbv.BbvBrickSizeCm);
         SystemState.fsp.TrGrid.UpdateDelta(InView.ViewLocation, Config.fsp.ProbeCellSizeCm);
+        // FSP shader/debugのgrid centerは、RDV更新ownerとして受理されたViewの位置に固定する。
+        // Debugを別View callbackから読む場合も同じcenterを使い、表示だけがViewごとにずれないようにする。
+        SystemState.fsp.CurrentGridCenterPositionWs = InView.ViewLocation;
     }
 
 
@@ -1166,8 +1169,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
 
     const uint32 FspCellCount = Config.fsp.GetFspTotalCellCount();
     const uint32 FspCascadeCount = FMath::Max(Config.fsp.ProbeCascadeCount, 1u);
-    const FVector3f FspGridCenterPositionWs(View.ViewLocation);
-    const FVector3f FspPrevGridCenterPositionWs(SystemState.FrameCount == 0 ? View.ViewLocation : SystemState.fsp.PreviousGridCenterPositionWs);
+    const FVector3f FspGridCenterPositionWs(SystemState.fsp.CurrentGridCenterPositionWs);
+    const FVector3f FspPrevGridCenterPositionWs(SystemState.FrameCount == 0 ? SystemState.fsp.CurrentGridCenterPositionWs : SystemState.fsp.PreviousGridCenterPositionWs);
     // 参照InstantRDVと同じActiveProbeList double buffering。
     // frame_count & 1 をCurr、反対側をPrevにして、フレーム末尾のCurr->Prev全コピーを不要にする。
     const uint32 FspActiveProbeCurrListIndex = SystemState.FrameCount & 1u;
@@ -1505,7 +1508,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
         const uint32 FspDebugMode = static_cast<uint32>(DebugMode - 5);
         const uint32 ProbeCount = Config.fsp.GetFspTotalCellCount();
         const uint32 FspCascadeCount = FMath::Max(Config.fsp.ProbeCascadeCount, 1u);
-        const FVector3f FspGridCenterPositionWs(View.ViewLocation);
+        const FVector3f FspGridCenterPositionWs(SystemState.fsp.CurrentGridCenterPositionWs);
         const FMatrix InvViewMatrix = View.ViewMatrices.GetWorldToView().InverseFast();
         const FVector3f CameraRightWs(FVector(InvViewMatrix.M[0][0], InvViewMatrix.M[0][1], InvViewMatrix.M[0][2]));
         const FVector3f CameraUpWs(FVector(InvViewMatrix.M[1][0], InvViewMatrix.M[1][1], InvViewMatrix.M[1][2]));

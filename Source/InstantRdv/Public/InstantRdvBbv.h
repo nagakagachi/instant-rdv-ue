@@ -87,8 +87,10 @@ public:
     // 初期化/解放 (Editor/Device 初期化タイミングで呼ぶ)
     void Initialize();
 
-    // フレーム内Renderの最初の更新. SceneViewExtensionのPreRenderView_RenderThread等で呼ぶことを想定.
-    void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InViewFamily);
+    // RDV永続リソースをそのフレームのRDGへ接続し、参照InstantRDVのframe_count相当を1つ進める。
+    // ActiveProbeListのCurr/PrevはFrameCountで決まるため、SceneViewExtension側で選んだ代表ViewFamily/Viewにつき
+    // 1回だけ呼ぶこと。View単位callbackから複数回呼ぶとFSP lifecycleが破綻する。
+    void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InView);
 
     // BBV Geometry 更新（Injection / Removal）本体。
     void ExecuteGeometryUpdate(
@@ -156,6 +158,7 @@ private:
             FToroidalGrid TrGrid{};
             // FSPは参照InstantRDVと同じくtoroidal grid移動量で古いphysical slotを無効化する。
             // 前フレームのgrid centerを保持し、BeginUpdate shaderへ渡してslotの押し出し判定に使う。
+            FVector CurrentGridCenterPositionWs = FVector::ZeroVector;
             FVector PreviousGridCenterPositionWs = FVector::ZeroVector;
 
             // FspCellDataBuffer:
