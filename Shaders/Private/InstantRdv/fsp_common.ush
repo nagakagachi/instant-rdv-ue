@@ -6,9 +6,7 @@
 // InstantRDV参照実装のFSPは「論理グリッド座標」と「物理(toroidal)格納座標」を分ける。
 // Buffer上のcell indexは物理座標ベースで安定させ、カメラ移動時はtoroidal offsetだけを進めることで
 // Probeがカメラに完全追従せず、ワールドにアラインした配置を維持する。
-static const uint kFspProbePoolDataU32Count = 8u;
 static const uint kFspRayCountPerProbe = k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width;
-static const uint kFspRayResultStride = 2u;
 static const uint kFspRayRequestOctCellBits = 8u;
 static const uint kFspRayRequestOctCellMask = (1u << kFspRayRequestOctCellBits) - 1u;
 
@@ -226,7 +224,7 @@ uint FspGetSurfaceOwnerCells(float3 WorldPos, out uint2 OutGlobalCellIndices)
 
 uint FspProbePoolDataAddress(uint ProbeIndex, uint WordIndex)
 {
-    return ProbeIndex * kFspProbePoolDataU32Count + WordIndex;
+	return ProbeIndex * k_irdv_fsp_probe_pool_data_u32_count + WordIndex;
 }
 
 FInstantRdvFspProbePoolData FspLoadProbePoolData(StructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex)

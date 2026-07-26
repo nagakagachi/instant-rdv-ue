@@ -60,7 +60,7 @@ bool IntersectAabb(
     return true;
 }
 
-bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint OutBitIndex)
+bool IsFineVoxelOccupiedInBrick(StructuredBuffer<uint> BbvBuffer, uint BrickIndex, int3 LocalFineCoord, out uint OutBitIndex)
 {
     // Brick 内ローカル座標を bit index に変換し、該当ビットの占有状態を返す。
     OutBitIndex = 0u;
@@ -74,7 +74,7 @@ bool IsFineVoxelOccupiedInBrick(uint BrickIndex, int3 LocalFineCoord, out uint O
     OutBitIndex = CalcFineBitIndex(FineCoord);
 	const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (OutBitIndex / 32u);
     const uint WordMask = 1u << (OutBitIndex & 31u);
-    return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
+	return (BbvBuffer[WordIndex] & WordMask) != 0u;
 }
 
 float CalcTraceSampleT(float CurrT, float EndT)
@@ -102,6 +102,7 @@ float3 CalcTraceGridNextBoundaryT(float3 RayOrigin, float3 RayDirInv, float3 Ray
 }
 
 int3 TraceBitmaskBrickReference(
+    StructuredBuffer<uint> BbvBuffer,
     float3 RayPos,
     float3 RayDir,
     float3 RayDirSign,
@@ -121,7 +122,7 @@ int3 TraceBitmaskBrickReference(
     while (all(MapPos >= TraceCoordMin) && all(MapPos < TraceCoordMax))
     {
         uint FineBitIndex = 0u;
-        if (IsFineVoxelOccupiedInBrick(BrickIndex, MapPos, FineBitIndex))
+		if (IsFineVoxelOccupiedInBrick(BbvBuffer, BrickIndex, MapPos, FineBitIndex))
         {
             return MapPos;
         }
@@ -139,6 +140,8 @@ int3 TraceBitmaskBrickReference(
 // - IsBrickMode=true  : 最初に占有された Brick（8x8x8 Voxel）で停止。
 // - IsBrickMode=false : Brick 内の bitmask 追跡へ進み、Fine Voxel ヒットまで探索。
 bool TraceBbvRayReference(
+    StructuredBuffer<uint> BbvBuffer,
+    StructuredBuffer<uint> BbvDataBuffer,
     float3 RayOriginWs,
     float3 RayDirWs,
     float MaxDistanceCm,
@@ -218,7 +221,7 @@ bool TraceBbvRayReference(
         // 論理座標をトロイダル物理座標へ写像して実データへアクセスする。
         const uint3 PhysicalCoord = LogicalToPhysicalGridCoord(MapPos, ToroidalOffset, GridResolution);
         const uint BrickIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
-        const bool bBrickOccupied = (BrickData[BrickIndex * 4u + 0u] != 0u);
+		const bool bBrickOccupied = (BbvDataBuffer[BrickIndex * 4u + 0u] != 0u);
         if (bBrickOccupied)
         {
             if (IsBrickMode)
@@ -238,6 +241,7 @@ bool TraceBbvRayReference(
             bool3 DetailStepMask = bool3(false, false, false);
             const int FineRes = int(k_irdv_bbv_brick_reso);
             const int3 SubMapPos = TraceBitmaskBrickReference(
+                BbvBuffer,
                 PosInBrick,
                 RayDir,
                 RayDirSign,

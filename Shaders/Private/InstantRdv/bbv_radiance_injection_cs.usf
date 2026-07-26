@@ -28,13 +28,12 @@ float3 CameraPositionWs;
 float4x4 InvViewProjectionMatrix;
 
 
-static const uint kRadianceAccumComponentCount = 4u;
 static const float kRadianceFixedPointScale = 256.0;
 static const float kRadianceInputClamp = 4096.0;
 
 uint RadianceAccumAddress(uint BrickIndex, uint Component)
 {
-    return BrickIndex * kRadianceAccumComponentCount + Component;
+	return BrickIndex * k_irdv_bbv_radiance_accum_component_count + Component;
 }
 
 float3 ReconstructWorldPosFromUv(float2 Uv, float DeviceDepth)

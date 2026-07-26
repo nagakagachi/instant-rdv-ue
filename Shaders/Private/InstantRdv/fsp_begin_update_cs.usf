@@ -10,7 +10,6 @@ RWStructuredBuffer<uint> RWFspActiveProbeListCurr;
 RWStructuredBuffer<uint> RWFspProbeFreeStack;
 RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
-RWStructuredBuffer<uint> RWFspVisibleSurfaceList;
 RWStructuredBuffer<uint> RWFspProbeRayRequestBuffer;
 RWStructuredBuffer<uint> RWFspProbeRayResultBuffer;
 RWStructuredBuffer<float4> RWFspIrradianceVolumeSH;

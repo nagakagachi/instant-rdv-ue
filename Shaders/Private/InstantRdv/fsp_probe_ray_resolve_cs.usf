@@ -14,7 +14,7 @@ uint FrameCount;
 
 static const float kFspOctaUpdateTemporalRate = 0.95;
 
-[numthreads(128, 1, 1)]
+[numthreads(k_irdv_fsp_ray_linear_thread_group_size, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint ResultIndex = DispatchThreadId.x;
@@ -24,7 +24,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    const uint ResultWordOffset = 1u + ResultIndex * kFspRayResultStride;
+	const uint ResultWordOffset = 1u + ResultIndex * k_irdv_fsp_ray_result_data_stride;
     const uint PackedKey = FspProbeRayResultBuffer[ResultWordOffset + 0u];
     const uint HitInfo = FspProbeRayResultBuffer[ResultWordOffset + 1u];
     const uint ProbeIndex = FspUnpackRayRequestProbeIndex(PackedKey);

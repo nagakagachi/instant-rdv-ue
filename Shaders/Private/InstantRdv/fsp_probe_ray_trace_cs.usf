@@ -35,7 +35,7 @@ float FspHash01(uint Seed)
     return float(Seed & 0x00ffffffu) / 16777216.0;
 }
 
-[numthreads(128, 1, 1)]
+[numthreads(k_irdv_fsp_ray_linear_thread_group_size, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint RequestIndex = DispatchThreadId.x;
@@ -77,6 +77,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             uint BrickIndex = 0u;
             uint BitIndex = 0u;
             const bool bHit = TraceBbvRayReference(
+                BitmaskBrickVoxel,
+                BrickData,
                 ProbePositionWs,
                 RayDirWs,
                 FspTraceDistanceCm,
@@ -96,7 +98,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     uint ResultIndex = 0u;
     InterlockedAdd(RWFspProbeRayResultBuffer[0], 1u, ResultIndex);
     // ResultBufferも [0]=count, [1..]=stride付きpayload。PackedKeyを残してresolveでprobe/octへ戻す。
-    const uint ResultWordOffset = 1u + ResultIndex * kFspRayResultStride;
+	const uint ResultWordOffset = 1u + ResultIndex * k_irdv_fsp_ray_result_data_stride;
     RWFspProbeRayResultBuffer[ResultWordOffset + 0u] = PackedKey;
     RWFspProbeRayResultBuffer[ResultWordOffset + 1u] = HitInfo;
 }

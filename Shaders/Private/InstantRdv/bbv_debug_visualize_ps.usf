@@ -115,6 +115,8 @@ bool TraceBbvVoxelRayReference(
     out uint OutBitIndex)
 {
     return TraceBbvRayReference(
+        BitmaskBrickVoxel,
+        BrickData,
         RayOriginWs,
         RayDirWs,
         MaxDistanceCm,
@@ -143,7 +145,9 @@ bool TraceBbvBrickRayReference(
 {
     int3 DummyFineCoord = int3(-1, -1, -1);
     uint DummyBitIndex = 0u;
-    return TraceBbvRayReference(
+	return TraceBbvRayReference(
+        BitmaskBrickVoxel,
+        BrickData,
         RayOriginWs,
         RayDirWs,
         MaxDistanceCm,
