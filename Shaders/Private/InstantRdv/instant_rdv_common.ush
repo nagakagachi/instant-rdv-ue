@@ -23,21 +23,24 @@
 #define k_irdv_bbv_radiance_accum_component_count 4u
 
 
+// FSP無効probe index.
+#define k_irdv_fsp_invalid_probe_index 0xffffffffu
+
 // FSP probeあたりのOctahedralMap Atlas解像度.
 #define k_irdv_fsp_probe_octmap_width 6u
-
+// FSP レイトレース結果格納バッファのエレメント単位のu32数.
 #define k_irdv_fsp_ray_result_data_stride 2u
 
 // FSP IrradianceVolume SH payload. 1 cell = float4 * 4.
 #define k_irdv_fsp_irradiance_volume_sh_float4_count 4u
 
-// FSP無効probe index.
-#define k_irdv_fsp_invalid_probe_index 0xffffffffu
-
-#define k_irdv_fsp_cell_data_u32_count 4u
+// FSP CellのVisibleMark用一時バッファの1Cellあたりのu32数.
+#define k_irdv_fsp_cell_visible_mark_temporal_data_u32_count 1u
 
 
+// Fspのレイリクエスト, レイトレースのCSのスレッドグループサイズ.
 #define k_irdv_fsp_ray_linear_thread_group_size 128u
+// FspのProbe更新のCSのスレッドグループサイズ.
 #define k_irdv_fsp_probe_update_thread_group_size 64u
 
 

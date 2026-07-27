@@ -161,13 +161,13 @@ private:
             FVector CurrentGridCenterPositionWs = FVector::ZeroVector;
             FVector PreviousGridCenterPositionWs = FVector::ZeroVector;
 
-            // FspCellDataBuffer:
+            // FspCellVisibleMarkTemporalBuffer:
             //   一時的なcell payload。現状は[0]をscreen-space collectのフレーム内dedupe flagとして使う。
             // FspCellProbeIndexBuffer:
             //   global cell index -> owning active probe index。未所有はinvalid probe index。
             // FspVisibleSurfaceListBuffer:
             //   [0]=count, [1..]=depth surfaceから選ばれたowner cell index。
-            FPersistentRdgPooledBufferSet FspCellDataBuffer;
+            FPersistentRdgPooledBufferSet FspCellVisibleMarkTemporalBuffer;
             FPersistentRdgPooledBufferSet FspCellProbeIndexBuffer;
             FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
             // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。

@@ -7,7 +7,7 @@
 #include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
 
 Texture2D<float> SceneDepthTexture;
-RWStructuredBuffer<uint> RWFspCellData;
+RWStructuredBuffer<uint> RWFspCellVisibleMarkTemporalBuffer;
 RWStructuredBuffer<uint> RWFspVisibleSurfaceList;
 
 uint DepthSizeX;
@@ -69,10 +69,10 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         }
 
         const uint CellIndex = OwnerCellIndices[OwnerIndex];
-		const uint CellDataStart = CellIndex * k_irdv_fsp_cell_data_u32_count;
+		const uint CellDataStart = CellIndex * k_irdv_fsp_cell_visible_mark_temporal_data_u32_count;
         uint OriginalVisibleFlag = 0u;
         // CellData[0]はこのフレーム内のdedupe flag。C++側で毎フレームclearすることが必須。
-        InterlockedCompareExchange(RWFspCellData[CellDataStart + 0u], 0u, 1u, OriginalVisibleFlag);
+		InterlockedCompareExchange(RWFspCellVisibleMarkTemporalBuffer[CellDataStart + 0u], 0u, 1u, OriginalVisibleFlag);
         if (OriginalVisibleFlag == 0u)
         {
             uint WriteIndex = 0u;
