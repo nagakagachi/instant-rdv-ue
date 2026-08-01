@@ -147,7 +147,10 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
     // FspCalcCellCenterWsはtoroidal物理indexから現在のworld-aligned cell centerへ戻す。
     // ここがずれるとprobe球がカメラ追従に見えるため、更新パスと同じhelperを使う。
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
-    const float3 ProbeOffset = bActiveProbe ? FspDecodeProbeOffset(ProbeData.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45 : 0.0.xxx;
+    // ProbeOffset は FSP の本質的な relocation 結果。
+    // Debug球も trace も同じ encoded offset を読むことで、
+    // 「どこにprobeが置かれ、どこからrayが飛ぶか」を同じ基準で観察できる。
+    const float3 ProbeOffset = bActiveProbe ? FspDecodeProbeOffset(ProbeData.ProbeOffsetV3) * FspProbeMaxOffsetDistanceCm(CascadeIndex) : 0.0.xxx;
     const float3 ProbeSamplePosWs = CellCenterWs + ProbeOffset;
     const float3 ProbePosWs = bIrradianceVolumeDebug
         ? CellCenterWs

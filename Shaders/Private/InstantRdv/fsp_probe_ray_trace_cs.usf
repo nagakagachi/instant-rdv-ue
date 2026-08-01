@@ -58,7 +58,10 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         uint LocalCellIndex = 0u;
         if (Data.OwnerCellIndex != k_irdv_fsp_invalid_probe_index && FspDecodeGlobalCellIndex(Data.OwnerCellIndex, CascadeIndex, LocalCellIndex))
         {
-            const float3 ProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45;
+            // PreUpdateで決めた relocation offset が、そのまま実ray trace originになる。
+            // offset 計算と trace 側の decode 規約がずれると、debug では非埋まりでも
+            // 実際のtraceだけ埋まる/逆になるため、両者は必ず同一距離規約を共有する。
+            const float3 ProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * FspProbeMaxOffsetDistanceCm(CascadeIndex);
             const float3 ProbeBasePositionWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
             const float3 ProbePositionWs = ProbeBasePositionWs + ((bUseProbeTraceOffset != 0u) ? ProbeOffset : 0.0.xxx);
             const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);

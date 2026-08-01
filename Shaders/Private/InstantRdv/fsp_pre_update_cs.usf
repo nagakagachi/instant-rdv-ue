@@ -11,10 +11,18 @@ RWStructuredBuffer<uint> RWFspProbeFreeStack;
 RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
 RWStructuredBuffer<uint4> RWFspProbeAtlas;
+StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BrickData;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
 float3 CameraPositionWs;
+uint BbvGridResolutionX;
+uint BbvGridResolutionY;
+uint BbvGridResolutionZ;
+float3 BbvGridMinPositionWs;
+float BbvCellSizeCm;
+float3 BbvToroidalOffsetCells;
 
 uint FspPopFreeProbeIndex()
 {
@@ -65,6 +73,45 @@ void FspClearProbeAtlas(uint ProbeIndex)
     {
         RWFspProbeAtlas[ProbeIndex * kFspRayCountPerProbe + OctIndex] = asuint(0.0.xxxx);
     }
+}
+
+float FspHash01(uint Seed)
+{
+    Seed ^= Seed >> 16u;
+    Seed *= 0x7feb352du;
+    Seed ^= Seed >> 15u;
+    Seed *= 0x846ca68bu;
+    Seed ^= Seed >> 16u;
+    return float(Seed & 0x00ffffffu) / 16777216.0;
+}
+
+uint BbvReadVoxelOccupancyAtWorldPos(float3 WorldPos)
+{
+    // 参照実装の read_bbv_voxel_from_world_pos 相当。
+    // Probe relocation は「BBVに埋まっているか」を fine voxel 単位で見る必要があるため、
+    // Brick occupancy だけでなく bitmask occupancy まで含めて判定する。
+    const float CellSizeCm = max(BbvCellSizeCm, 0.001);
+    const float CellSizeInv = 1.0 / CellSizeCm;
+    const float3 VoxelCoordF = (WorldPos - BbvGridMinPositionWs) * CellSizeInv;
+    const int3 VoxelCoord = int3(floor(VoxelCoordF));
+    const int3 GridResolution = int3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ);
+    if (any(VoxelCoord < 0) || any(VoxelCoord >= GridResolution))
+    {
+        return 0u;
+    }
+
+    const uint3 PhysicalVoxelCoord = LogicalToPhysicalGridCoord(VoxelCoord, int3(BbvToroidalOffsetCells), uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ));
+    const uint BrickIndex = FlattenGridCoord(PhysicalVoxelCoord, uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ));
+    if (BrickData[BrickIndex * 4u + 0u] == 0u)
+    {
+        return 0u;
+    }
+
+    const uint3 FineCoord = min(uint3(frac(VoxelCoordF) * float(k_irdv_bbv_brick_reso)), uint3(k_irdv_bbv_brick_reso - 1u, k_irdv_bbv_brick_reso - 1u, k_irdv_bbv_brick_reso - 1u));
+    const uint BitIndex = CalcFineBitIndex(FineCoord);
+    const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (BitIndex / 32u);
+    const uint WordMask = 1u << (BitIndex & 31u);
+    return ((BitmaskBrickVoxel[WordIndex] & WordMask) != 0u) ? 1u : 0u;
 }
 
 [numthreads(64, 1, 1)]
@@ -132,13 +179,100 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         FspClearProbeAtlas(ProbeIndex);
     }
 
-    // TODO: 参照実装はBBV solid判定でcell内の非solid側へprobeを再配置する。
-    // 現状はまずActiveProbe lifecycleとray/SH更新の再現を優先し、camera方向へ控えめに寄せる。
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+    const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
+    const float3 PrevProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
     const float3 ToCamera = CameraPositionWs - CellCenterWs;
     const float ToCameraLenSq = dot(ToCamera, ToCamera);
-    const float3 DirToCamera = (ToCameraLenSq > 1.0e-6) ? ToCamera * rsqrt(ToCameraLenSq) : float3(0.0, 0.0, 1.0);
-    Data.ProbeOffsetV3 = FspEncodeProbeOffset(DirToCamera * 0.45);
+    const bool bHasSurfaceAnchor = (ToCameraLenSq > 1.0e-6);
+    float3 ProbeSamplePosWs = CellCenterWs + PrevProbeOffset;
+    bool bAcceptedVisibleFirst = false;
+
+    if (bHasSurfaceAnchor)
+    {
+        // ここがFSP offsetの中核。
+        // ActiveProbe は「Depth surfaceを代表するcell」だけでなく、
+        // そのcell内のどこをレイトレ始点にするかで結果が大きく変わる。
+        // 参照実装はまず surface/view 側へ向かう候補を優先し、
+        // BBV non-solid を満たす位置を探してから encode する。
+        // これを省くと、斜め床や特定距離の平面で probe が埋まり、
+        // self-hit によって周囲入射輝度が壊れる。
+        const float3 DirToCamera = ToCamera * rsqrt(ToCameraLenSq);
+        const float FrontSamples[6] = {0.95, 0.80, 0.65, 0.50, 0.35, 0.20};
+        [unroll]
+        for (int SampleIndex = 0; SampleIndex < 6; ++SampleIndex)
+        {
+            const float3 CandidateWs = CellCenterWs + DirToCamera * (MaxProbeOffsetDistanceCm * FrontSamples[SampleIndex]);
+            if (BbvReadVoxelOccupancyAtWorldPos(CandidateWs) == 0u)
+            {
+                ProbeSamplePosWs = CandidateWs;
+                bAcceptedVisibleFirst = true;
+                break;
+            }
+        }
+
+        if (!bAcceptedVisibleFirst)
+        {
+            const float3 SeedCandidateWs = CellCenterWs + clamp(PrevProbeOffset, -MaxProbeOffsetDistanceCm.xxx, MaxProbeOffsetDistanceCm.xxx);
+            if (BbvReadVoxelOccupancyAtWorldPos(SeedCandidateWs) == 0u)
+            {
+                ProbeSamplePosWs = SeedCandidateWs;
+                bAcceptedVisibleFirst = true;
+            }
+        }
+    }
+
+    if ((!bHasSurfaceAnchor) || (!bAcceptedVisibleFirst))
+    {
+        // 可視優先候補が失敗した場合も、前回offset方向を活かした再探索と
+        // 最後のランダムfallbackで「cell内の non-solid 位置」を確保する。
+        // ここまでやることで、静止時の継続性を保ちつつ埋まり probe を減らす。
+        bool bFoundNonSolid = false;
+        if (BbvReadVoxelOccupancyAtWorldPos(ProbeSamplePosWs) != 0u)
+        {
+            const float SeedLenSq = dot(PrevProbeOffset, PrevProbeOffset);
+            const float3 PreferredDir = (SeedLenSq > 1.0e-6) ? (PrevProbeOffset * rsqrt(SeedLenSq)) : 0.0.xxx;
+            if (any(PreferredDir != 0.0.xxx))
+            {
+                const float FrontBiasSamples[4] = {0.95, 0.75, 0.55, 0.35};
+                [unroll]
+                for (int SampleIndex = 0; SampleIndex < 4; ++SampleIndex)
+                {
+                    ProbeSamplePosWs = CellCenterWs + PreferredDir * (MaxProbeOffsetDistanceCm * FrontBiasSamples[SampleIndex]);
+                    if (BbvReadVoxelOccupancyAtWorldPos(ProbeSamplePosWs) == 0u)
+                    {
+                        bFoundNonSolid = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!bFoundNonSolid)
+            {
+                [unroll]
+                for (int RandomIndex = 0; RandomIndex < 4; ++RandomIndex)
+                {
+                    const uint Seed0 = GlobalCellIndex * 1664525u + uint(RandomIndex + 1) * 1013904223u;
+                    const uint Seed1 = Seed0 ^ (GlobalCellIndex * 2246822519u + 3266489917u);
+                    const uint Seed2 = Seed0 ^ ((GlobalCellIndex + 1u) * 668265263u + 374761393u);
+                    const float3 RandomOffset = float3(
+                        FspHash01(Seed0),
+                        FspHash01(Seed1),
+                        FspHash01(Seed2)) - 0.5.xxx;
+                    ProbeSamplePosWs = CellCenterWs + RandomOffset * (FspCascadeCellSizeCm(CascadeIndex) * 0.4);
+                    if (BbvReadVoxelOccupancyAtWorldPos(ProbeSamplePosWs) == 0u)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 保存するのは world 距離そのものではなく、最大移動距離で正規化した offset。
+    // これにより cascade cell size が変わっても同じ意味で decode できる。
+    const float3 NormalizedProbeOffset = clamp((ProbeSamplePosWs - CellCenterWs) / MaxProbeOffsetDistanceCm, -1.0.xxx, 1.0.xxx);
+    Data.ProbeOffsetV3 = FspEncodeProbeOffset(NormalizedProbeOffset);
     Data.OwnerCellIndex = GlobalCellIndex;
     Data.LastSeenFrame = FrameCount;
     Data.Reserved0 = 0u;

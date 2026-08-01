@@ -68,6 +68,16 @@ float FspCascadeCellSizeCm(uint CascadeIndex)
     return FspCellSizeCm * exp2(float(CascadeIndex));
 }
 
+float FspProbeMaxOffsetDistanceCm(uint CascadeIndex)
+{
+    // FSP probe offset は「見た目のデバッグ球を少しずらすための値」ではなく、
+    // ActiveProbe の実サンプル位置そのものを cell center から再配置するための重要パラメータ。
+    // 参照実装では cascade cell size に対する比率で最大移動距離を決め、
+    // PreUpdate / RayTrace / DebugVisualize の全経路で同じ距離規約を共有している。
+    // UE側も world unit が cm である点だけを保ったまま、この規約をそのまま使う。
+    return FspCascadeCellSizeCm(CascadeIndex) * 0.9;
+}
+
 int3 FspCascadeCenterCellIdFromPosition(uint CascadeIndex, float3 CenterPositionWs)
 {
     const float CellSize = FspCascadeCellSizeCm(CascadeIndex);
