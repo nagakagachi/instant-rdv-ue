@@ -592,9 +592,17 @@ public:
         SHADER_PARAMETER(uint32, DebugMode)
         SHADER_PARAMETER(float, FspCellSizeCm)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
+        SHADER_PARAMETER(uint32, BbvGridResolutionX)
+        SHADER_PARAMETER(uint32, BbvGridResolutionY)
+        SHADER_PARAMETER(uint32, BbvGridResolutionZ)
+        SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
+        SHADER_PARAMETER(float, BbvCellSizeCm)
+        SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint4>, FspProbeAtlas)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FspPackedSH)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BrickData)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -1428,9 +1436,11 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
     FRDGTexture* SceneDepthTexture,
     FRDGTexture* SceneColorTexture,
     float SceneColorPreExposure,
-    int32 DebugMode)
+    int32 BbvDebugMode,
+    int32 FspProbeDebugMode,
+    int32 FspIvProbeDebugMode)
 {
-    if (DebugMode <= 0 || SceneDepthTexture == nullptr || SceneColorTexture == nullptr)
+    if ((BbvDebugMode <= 0 && FspProbeDebugMode <= 0 && FspIvProbeDebugMode <= 0) || SceneDepthTexture == nullptr || SceneColorTexture == nullptr)
     {
         return;
     }
@@ -1443,11 +1453,10 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
 
     // 全画面描画系デバッグ表示.
     if (
-        DebugMode == 0 ||
-        DebugMode == 1 ||
-        DebugMode == 2 ||
-        DebugMode == 3 ||
-        DebugMode == 4 ||
+        BbvDebugMode == 1 ||
+        BbvDebugMode == 2 ||
+        BbvDebugMode == 3 ||
+        BbvDebugMode == 4 ||
 
         false
         )
@@ -1476,7 +1485,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->MaxTraceDistanceCm = Config.bbv.BbvBrickSizeCm * static_cast<float>(SystemState.bbv.TrGrid.GridReso.GetMax());
-            Parameters->DebugMode = DebugMode;
+            Parameters->DebugMode = BbvDebugMode;
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
             Parameters->BrickData = GraphBuilder.CreateSRV(BrickDataBuffer);
             Parameters->BitmaskBrickVoxelOptionData = GraphBuilder.CreateSRV(OptionalDataBuffer);
@@ -1497,10 +1506,8 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters);
     }
     
-    // FSP ActiveProbe / IrradianceVolume probe sphere debug.
-    if (DebugMode >= 5 && DebugMode <= 14)
+    const auto AddFspProbeBillboardPass = [&](uint32 InternalDebugMode, const TCHAR* PassName, bool bDrawCounters)
     {
-        const uint32 FspDebugMode = static_cast<uint32>(DebugMode - 5);
         const uint32 ProbeCount = Config.fsp.GetFspTotalCellCount();
         const uint32 FspCascadeCount = FMath::Max(Config.fsp.ProbeCascadeCount, 1u);
         const FVector3f FspGridCenterPositionWs(SystemState.fsp.CurrentGridCenterPositionWs);
@@ -1526,7 +1533,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 VSParams->FspCascadeCount = FspCascadeCount;
                 VSParams->FspProbePoolElementCount = ProbeCount;
                 VSParams->FrameCount = SystemState.FrameCount;
-                VSParams->DebugMode = FspDebugMode;
+                VSParams->DebugMode = InternalDebugMode;
                 VSParams->FspCellProbeIndex = GraphBuilder.CreateSRV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
                 VSParams->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
                 VSParams->FspProbeAtlas = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeAtlasBuffer.Handle);
@@ -1543,12 +1550,20 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 PSParams->FspCascadeCount = FspCascadeCount;
                 PSParams->FspProbePoolElementCount = ProbeCount;
                 PSParams->FrameCount = SystemState.FrameCount;
-                PSParams->DebugMode = FspDebugMode;
+                PSParams->DebugMode = InternalDebugMode;
                 PSParams->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
                 PSParams->FspGridCenterPositionWs = FspGridCenterPositionWs;
+                PSParams->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+                PSParams->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+                PSParams->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+                PSParams->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+                PSParams->BbvCellSizeCm = Config.bbv.BbvBrickSizeCm;
+                PSParams->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
                 PSParams->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
                 PSParams->FspProbeAtlas = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeAtlasBuffer.Handle);
                 PSParams->FspPackedSH = GraphBuilder.CreateSRV(SystemState.fsp.FspPackedSHBuffer.Handle);
+                PSParams->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
+                PSParams->BrickData = GraphBuilder.CreateSRV(SystemState.bbv.BrickDataBuffer.Handle);
 
                 // GlobalShaderのGraphicsPipelineでRasterをする場合はShaderParameterにRENDER_TARGET_BINDING_SLOTSでRenderTargetSlotを定義しておいてターゲットを設定し, GraphBuilder.AddPass() のShaderParameter引数有バージョンに引き渡すことでRenderTarget設定される.
                 {
@@ -1560,7 +1575,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             TShaderMapRef<FInstantRdvFspProbeBillboardVS> ProbeVS(GetGlobalShaderMap(View.GetFeatureLevel()));
             TShaderMapRef<FInstantRdvFspProbeBillboardPS> ProbePS(GetGlobalShaderMap(View.GetFeatureLevel()));
 
-            GraphBuilder.AddPass(RDG_EVENT_NAME("InstantRdv.FspProbeBillboard"), Params, ERDGPassFlags::Raster, [ViewRect, ProbeVS, ProbePS, VSParams, PSParams, ProbeCount](FRHICommandListImmediate& RHICmdList)
+            GraphBuilder.AddPass(RDG_EVENT_NAME("%s", PassName), Params, ERDGPassFlags::Raster, [ViewRect, ProbeVS, ProbePS, VSParams, PSParams, ProbeCount](FRHICommandListImmediate& RHICmdList)
             {
                 FGraphicsPipelineStateInitializer GraphicsPSOInit;
                 RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
@@ -1591,6 +1606,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             });
         }
 
+        if (bDrawCounters)
         {
             FInstantRdvFspDebugTextPS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspDebugTextPS::FParameters>();
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
@@ -1629,6 +1645,17 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 Canvas.DrawShadowedString(X, Y += RowHeight, TEXT("FreeProbes"), GetStatsFont(), FLinearColor(0.8f, 0.5f, 1.0f));
             });
         }
+    };
+
+    // ActiveProbeとIrradianceVolumeは見たい対象が異なるため、別CVarから個別に描画できるようにする。
+    // シェーダ内部の既存debug mode体系はそのまま使い、ここで外部CVar値を内部modeへ写像する。
+    if (FspProbeDebugMode > 0)
+    {
+        AddFspProbeBillboardPass(static_cast<uint32>(FspProbeDebugMode - 1), TEXT("InstantRdv.FspProbeBillboard"), true);
     }
-    
+
+    if (FspIvProbeDebugMode > 0)
+    {
+        AddFspProbeBillboardPass(static_cast<uint32>(FspIvProbeDebugMode + 8), TEXT("InstantRdv.FspIvProbeBillboard"), false);
+    }
 }

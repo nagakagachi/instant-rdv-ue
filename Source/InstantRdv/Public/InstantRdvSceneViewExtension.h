@@ -28,8 +28,12 @@ public:
 
 private:
     virtual bool IsActiveThisFrame_Internal(const FSceneViewExtensionContext& Context) const override;
+    void ResetAcceptedViewFamilyState_RenderThread();
+    bool TryAcceptViewFamilyForRdv_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& ViewFamily);
     const FSceneView* FindRdvUpdateView_RenderThread(const FSceneViewFamily& ViewFamily) const;
+    bool IsAcceptedViewFamily_RenderThread(const FSceneViewFamily* ViewFamily) const;
     bool IsRdvUpdateView_RenderThread(const FSceneView& View) const;
+    bool CanRunDebugVisualize_RenderThread(const FSceneView& View) const;
     bool IsRdvFamilyAlreadyUpdated_RenderThread(const FSceneViewFamily& ViewFamily) const;
     void ExecuteBbvGeometryUpdate_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTexture* SceneDepthTexture);
     FScreenPassTexture BbvBeforeDof_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& Inputs);

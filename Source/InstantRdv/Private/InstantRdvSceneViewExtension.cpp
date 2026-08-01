@@ -24,18 +24,41 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvEnable(
     TEXT("1: Enabled"),
     ECVF_RenderThreadSafe);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvDebugMode(
-    TEXT("r.InstantRdv.Bbv.DebugMode"),
+static TAutoConsoleVariable<int32> CVarInstantRdvBbvVisDebug(
+    TEXT("r.InstantRdv.Bbv.VisDebug"),
     0,
-    TEXT("Instant-RDV BBV debug mode selector.\n")
+    TEXT("Instant-RDV BBV voxel debug mode selector.\n")
     TEXT("0: Off\n")
     TEXT("1: XY fine-voxel Z-count map (no raytrace)\n")
     TEXT("2: Brick raytrace debug\n")
     TEXT("3: Voxel raytrace debug\n")
-    TEXT("4: Voxel radiance debug\n")
-    TEXT("5-14: FSP probe debug modes 0-9\n")
-    TEXT("       FSP 5: active/liveness, 9-10: active OctMap, 11-14: SH/IrradianceVolume\n")
-    TEXT("       FSP modes also draw counters at top-left: cyan=visible cells, green=active probes, yellow=ray requests, orange=ray results, purple=free probes"),
+    TEXT("4: Voxel radiance debug"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbe(
+    TEXT("r.InstantRdv.Fsp.VisProbe"),
+    0,
+    TEXT("Instant-RDV FSP active probe debug mode selector.\n")
+    TEXT("0: Off\n")
+    TEXT("1: Active probe liveness\n")
+    TEXT("2: Active probe index hash\n")
+    TEXT("3: Active probe age\n")
+    TEXT("4: Active probe cascade\n")
+    TEXT("5: Active probe OctMap radiance\n")
+    TEXT("6: Active probe OctMap sky visibility\n")
+    TEXT("7: Active probe SH radiance\n")
+    TEXT("8: Active probe SH sky visibility\n")
+    TEXT("9: Probe sample position embedded in BBV occupancy\n")
+    TEXT("Active probe modes also draw counters at top-left: cyan=visible cells, green=active probes, yellow=ray requests, orange=ray results, purple=free probes"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvFspVisIvProbe(
+    TEXT("r.InstantRdv.Fsp.VisIvProbe"),
+    0,
+    TEXT("Instant-RDV FSP irradiance volume probe debug mode selector.\n")
+    TEXT("0: Off\n")
+    TEXT("1: IrradianceVolume SH radiance\n")
+    TEXT("2: IrradianceVolume SH sky visibility"),
     ECVF_RenderThreadSafe);
 
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewInjection(
@@ -157,6 +180,33 @@ void FInstantRdvSceneViewExtension::BeginRenderViewFamily(FSceneViewFamily& InVi
 {
 }
 
+void FInstantRdvSceneViewExtension::ResetAcceptedViewFamilyState_RenderThread()
+{
+    FrameViews_RenderThread.Reset();
+    AcceptedViewFamily_RenderThread = nullptr;
+    UpdateOwnerView_RenderThread = nullptr;
+    bAcceptedFamilyPostProcessUpdated_RenderThread = false;
+}
+
+bool FInstantRdvSceneViewExtension::TryAcceptViewFamilyForRdv_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& ViewFamily)
+{
+    const FSceneView* OwnerView = FindRdvUpdateView_RenderThread(ViewFamily);
+    if (OwnerView == nullptr || IsRdvFamilyAlreadyUpdated_RenderThread(ViewFamily) || !BbvSystem.IsValid())
+    {
+        return false;
+    }
+
+    // ここがRDV lifecycleの唯一の入口。
+    // BeginFrameはFrameCountを進め、ActiveProbeListのCurr/Prev世代を決めるため、
+    // View単位callbackやsecondary ViewFamilyから呼ぶと参照InstantRDVのdouble bufferingが壊れる。
+    BbvSystem->BeginFrame_RenderThread(GraphBuilder, *OwnerView);
+    AcceptedViewFamily_RenderThread = &ViewFamily;
+    UpdateOwnerView_RenderThread = OwnerView;
+    LastRdvUpdateFrameCounter_RenderThread = ViewFamily.FrameCounter;
+    LastRdvUpdateFrameNumber_RenderThread = ViewFamily.FrameNumber;
+    return true;
+}
+
 const FSceneView* FInstantRdvSceneViewExtension::FindRdvUpdateView_RenderThread(const FSceneViewFamily& ViewFamily) const
 {
     if (!IsRdvEligibleViewFamily_RenderThread(ViewFamily))
@@ -188,11 +238,21 @@ const FSceneView* FInstantRdvSceneViewExtension::FindRdvUpdateView_RenderThread(
     return FirstEligibleView;
 }
 
+bool FInstantRdvSceneViewExtension::IsAcceptedViewFamily_RenderThread(const FSceneViewFamily* ViewFamily) const
+{
+    return ViewFamily != nullptr && AcceptedViewFamily_RenderThread == ViewFamily;
+}
+
 bool FInstantRdvSceneViewExtension::IsRdvUpdateView_RenderThread(const FSceneView& View) const
 {
-    return
-        AcceptedViewFamily_RenderThread == View.Family &&
-        UpdateOwnerView_RenderThread == &View;
+    return IsAcceptedViewFamily_RenderThread(View.Family) && UpdateOwnerView_RenderThread == &View;
+}
+
+bool FInstantRdvSceneViewExtension::CanRunDebugVisualize_RenderThread(const FSceneView& View) const
+{
+    // Debug描画はRDV lifecycleを書き換えない読み取り専用。
+    // owner ViewのBeforeDOF更新が完了していない場合は、古い/未接続リソースを読むので抑止する。
+    return IsAcceptedViewFamily_RenderThread(View.Family) && bAcceptedFamilyPostProcessUpdated_RenderThread;
 }
 
 bool FInstantRdvSceneViewExtension::IsRdvFamilyAlreadyUpdated_RenderThread(const FSceneViewFamily& ViewFamily) const
@@ -210,35 +270,8 @@ bool FInstantRdvSceneViewExtension::IsRdvFamilyAlreadyUpdated_RenderThread(const
 
 void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily)
 {
-    FrameViews_RenderThread.Reset();
-    AcceptedViewFamily_RenderThread = nullptr;
-    UpdateOwnerView_RenderThread = nullptr;
-    bAcceptedFamilyPostProcessUpdated_RenderThread = false;
-
-    const FSceneView* OwnerView = FindRdvUpdateView_RenderThread(InViewFamily);
-    if (OwnerView == nullptr)
-    {
-        return;
-    }
-
-    if (IsRdvFamilyAlreadyUpdated_RenderThread(InViewFamily))
-    {
-        return;
-    }
-
-    if (!BbvSystem.IsValid())
-    {
-        return;
-    }
-
-    // ここがRDV lifecycleの唯一の入口。
-    // BeginFrameはFrameCountを進め、ActiveProbeListのCurr/Prev世代を決めるため、
-    // View単位callbackやsecondary ViewFamilyから呼ぶと参照InstantRDVのdouble bufferingが壊れる。
-    BbvSystem->BeginFrame_RenderThread(GraphBuilder, *OwnerView);
-    AcceptedViewFamily_RenderThread = &InViewFamily;
-    UpdateOwnerView_RenderThread = OwnerView;
-    LastRdvUpdateFrameCounter_RenderThread = InViewFamily.FrameCounter;
-    LastRdvUpdateFrameNumber_RenderThread = InViewFamily.FrameNumber;
+    ResetAcceptedViewFamilyState_RenderThread();
+    TryAcceptViewFamilyForRdv_RenderThread(GraphBuilder, InViewFamily);
 }
 
 void FInstantRdvSceneViewExtension::PreRenderView_RenderThread(FRDGBuilder& GraphBuilder, FSceneView& InView)
@@ -320,7 +353,7 @@ void FInstantRdvSceneViewExtension::SubscribeToPostProcessingPass(EPostProcessin
     if (Pass == EPostProcessingPass::BeforeDOF && bIsPassEnabled && IsRdvEligibleView_RenderThread(InView))
     {
         // Radiance はLighting後かつTonemap前のSceneColorが必要なため、BeforeDOFで購読する。
-        // 実際にRDV lifecycleを進めるかはBbvBeforeDof側でowner Viewかどうかを再判定する。
+        // 実際のowner判定はBbvBeforeDof側で行う。
         InOutPassCallbacks.Add(FPostProcessingPassDelegate::CreateRaw(this, &FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread));
     }
 }
@@ -345,12 +378,13 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
         const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
         if (IsRdvUpdateView_RenderThread(View))
         {
+            const bool bEnableRadianceUpdate = (CVarInstantRdvBbvRadianceUpdate.GetValueOnRenderThread() != 0);
             const bool bEnableRadianceInjection =
-                CVarInstantRdvBbvRadianceUpdate.GetValueOnRenderThread() != 0 &&
-                CVarInstantRdvBbvRadianceInjection.GetValueOnRenderThread() != 0;
+                bEnableRadianceUpdate &&
+                (CVarInstantRdvBbvRadianceInjection.GetValueOnRenderThread() != 0);
             const bool bEnableRadianceResolve =
-                CVarInstantRdvBbvRadianceUpdate.GetValueOnRenderThread() != 0 &&
-                CVarInstantRdvBbvRadianceResolve.GetValueOnRenderThread() != 0;
+                bEnableRadianceUpdate &&
+                (CVarInstantRdvBbvRadianceResolve.GetValueOnRenderThread() != 0);
             // BBV RadianceとFSPは同じowner ViewのDepth/SceneColorを入力にして、ViewFamily内で1回だけ更新する。
             // FSP ActiveProbeListはここで生成されたCurr世代を、その後のdebug表示が読み取るだけにする。
             BbvSystem->ExecuteRadianceUpdate(
@@ -369,10 +403,10 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
             bAcceptedFamilyPostProcessUpdated_RenderThread = true;
         }
 
-        // デバッグ表示はRDV lifecycleを進めない読み取り専用pass。
-        // ownerのBeforeDOF更新がまだ来ていないViewでは、古い/未接続リソースを読まないため表示を抑制する。
-        const int32 DebugMode = CVarInstantRdvBbvDebugMode.GetValueOnRenderThread();
-        if (bAcceptedFamilyPostProcessUpdated_RenderThread && AcceptedViewFamily_RenderThread == View.Family)
+        const int32 BbvDebugMode = CVarInstantRdvBbvVisDebug.GetValueOnRenderThread();
+        const int32 FspProbeDebugMode = CVarInstantRdvFspVisProbe.GetValueOnRenderThread();
+        const int32 FspIvProbeDebugMode = CVarInstantRdvFspVisIvProbe.GetValueOnRenderThread();
+        if (CanRunDebugVisualize_RenderThread(View))
         {
             BbvSystem->ExecuteDebugVisualize(
                 GraphBuilder,
@@ -380,7 +414,9 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 SceneDepthTexture,
                 SceneColor.Texture,
                 ViewInfo.PreExposure,
-                DebugMode);
+                BbvDebugMode,
+                FspProbeDebugMode,
+                FspIvProbeDebugMode);
         }
     }
 

@@ -107,7 +107,9 @@ public:
         FRDGTexture* SceneDepthTexture,
         FRDGTexture* SceneColorTexture,
         float SceneColorPreExposure,
-        int32 DebugMode);
+        int32 BbvDebugMode,
+        int32 FspProbeDebugMode,
+        int32 FspIvProbeDebugMode);
 
     // BBV Radiance 更新。BeforeDOF の SceneColor は PreExposure 済みなので、
     // シェーダ内で PreExposure を打ち消して絶対輝度として蓄積する。
