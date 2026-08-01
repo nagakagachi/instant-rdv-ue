@@ -35,9 +35,6 @@ public class InstantRdv : ModuleRules
                 "RHICore",
                 "RenderCore",
                 "Renderer",
-
-				"UnrealEd",        // MaterialCompiler �Ȃǂ̃R���p�C�����
-                "MaterialShaderQualitySettings",
-			});
+            });
     }
 }
