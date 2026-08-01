@@ -1,4 +1,4 @@
-using UnrealBuildTool;
+﻿using UnrealBuildTool;
 using System.IO;
 
 public class InstantRdv : ModuleRules
@@ -34,7 +34,10 @@ public class InstantRdv : ModuleRules
                 "RHI",
                 "RHICore",
                 "RenderCore",
-                "Renderer"
-            });
+                "Renderer",
+
+				"UnrealEd",        // MaterialCompiler �Ȃǂ̃R���p�C�����
+                "MaterialShaderQualitySettings",
+			});
     }
 }

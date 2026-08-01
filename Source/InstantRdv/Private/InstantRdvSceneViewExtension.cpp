@@ -1,3 +1,7 @@
+﻿/*
+    InstantRdvSceneViewExtension.cpp
+*/
+
 #include "InstantRdvSceneViewExtension.h"
 
 #include "HAL/IConsoleManager.h"
@@ -5,6 +9,8 @@
 #include "PostProcess/PostProcessMaterialInputs.h"
 #include "PostProcess/PostProcessInputs.h"
 #include "SceneRendering.h"
+
+#include "InstantRdvSceneUniformBuffer.h"
 
 namespace
 {
@@ -288,6 +294,19 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
 {
     ResetAcceptedViewFamilyState_RenderThread();
     TryAcceptViewFamilyForRdv_RenderThread(GraphBuilder, InViewFamily);
+
+
+    // SceneUniformBufferへのパラメータ追加テスト. ダミーのfloatカウンタ.
+    static float tempCounter = 0.0f;
+    ISceneRenderer* sceneRenderer = InViewFamily.GetSceneRenderer();
+    if (sceneRenderer)
+    {
+        FSceneUniformBuffer& sceneUniformBuffer = sceneRenderer->GetSceneUniforms();
+        FInstantRdvSceneUniformBufferParams params;
+        params.TestColor = FVector3f(FMath::Fmod(tempCounter, 1.0f), FMath::Fmod(tempCounter*0.25, 1.0f), 0.0f);
+        sceneUniformBuffer.Set(SceneUB::InstantRdvParam, params);
+        tempCounter += 0.01f;
+    }
 }
 
 void FInstantRdvSceneViewExtension::PreRenderView_RenderThread(FRDGBuilder& GraphBuilder, FSceneView& InView)

@@ -1,0 +1,19 @@
+/*
+	InstantRdvMaterialExpression.ush
+
+*/
+
+#ifndef INSTANT_RDV_MATERIAL_EXPRESSION_USH
+#define INSTANT_RDV_MATERIAL_EXPRESSION_USH
+
+// RDV MaterialExpression helper。
+// 最初の段階では SceneUniformBuffer 拡張 InstantRdvParam へ到達できるかを確認するため、
+// Scene に積んだ TestColor をそのまま返すだけの最小関数にしている。
+// 将来的に IrradianceVolume や ProbeAtlas を読む場合も、この helper 側へ集約して
+// MaterialExpression ノードは薄い公開インターフェースに留める。
+MaterialFloat3 InstantRdvGetTestColor()
+{
+	return MaterialFloat3(Scene.InstantRdvParam.TestColor);
+}
+
+#endif // INSTANT_RDV_MATERIAL_EXPRESSION_USH
