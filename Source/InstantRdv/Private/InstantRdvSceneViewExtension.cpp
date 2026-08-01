@@ -117,6 +117,22 @@ static TAutoConsoleVariable<int32> CVarInstantRdvFspUpdate(
     TEXT("1: Enabled after BBV Radiance Resolve"),
     ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<int32> CVarInstantRdvFspTraceUseProbeOffset(
+    TEXT("r.InstantRdv.Fsp.TraceUseProbeOffset"),
+    1,
+    TEXT("Apply active probe offset to FSP ray trace origins.\n")
+    TEXT("0: Trace from owner cell center\n")
+    TEXT("1: Trace from offset probe sample position"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbeUseOffset(
+    TEXT("r.InstantRdv.Fsp.VisProbeUseOffset"),
+    1,
+    TEXT("Apply active probe offset to ActiveProbe debug billboard positions.\n")
+    TEXT("0: Draw at owner cell center\n")
+    TEXT("1: Draw at offset probe sample position"),
+    ECVF_RenderThreadSafe);
+
 static FRDGTextureRef GetViewSceneDepthTexture_RenderThread(const FSceneView& View)
 {
     // SceneViewExtension のコールバック実体は FViewInfo なので、Renderer内部情報から Depth RDG を取得する。
@@ -399,13 +415,16 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 GraphBuilder,
                 View,
                 SceneDepthTexture,
-                CVarInstantRdvFspUpdate.GetValueOnRenderThread() != 0);
+                CVarInstantRdvFspUpdate.GetValueOnRenderThread() != 0,
+                CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
             bAcceptedFamilyPostProcessUpdated_RenderThread = true;
         }
 
         const int32 BbvDebugMode = CVarInstantRdvBbvVisDebug.GetValueOnRenderThread();
         const int32 FspProbeDebugMode = CVarInstantRdvFspVisProbe.GetValueOnRenderThread();
         const int32 FspIvProbeDebugMode = CVarInstantRdvFspVisIvProbe.GetValueOnRenderThread();
+        const bool bUseProbeTraceOffset = (CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
+        const bool bUseProbeVisualizationOffset = (CVarInstantRdvFspVisProbeUseOffset.GetValueOnRenderThread() != 0);
         if (CanRunDebugVisualize_RenderThread(View))
         {
             BbvSystem->ExecuteDebugVisualize(
@@ -416,7 +435,9 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 ViewInfo.PreExposure,
                 BbvDebugMode,
                 FspProbeDebugMode,
-                FspIvProbeDebugMode);
+                FspIvProbeDebugMode,
+                bUseProbeVisualizationOffset,
+                bUseProbeTraceOffset);
         }
     }
 

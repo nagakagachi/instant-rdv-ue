@@ -1,6 +1,7 @@
 // FSP ActiveProbe / IrradianceVolume probe sphere debug rendering.
 // 各FSP cellを1インスタンス相当のcamera-facing quadとして描き、pixel shaderで球面に見せる。
-// ActiveProbe debugではprobe poolのoffset込み位置、IrradianceVolume debugではcell centerを描画する。
+// ActiveProbe debugではCVarに応じて cell center / offset probe sample position を切り替え、
+// IrradianceVolume debugでは常にcell centerを描画する。
 
 #include "/Engine/Public/Platform.ush"
 #include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
@@ -17,6 +18,8 @@ uint GridResolutionZ;
 uint FspProbePoolElementCount;
 uint FrameCount;
 uint DebugMode;
+uint bUseProbeVisualizationOffset;
+uint bUseProbeTraceOffset;
 uint BbvGridResolutionX;
 uint BbvGridResolutionY;
 uint BbvGridResolutionZ;
@@ -39,6 +42,7 @@ struct VS_OUTPUT
     nointerpolation uint GlobalCellIndex : TEXCOORD2;
     nointerpolation uint ProbeIndex : TEXCOORD3;
     nointerpolation uint ProbeFlags : TEXCOORD4;
+    float3 ProbeSamplePosWs : TEXCOORD5;
 };
 
 bool FspTryGetActiveProbeForCell(out uint OutProbeIndex, out FInstantRdvFspProbePoolData OutData, uint GlobalCellIndex)
@@ -144,7 +148,10 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
     // ここがずれるとprobe球がカメラ追従に見えるため、更新パスと同じhelperを使う。
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
     const float3 ProbeOffset = bActiveProbe ? FspDecodeProbeOffset(ProbeData.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45 : 0.0.xxx;
-    const float3 ProbePosWs = bIrradianceVolumeDebug ? CellCenterWs : CellCenterWs + ProbeOffset;
+    const float3 ProbeSamplePosWs = CellCenterWs + ProbeOffset;
+    const float3 ProbePosWs = bIrradianceVolumeDebug
+        ? CellCenterWs
+        : (CellCenterWs + ((bUseProbeVisualizationOffset != 0u) ? ProbeOffset : 0.0.xxx));
     const float DrawScale = ((bIrradianceVolumeDebug && bHasVolumeSH) || ((!bIrradianceVolumeDebug) && bActiveProbe)) ? DebugProbeRadiusCm : 0.0;
     const float2 Corner = QuadPos[LocalVertexIndex];
     const float3 VertexPosWs = ProbePosWs + (CameraRightWs * Corner.x + CameraUpWs * Corner.y) * DrawScale;
@@ -155,6 +162,9 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
     Out.GlobalCellIndex = GlobalCellIndex;
     Out.ProbeIndex = ProbeIndex;
     Out.ProbeFlags = bActiveProbe ? 1u : 0u;
+    // DebugMode 9 は現在のtrace origin設定そのものを診断する用途なので、
+    // TraceUseProbeOffset=0 の場合はcell center、1 の場合はoffset sample positionを判定対象にする。
+    Out.ProbeSamplePosWs = (bUseProbeTraceOffset != 0u) ? ProbeSamplePosWs : CellCenterWs;
     return Out;
 }
 
@@ -256,7 +266,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         // Probe ray traceの始点そのものがBBV occupied voxelに埋まっているかを可視化する。
         // 自己ヒット調査では「free / embedded / BBV範囲外」を切り分けることが重要なので、3値で色分けする。
         bool bEmbeddedInBbv = false;
-        const bool bInsideBbv = BbvTryGetProbeOccupancyAtWorldPos(Input.ProbePosWs, bEmbeddedInBbv);
+        const bool bInsideBbv = BbvTryGetProbeOccupancyAtWorldPos(Input.ProbeSamplePosWs, bEmbeddedInBbv);
         Color = !bInsideBbv
             ? float4(0.2, 0.5, 1.0, 1.0)
             : (bEmbeddedInBbv ? float4(1.0, 0.15, 0.1, 1.0) : float4(0.2, 1.0, 0.3, 1.0));

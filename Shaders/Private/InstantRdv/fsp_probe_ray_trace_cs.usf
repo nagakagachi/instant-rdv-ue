@@ -20,6 +20,7 @@ float BbvCellSizeCm;
 float3 BbvToroidalOffsetCells;
 float FspTraceDistanceCm;
 uint FrameCount;
+uint bUseProbeTraceOffset;
 
 #include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
 
@@ -58,7 +59,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         if (Data.OwnerCellIndex != k_irdv_fsp_invalid_probe_index && FspDecodeGlobalCellIndex(Data.OwnerCellIndex, CascadeIndex, LocalCellIndex))
         {
             const float3 ProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * FspCascadeCellSizeCm(CascadeIndex) * 0.45;
-            const float3 ProbePositionWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex) + ProbeOffset;
+            const float3 ProbeBasePositionWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+            const float3 ProbePositionWs = ProbeBasePositionWs + ((bUseProbeTraceOffset != 0u) ? ProbeOffset : 0.0.xxx);
             const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);
             const float2 Jitter01 = float2(
                 FspHash01(ProbeIndex * 1664525u + OctCellIndex * 1013904223u + FrameCount * 131u),

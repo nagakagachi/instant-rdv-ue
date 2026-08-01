@@ -426,6 +426,7 @@ public:
         SHADER_PARAMETER(uint32, FspCascadeCount)
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
         SHADER_PARAMETER(uint32, FrameCount)
+        SHADER_PARAMETER(uint32, bUseProbeTraceOffset)
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
         SHADER_PARAMETER(uint32, BbvGridResolutionY)
         SHADER_PARAMETER(uint32, BbvGridResolutionZ)
@@ -566,6 +567,8 @@ public:
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
         SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(uint32, DebugMode)
+        SHADER_PARAMETER(uint32, bUseProbeVisualizationOffset)
+        SHADER_PARAMETER(uint32, bUseProbeTraceOffset)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspCellProbeIndex)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint4>, FspProbeAtlas)
@@ -590,6 +593,7 @@ public:
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
         SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(uint32, DebugMode)
+        SHADER_PARAMETER(uint32, bUseProbeTraceOffset)
         SHADER_PARAMETER(float, FspCellSizeCm)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
@@ -1162,7 +1166,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     FRDGBuilder& GraphBuilder,
     const FSceneView& View,
     FRDGTexture* SceneDepthTexture,
-    bool bEnableFspUpdate)
+    bool bEnableFspUpdate,
+    bool bUseProbeTraceOffset)
 {
     if (!bEnableFspUpdate || SceneDepthTexture == nullptr || !SystemState.bRenderInitialized)
     {
@@ -1345,6 +1350,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
         Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->bUseProbeTraceOffset = bUseProbeTraceOffset ? 1u : 0u;
         Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
         Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
         Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
@@ -1438,7 +1444,9 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
     float SceneColorPreExposure,
     int32 BbvDebugMode,
     int32 FspProbeDebugMode,
-    int32 FspIvProbeDebugMode)
+    int32 FspIvProbeDebugMode,
+    bool bUseProbeVisualizationOffset,
+    bool bUseProbeTraceOffset)
 {
     if ((BbvDebugMode <= 0 && FspProbeDebugMode <= 0 && FspIvProbeDebugMode <= 0) || SceneDepthTexture == nullptr || SceneColorTexture == nullptr)
     {
@@ -1534,6 +1542,8 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 VSParams->FspProbePoolElementCount = ProbeCount;
                 VSParams->FrameCount = SystemState.FrameCount;
                 VSParams->DebugMode = InternalDebugMode;
+                VSParams->bUseProbeVisualizationOffset = bUseProbeVisualizationOffset ? 1u : 0u;
+                VSParams->bUseProbeTraceOffset = bUseProbeTraceOffset ? 1u : 0u;
                 VSParams->FspCellProbeIndex = GraphBuilder.CreateSRV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
                 VSParams->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
                 VSParams->FspProbeAtlas = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeAtlasBuffer.Handle);
@@ -1551,6 +1561,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 PSParams->FspProbePoolElementCount = ProbeCount;
                 PSParams->FrameCount = SystemState.FrameCount;
                 PSParams->DebugMode = InternalDebugMode;
+                PSParams->bUseProbeTraceOffset = bUseProbeTraceOffset ? 1u : 0u;
                 PSParams->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
                 PSParams->FspGridCenterPositionWs = FspGridCenterPositionWs;
                 PSParams->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);

@@ -109,7 +109,9 @@ public:
         float SceneColorPreExposure,
         int32 BbvDebugMode,
         int32 FspProbeDebugMode,
-        int32 FspIvProbeDebugMode);
+        int32 FspIvProbeDebugMode,
+        bool bUseProbeVisualizationOffset,
+        bool bUseProbeTraceOffset);
 
     // BBV Radiance 更新。BeforeDOF の SceneColor は PreExposure 済みなので、
     // シェーダ内で PreExposure を打ち消して絶対輝度として蓄積する。
@@ -128,7 +130,8 @@ public:
         FRDGBuilder& GraphBuilder,
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
-        bool bEnableFspUpdate);
+        bool bEnableFspUpdate,
+        bool bUseProbeTraceOffset);
 
 private:
 
