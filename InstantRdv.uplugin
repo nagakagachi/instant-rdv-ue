@@ -6,7 +6,7 @@
   "Description": "Instant Raster Derived Voxel scene rendering plugin with BBV and FSP ActiveProbe rendering hooks.",
   "Category": "Rendering",
   "CreatedBy": "@nagakagachi",
-  "CanContainContent": false,
+  "CanContainContent": true,
   "IsBetaVersion": true,
   "Installed": false,
   "Modules": [
