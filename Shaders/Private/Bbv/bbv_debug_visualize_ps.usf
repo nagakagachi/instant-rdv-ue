@@ -1,3 +1,4 @@
+// ファイル名: bbv_debug_visualize_ps.usf
 #include "/Engine/Private/Common.ush"
 
 
@@ -28,7 +29,7 @@ float3 BbvGridMinPositionWs;
 float MaxTraceDistanceCm;
 int DebugMode;
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
+#include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
 float3 HashColor(uint Value)
 {
@@ -51,7 +52,8 @@ float3 LoadResolvedRadiance(uint BrickIndex)
 float3 DisplayRadiance(float3 AbsoluteRadiance)
 {
     // 格納値は露出前の絶対輝度。デバッグ表示では白飛びを避けるため簡易圧縮して見せる。
-    //return AbsoluteRadiance / (1.0.xxx + AbsoluteRadiance);
+    // 輝度を圧縮表示する場合は、次の式を使用する。
+    // return AbsoluteRadiance / (1.0.xxx + AbsoluteRadiance);
     
     // 表示用にPreExposure適用.
 	return AbsoluteRadiance * SceneColorPreExposure;
@@ -123,6 +125,7 @@ bool TraceBbvVoxelRayReference(
         false,
         GridResolution,
         GridCellSize,
+        BbvGridMinPositionWs,
         ToroidalOffset,
         OutHitDistanceCm,
         OutLogicalBrickCoord,
@@ -154,6 +157,7 @@ bool TraceBbvBrickRayReference(
         true,
         GridResolution,
         GridCellSize,
+        BbvGridMinPositionWs,
         ToroidalOffset,
         OutHitDistanceCm,
         OutLogicalBrickCoord,

@@ -1,10 +1,11 @@
-// FSP: ActiveProbe OctMap -> IrradianceVolume SH update。
+// ファイル名: fsp_sh_update_cs.usf
+// FSP: ActiveProbeのOctMapからIrradianceVolumeのSHを更新する。
 // 参照InstantRDVと同じく、ActiveProbeの6x6 oct atlasをL1 SHへ積分し、owner cellのdense SHへ格納する。
 // SHの各係数は float4(sky visibility, radiance.r, radiance.g, radiance.b) を保持する。
 
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
 StructuredBuffer<uint> FspActiveProbeListCurr;
 StructuredBuffer<uint> FspProbePool;

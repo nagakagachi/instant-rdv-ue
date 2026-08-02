@@ -7,7 +7,7 @@
 #include "CoreMinimal.h"
 #include "RenderGraphFwd.h"
 
-#include "../../../Shaders/Private/InstantRdv/instant_rdv_common.ush"
+#include "../../../Shaders/Private/instant_rdv_common.ush"
 
 
 class FRDGBuilder;

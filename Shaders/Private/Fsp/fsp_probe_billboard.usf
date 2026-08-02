@@ -1,10 +1,12 @@
-// FSP ActiveProbe / IrradianceVolume probe sphere debug rendering.
+// ファイル名: fsp_probe_billboard.usf
+// FSP ActiveProbe / IrradianceVolumeのプローブ球デバッグ描画。
 // 各FSP cellを1インスタンス相当のcamera-facing quadとして描き、pixel shaderで球面に見せる。
 // ActiveProbe debugではCVarに応じて cell center / offset probe sample position を切り替え、
 // IrradianceVolume debugでは常にcell centerを描画する。
 
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
 float4x4 ViewMatrix;
 float4x4 ViewProjectionMatrix;
@@ -69,39 +71,6 @@ bool FspTryGetActiveProbeForCell(out uint OutProbeIndex, out FInstantRdvFspProbe
 
     OutProbeIndex = ProbeIndex;
     OutData = Data;
-    return true;
-}
-
-bool BbvTryGetProbeOccupancyAtWorldPos(float3 WorldPos, out bool bOutOccupied)
-{
-    bOutOccupied = false;
-
-    const float CellSizeCm = max(BbvCellSizeCm, 0.001);
-    const float FineCellSizeCm = CellSizeCm / float(k_irdv_bbv_brick_reso);
-    const float3 FineCoordF = (WorldPos - BbvGridMinPositionWs) / FineCellSizeCm;
-    const int3 LogicalFineCoord = int3(floor(FineCoordF));
-    const int3 FineGridResolution = int3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ) * int(k_irdv_bbv_brick_reso);
-    if (any(LogicalFineCoord < 0) || any(LogicalFineCoord >= FineGridResolution))
-    {
-        return false;
-    }
-
-    const int FineRes = int(k_irdv_bbv_brick_reso);
-    const int3 LogicalBrickCoord = LogicalFineCoord / FineRes;
-    const int3 LocalFineCoord = LogicalFineCoord - LogicalBrickCoord * FineRes;
-    const uint3 PhysicalBrickCoord = LogicalToPhysicalGridCoord(LogicalBrickCoord, int3(BbvToroidalOffsetCells), uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ));
-    const uint BrickIndex = FlattenGridCoord(PhysicalBrickCoord, uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ));
-
-    if (BrickData[BrickIndex * 4u + 0u] == 0u)
-    {
-        bOutOccupied = false;
-        return true;
-    }
-
-    const uint BitIndex = CalcFineBitIndex(uint3(LocalFineCoord));
-    const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (BitIndex / 32u);
-    const uint WordMask = 1u << (BitIndex & 31u);
-    bOutOccupied = (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
     return true;
 }
 
@@ -244,7 +213,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     else if (DebugMode == 4u || DebugMode == 5u)
     {
         // OctMap表示は球面normalをoct encodeしてatlas texelを参照する。
-        // DebugMode 4=Radiance, 5=SkyVisibility。
+        // DebugModeは4がRadiance、5がSkyVisibility。
         const uint2 OctCellId = min(uint2(FspOctEncode(NormalWs) * float(k_irdv_fsp_probe_octmap_width)), uint2(k_irdv_fsp_probe_octmap_width - 1u, k_irdv_fsp_probe_octmap_width - 1u));
         const float4 Atlas = asfloat(FspProbeAtlas[FspProbeAtlasAddress(Input.ProbeIndex, OctCellId)]);
         if (DebugMode == 4u)
@@ -269,7 +238,15 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         // Probe ray traceの始点そのものがBBV occupied voxelに埋まっているかを可視化する。
         // 自己ヒット調査では「free / embedded / BBV範囲外」を切り分けることが重要なので、3値で色分けする。
         bool bEmbeddedInBbv = false;
-        const bool bInsideBbv = BbvTryGetProbeOccupancyAtWorldPos(Input.ProbeSamplePosWs, bEmbeddedInBbv);
+        const bool bInsideBbv = BbvTryGetProbeOccupancyAtWorldPos(
+            BitmaskBrickVoxel,
+            BrickData,
+            Input.ProbeSamplePosWs,
+            BbvGridMinPositionWs,
+            BbvCellSizeCm,
+            uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+            int3(BbvToroidalOffsetCells),
+            bEmbeddedInBbv);
         Color = !bInsideBbv
             ? float4(0.2, 0.5, 1.0, 1.0)
             : (bEmbeddedInBbv ? float4(1.0, 0.15, 0.1, 1.0) : float4(0.2, 1.0, 0.3, 1.0));

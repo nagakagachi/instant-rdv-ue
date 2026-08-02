@@ -1,5 +1,7 @@
+// ファイル名: fsp_pre_update_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
 // 参照InstantRDVのfsp_pre_update_cs相当。
 // ScreenSpaceCollectで得たvisible surface cellを処理し、未所有cellにはprobe poolからActiveProbeを割り当てる。
@@ -83,35 +85,6 @@ float FspHash01(uint Seed)
     Seed *= 0x846ca68bu;
     Seed ^= Seed >> 16u;
     return float(Seed & 0x00ffffffu) / 16777216.0;
-}
-
-uint BbvReadVoxelOccupancyAtWorldPos(float3 WorldPos)
-{
-    // 参照実装の read_bbv_voxel_from_world_pos 相当。
-    // Probe relocation は「BBVに埋まっているか」を fine voxel 単位で見る必要があるため、
-    // Brick occupancy だけでなく bitmask occupancy まで含めて判定する。
-    const float CellSizeCm = max(BbvCellSizeCm, 0.001);
-    const float CellSizeInv = 1.0 / CellSizeCm;
-    const float3 VoxelCoordF = (WorldPos - BbvGridMinPositionWs) * CellSizeInv;
-    const int3 VoxelCoord = int3(floor(VoxelCoordF));
-    const int3 GridResolution = int3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ);
-    if (any(VoxelCoord < 0) || any(VoxelCoord >= GridResolution))
-    {
-        return 0u;
-    }
-
-    const uint3 PhysicalVoxelCoord = LogicalToPhysicalGridCoord(VoxelCoord, int3(BbvToroidalOffsetCells), uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ));
-    const uint BrickIndex = FlattenGridCoord(PhysicalVoxelCoord, uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ));
-    if (BrickData[BrickIndex * 4u + 0u] == 0u)
-    {
-        return 0u;
-    }
-
-    const uint3 FineCoord = min(uint3(frac(VoxelCoordF) * float(k_irdv_bbv_brick_reso)), uint3(k_irdv_bbv_brick_reso - 1u, k_irdv_bbv_brick_reso - 1u, k_irdv_bbv_brick_reso - 1u));
-    const uint BitIndex = CalcFineBitIndex(FineCoord);
-    const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (BitIndex / 32u);
-    const uint WordMask = 1u << (BitIndex & 31u);
-    return ((BitmaskBrickVoxel[WordIndex] & WordMask) != 0u) ? 1u : 0u;
 }
 
 [numthreads(64, 1, 1)]
@@ -203,7 +176,17 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         for (int SampleIndex = 0; SampleIndex < 6; ++SampleIndex)
         {
             const float3 CandidateWs = CellCenterWs + DirToCamera * (MaxProbeOffsetDistanceCm * FrontSamples[SampleIndex]);
-            if (BbvReadVoxelOccupancyAtWorldPos(CandidateWs) == 0u)
+            bool bOccupied = false;
+            BbvTryGetProbeOccupancyAtWorldPos(
+                BitmaskBrickVoxel,
+                BrickData,
+                CandidateWs,
+                BbvGridMinPositionWs,
+                BbvCellSizeCm,
+                uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+                int3(BbvToroidalOffsetCells),
+                bOccupied);
+            if (!bOccupied)
             {
                 ProbeSamplePosWs = CandidateWs;
                 bAcceptedVisibleFirst = true;
@@ -214,7 +197,17 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         if (!bAcceptedVisibleFirst)
         {
             const float3 SeedCandidateWs = CellCenterWs + clamp(PrevProbeOffset, -MaxProbeOffsetDistanceCm.xxx, MaxProbeOffsetDistanceCm.xxx);
-            if (BbvReadVoxelOccupancyAtWorldPos(SeedCandidateWs) == 0u)
+            bool bOccupied = false;
+            BbvTryGetProbeOccupancyAtWorldPos(
+                BitmaskBrickVoxel,
+                BrickData,
+                SeedCandidateWs,
+                BbvGridMinPositionWs,
+                BbvCellSizeCm,
+                uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+                int3(BbvToroidalOffsetCells),
+                bOccupied);
+            if (!bOccupied)
             {
                 ProbeSamplePosWs = SeedCandidateWs;
                 bAcceptedVisibleFirst = true;
@@ -228,7 +221,17 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         // 最後のランダムfallbackで「cell内の non-solid 位置」を確保する。
         // ここまでやることで、静止時の継続性を保ちつつ埋まり probe を減らす。
         bool bFoundNonSolid = false;
-        if (BbvReadVoxelOccupancyAtWorldPos(ProbeSamplePosWs) != 0u)
+        bool bOccupied = false;
+        BbvTryGetProbeOccupancyAtWorldPos(
+            BitmaskBrickVoxel,
+            BrickData,
+            ProbeSamplePosWs,
+            BbvGridMinPositionWs,
+            BbvCellSizeCm,
+            uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+            int3(BbvToroidalOffsetCells),
+            bOccupied);
+        if (bOccupied)
         {
             const float SeedLenSq = dot(PrevProbeOffset, PrevProbeOffset);
             const float3 PreferredDir = (SeedLenSq > 1.0e-6) ? (PrevProbeOffset * rsqrt(SeedLenSq)) : 0.0.xxx;
@@ -239,7 +242,17 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 for (int SampleIndex = 0; SampleIndex < 4; ++SampleIndex)
                 {
                     ProbeSamplePosWs = CellCenterWs + PreferredDir * (MaxProbeOffsetDistanceCm * FrontBiasSamples[SampleIndex]);
-                    if (BbvReadVoxelOccupancyAtWorldPos(ProbeSamplePosWs) == 0u)
+                    bool bCandidateOccupied = false;
+                    BbvTryGetProbeOccupancyAtWorldPos(
+                        BitmaskBrickVoxel,
+                        BrickData,
+                        ProbeSamplePosWs,
+                        BbvGridMinPositionWs,
+                        BbvCellSizeCm,
+                        uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+                        int3(BbvToroidalOffsetCells),
+                        bCandidateOccupied);
+                    if (!bCandidateOccupied)
                     {
                         bFoundNonSolid = true;
                         break;
@@ -260,7 +273,17 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                         FspHash01(Seed1),
                         FspHash01(Seed2)) - 0.5.xxx;
                     ProbeSamplePosWs = CellCenterWs + RandomOffset * (FspCascadeCellSizeCm(CascadeIndex) * 0.4);
-                    if (BbvReadVoxelOccupancyAtWorldPos(ProbeSamplePosWs) == 0u)
+                    bool bCandidateOccupied = false;
+                    BbvTryGetProbeOccupancyAtWorldPos(
+                        BitmaskBrickVoxel,
+                        BrickData,
+                        ProbeSamplePosWs,
+                        BbvGridMinPositionWs,
+                        BbvCellSizeCm,
+                        uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+                        int3(BbvToroidalOffsetCells),
+                        bCandidateOccupied);
+                    if (!bCandidateOccupied)
                     {
                         break;
                     }

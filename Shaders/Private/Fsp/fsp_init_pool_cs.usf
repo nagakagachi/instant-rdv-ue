@@ -1,9 +1,10 @@
+// ファイル名: fsp_init_pool_cs.usf
 // FSP probe pool / free stack 初期化シェーダ。
 // 参照InstantRDVと同じく、probeはcell数分のpoolからfree stack経由で割り当てる。
 // CellProbeIndexはcell -> probe ownership、ProbePoolはprobe -> owner/offset/frame情報を保持する。
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
 RWStructuredBuffer<uint> RWFspProbeFreeStack; // [0] = count, [1..N] = free indices
 RWStructuredBuffer<uint> RWFspCellProbeIndex;

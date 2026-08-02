@@ -1,6 +1,6 @@
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
 
 StructuredBuffer<uint> FrustumBrickCounter;
 RWBuffer<uint> RWFrustumBrickIndirectArg;

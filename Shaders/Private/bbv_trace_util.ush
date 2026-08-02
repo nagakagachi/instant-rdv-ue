@@ -1,3 +1,4 @@
+// ファイル名: bbv_trace_util.ush
 // BBV レイトレースの本番共通ユーティリティ。
 // GI 含む本番経路で再利用できるよう、Brick/FineVoxel 追跡のコア処理を集約する。
 //
@@ -10,7 +11,7 @@
 //   これを守らないとカメラ微動で色が点滅し、診断結果が不安定になる。
 
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
 
 float3 SafeInv(float3 Value)
 {
@@ -75,6 +76,54 @@ bool IsFineVoxelOccupiedInBrick(StructuredBuffer<uint> BbvBuffer, uint BrickInde
 	const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (OutBitIndex / 32u);
     const uint WordMask = 1u << (OutBitIndex & 31u);
 	return (BbvBuffer[WordIndex] & WordMask) != 0u;
+}
+
+// ワールド空間のBBV占有判定。製品レイトレース、プローブ再配置、デバッグおよびMaterial用アダプタで共有する。
+// 呼び出し側がファイルローカルなシェーダパラメータへ依存しないよう、リソースとグリッド状態をすべて引数で受け取る。
+// 有効なBBV範囲外の位置ではfalseを返し、OutOccupiedもfalseに設定する。
+bool BbvTryGetProbeOccupancyAtWorldPos(
+    StructuredBuffer<uint> BitmaskBrickVoxel,
+    StructuredBuffer<uint> BrickData,
+    float3 WorldPosWs,
+    float3 GridMinPositionWs,
+    float CellSizeCm,
+    uint3 GridResolution,
+    int3 ToroidalOffsetCells,
+    out bool OutOccupied)
+{
+    OutOccupied = false;
+
+    if (any(GridResolution == 0u))
+    {
+        return false;
+    }
+
+    const float SafeCellSizeCm = max(CellSizeCm, 0.001);
+    const float FineCellSizeCm = SafeCellSizeCm / float(k_irdv_bbv_brick_reso);
+    const int3 FineCoord = int3(floor((WorldPosWs - GridMinPositionWs) / FineCellSizeCm));
+    const int3 FineGridResolution = int3(GridResolution) * int(k_irdv_bbv_brick_reso);
+    if (any(FineCoord < 0) || any(FineCoord >= FineGridResolution))
+    {
+        return false;
+    }
+
+    const int FineRes = int(k_irdv_bbv_brick_reso);
+    const int3 LogicalBrickCoord = FineCoord / FineRes;
+    const int3 LocalFineCoord = FineCoord - LogicalBrickCoord * FineRes;
+    const uint3 PhysicalBrickCoord = LogicalToPhysicalGridCoord(
+        LogicalBrickCoord,
+        ToroidalOffsetCells,
+        GridResolution);
+    const uint BrickIndex = FlattenGridCoord(PhysicalBrickCoord, GridResolution);
+
+    if (BrickData[BrickIndex * 4u] == 0u)
+    {
+        return true;
+    }
+
+    uint BitIndex = 0u;
+    OutOccupied = IsFineVoxelOccupiedInBrick(BitmaskBrickVoxel, BrickIndex, LocalFineCoord, BitIndex);
+    return true;
 }
 
 float CalcTraceSampleT(float CurrT, float EndT)
@@ -149,6 +198,7 @@ bool TraceBbvRayReference(
 
     uint3 GridResolution,
     float GridCellSize,
+    float3 GridMinPositionWs,
     int3 ToroidalOffset,
 
     out float OutHitDistanceCm,
@@ -168,7 +218,7 @@ bool TraceBbvRayReference(
     const float CellSizeInv = 1.0 / CellSize;
     const int3 GridResI = GridResolution;
 
-	const float3 RayOrigin = (RayOriginWs - BbvGridMinPositionWs) * CellSizeInv;
+	const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
     const float3 RayDir = RayDirWs;
     const float3 RayDirInv = SafeInv(RayDir);
     const float3 RayDirSign = sign(RayDir);

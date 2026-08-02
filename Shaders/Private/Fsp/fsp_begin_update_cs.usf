@@ -1,5 +1,6 @@
+// ファイル名: fsp_begin_update_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
 // 参照InstantRDVのfsp_begin_update_cs相当。
 // 前フレームのActiveProbeを走査し、まだ有効なprobeだけをCurrリストへ引き継ぐ。

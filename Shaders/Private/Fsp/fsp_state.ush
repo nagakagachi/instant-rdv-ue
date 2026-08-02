@@ -1,7 +1,8 @@
-#ifndef INSTANT_RDV_FSP_COMMON_USH
-#define INSTANT_RDV_FSP_COMMON_USH
+// ファイル名: fsp_state.ush
+#ifndef INSTANT_RDV_FSP_STATE_USH
+#define INSTANT_RDV_FSP_STATE_USH
 
-#include "/InstantRdvShaders/Private/InstantRdv/instant_rdv_util.ush"
+#include "/InstantRdvShaders/Private/fsp_util.ush"
 
 // InstantRDV参照実装のFSPは「論理グリッド座標」と「物理(toroidal)格納座標」を分ける。
 // Buffer上のcell indexは物理座標ベースで安定させ、カメラ移動時はtoroidal offsetだけを進めることで
@@ -354,4 +355,4 @@ bool FspIrradianceVolumeHasValidSH(StructuredBuffer<float4> SHBuffer, uint CellI
     return any(abs(C0) > 0.0.xxxx) || any(abs(C1) > 0.0.xxxx) || any(abs(C2) > 0.0.xxxx) || any(abs(C3) > 0.0.xxxx);
 }
 
-#endif // INSTANT_RDV_FSP_COMMON_USH
+#endif // INSTANT_RDV_FSP_STATE_USH

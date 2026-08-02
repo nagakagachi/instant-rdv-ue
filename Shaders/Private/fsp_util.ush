@@ -1,0 +1,152 @@
+// ファイル名: fsp_util.ush
+#ifndef INSTANT_RDV_FSP_UTIL_USH
+#define INSTANT_RDV_FSP_UTIL_USH
+
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
+
+// 再利用可能なユーティリティへ明示的に渡すFSPグリッド状態。
+// シェーダのエントリポイントはUniformParamsから値を設定し、Material CustomNodeは
+// FSPシェーダのグローバル変数に依存せず同等の値を渡せる。
+struct FInstantRdvFspGridParams
+{
+    uint GridResolutionX;
+    uint GridResolutionY;
+    uint GridResolutionZ;
+    uint CascadeCount;
+    float CellSizeCm;
+    float3 GridCenterPositionWs;
+    float3 PrevGridCenterPositionWs;
+};
+
+uint FspUtilCellCountPerCascade(FInstantRdvFspGridParams Params)
+{
+    return Params.GridResolutionX * Params.GridResolutionY * Params.GridResolutionZ;
+}
+
+uint FspUtilTotalCellCount(FInstantRdvFspGridParams Params)
+{
+    return FspUtilCellCountPerCascade(Params) * max(Params.CascadeCount, 1u);
+}
+
+uint FspUtilEncodeGlobalCellIndex(FInstantRdvFspGridParams Params, uint CascadeIndex, uint LocalCellIndex)
+{
+    return CascadeIndex * FspUtilCellCountPerCascade(Params) + LocalCellIndex;
+}
+
+bool FspUtilDecodeGlobalCellIndex(
+    FInstantRdvFspGridParams Params,
+    uint GlobalCellIndex,
+    out uint OutCascadeIndex,
+    out uint OutLocalCellIndex)
+{
+    const uint CellCountPerCascade = FspUtilCellCountPerCascade(Params);
+    OutCascadeIndex = 0u;
+    OutLocalCellIndex = 0u;
+    if (CellCountPerCascade == 0u || GlobalCellIndex >= FspUtilTotalCellCount(Params))
+    {
+        return false;
+    }
+
+    OutCascadeIndex = GlobalCellIndex / CellCountPerCascade;
+    OutLocalCellIndex = GlobalCellIndex - OutCascadeIndex * CellCountPerCascade;
+    return OutCascadeIndex < Params.CascadeCount;
+}
+
+uint3 FspUtilLocalCellIndexToCoord(FInstantRdvFspGridParams Params, uint LocalCellIndex)
+{
+    const uint Slice = Params.GridResolutionX * Params.GridResolutionY;
+    const uint Z = LocalCellIndex / Slice;
+    const uint Rem = LocalCellIndex - Z * Slice;
+    const uint Y = Rem / Params.GridResolutionX;
+    const uint X = Rem - Y * Params.GridResolutionX;
+    return uint3(X, Y, Z);
+}
+
+uint FspUtilPhysicalCellCoordToLocalIndex(FInstantRdvFspGridParams Params, uint3 PhysicalCoord)
+{
+    return PhysicalCoord.x
+        + PhysicalCoord.y * Params.GridResolutionX
+        + PhysicalCoord.z * Params.GridResolutionX * Params.GridResolutionY;
+}
+
+float FspUtilCascadeCellSizeCm(FInstantRdvFspGridParams Params, uint CascadeIndex)
+{
+    return Params.CellSizeCm * exp2(float(CascadeIndex));
+}
+
+float FspUtilProbeMaxOffsetDistanceCm(FInstantRdvFspGridParams Params, uint CascadeIndex)
+{
+    return FspUtilCascadeCellSizeCm(Params, CascadeIndex) * 0.9;
+}
+
+int3 FspUtilCenterCellIdFromPosition(FInstantRdvFspGridParams Params, uint CascadeIndex, float3 CenterPositionWs)
+{
+    return int3(floor(CenterPositionWs / max(FspUtilCascadeCellSizeCm(Params, CascadeIndex), 0.001)));
+}
+
+int3 FspUtilToroidalOffset(FInstantRdvFspGridParams Params, uint CascadeIndex, float3 CenterPositionWs)
+{
+    const int3 Resolution = int3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ);
+    const int3 CenterCellId = FspUtilCenterCellIdFromPosition(Params, CascadeIndex, CenterPositionWs);
+    return ((CenterCellId % Resolution) + Resolution) % Resolution;
+}
+
+float3 FspUtilCascadeGridMinPositionWs(FInstantRdvFspGridParams Params, uint CascadeIndex)
+{
+    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const float3 Extent = float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * CellSize;
+    return float3(FspUtilCenterCellIdFromPosition(Params, CascadeIndex, Params.GridCenterPositionWs)) * CellSize - Extent * 0.5.xxx;
+}
+
+uint3 FspUtilLinearToPhysicalCoord(FInstantRdvFspGridParams Params, int3 LinearCoord, uint CascadeIndex)
+{
+    return LogicalToPhysicalGridCoord(
+        LinearCoord,
+        FspUtilToroidalOffset(Params, CascadeIndex, Params.GridCenterPositionWs),
+        uint3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ));
+}
+
+int3 FspUtilPhysicalToLinearCoord(FInstantRdvFspGridParams Params, uint3 PhysicalCoord, uint CascadeIndex)
+{
+    return PhysicalToLogicalGridCoord(
+        int3(PhysicalCoord),
+        FspUtilToroidalOffset(Params, CascadeIndex, Params.GridCenterPositionWs),
+        uint3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ));
+}
+
+float3 FspUtilCalcCellCenterWs(FInstantRdvFspGridParams Params, uint CascadeIndex, uint LocalCellIndex)
+{
+    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const int3 LinearCoord = FspUtilPhysicalToLinearCoord(
+        Params,
+        FspUtilLocalCellIndexToCoord(Params, LocalCellIndex),
+        CascadeIndex);
+    return FspUtilCascadeGridMinPositionWs(Params, CascadeIndex) + (float3(LinearCoord) + 0.5.xxx) * CellSize;
+}
+
+bool FspUtilTryGetGlobalCellIndexFromWorldPos(
+    FInstantRdvFspGridParams Params,
+    float3 WorldPosWs,
+    uint CascadeIndex,
+    out uint OutGlobalCellIndex)
+{
+    OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
+    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const int3 LinearCoord = int3(floor(
+        (WorldPosWs - FspUtilCascadeGridMinPositionWs(Params, CascadeIndex)) / max(CellSize, 0.001)));
+    if (any(LinearCoord < 0) ||
+        LinearCoord.x >= int(Params.GridResolutionX) ||
+        LinearCoord.y >= int(Params.GridResolutionY) ||
+        LinearCoord.z >= int(Params.GridResolutionZ))
+    {
+        return false;
+    }
+
+    OutGlobalCellIndex = FspUtilEncodeGlobalCellIndex(
+        Params,
+        CascadeIndex,
+        FspUtilPhysicalCellCoordToLocalIndex(Params, FspUtilLinearToPhysicalCoord(Params, LinearCoord, CascadeIndex)));
+    return true;
+}
+
+#endif // INSTANT_RDV_FSP_UTIL_USH

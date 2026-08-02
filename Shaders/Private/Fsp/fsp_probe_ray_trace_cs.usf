@@ -1,7 +1,8 @@
+// ファイル名: fsp_probe_ray_trace_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
-// FSP probe ray trace pass。
+// FSPプローブレイのトレースパス。
 // RayRequestBufferに積まれたActiveProbeのOctMap方向だけをBBVへtraceする。
 // 全cell x 全方向ではなく、ActiveProbe由来のrequest数でdispatchする点がFSPのレイ数削減の要。
 
@@ -22,7 +23,7 @@ float FspTraceDistanceCm;
 uint FrameCount;
 uint bUseProbeTraceOffset;
 
-#include "/InstantRdvShaders/Private/InstantRdv/bbv_trace_util.ush"
+#include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
 float FspHash01(uint Seed)
 {
@@ -90,6 +91,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 false,
                 uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
                 BbvCellSizeCm,
+                BbvGridMinPositionWs,
                 int3(BbvToroidalOffsetCells),
                 HitDistanceCm,
                 LogicalBrickCoord,

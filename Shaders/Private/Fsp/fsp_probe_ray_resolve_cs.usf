@@ -1,7 +1,8 @@
+// ファイル名: fsp_probe_ray_resolve_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
-// FSP probe ray resolve pass。
+// FSPプローブレイの結果解決パス。
 // Trace結果をprobe atlas(OctMap)へtemporal blendし、hit時はBBV optional radiance、miss時はsky visibility=1を格納する。
 
 StructuredBuffer<uint> FspProbeRayResultBuffer;

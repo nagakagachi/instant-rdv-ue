@@ -1,6 +1,7 @@
+// ファイル名: fsp_debug_text_ps.usf
 #include "/Engine/Public/Platform.ush"
 
-// FSP debug counter overlay。
+// FSPデバッグ用カウンタ表示。
 // GPU counterをCPU readbackせず画面に出すため、数値部分だけ簡易7セグメントで描く。
 // ラベルはC++側のAddDrawCanvasPassでUE標準文字列として描画する。
 

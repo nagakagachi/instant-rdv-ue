@@ -1,10 +1,11 @@
+// ファイル名: fsp_screen_space_collect_cs.usf
 // ファイル説明: Frustum Space Probe(FSP) の可視Surface Cell収集パス。
 // 参照InstantRDVのsurface mask ownership inject/compact相当をUEのSceneDepth入力に合わせてまとめたもの。
 // Depthからworld位置を復元し、そのsurfaceを代表するFSP cellだけをvisible listへ追加する。
 
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/InstantRdv/fsp_common.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
 Texture2D<float> SceneDepthTexture;
 RWStructuredBuffer<uint> RWFspCellVisibleMarkTemporalBuffer;
