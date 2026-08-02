@@ -487,7 +487,8 @@ float4 FspUtilConvolveL1SH(float4 SHCoefficients, float L0Scale, float L1Scale)
 
 // 入射Radiance SHをLambert積分用のDiffuse Irradiance SHへ変換する。
 // 戻り値は E(N) = integral(L(omega) * max(dot(N, omega), 0) domega) の近似値。
-// この戻り値をLambert BRDFへ渡す場合、Radiance側で追加のPI除算は行わない。
+// これはLambert BRDFの1/PIを含まない入射Diffuse Irradianceである。
+// Lambert BRDFへ渡す場合はBRDF側でPI除算し、最終Diffuse反射値として使う場合は利用側でPI除算する。
 // Radiance SHをCos畳み込み済みDiffuse Irradiance SHへ変換する。
 float4 FspUtilConvolveL1SHByClampedCosine(float4 RadianceSH)
 {
@@ -506,7 +507,7 @@ float4 FspUtilConvolveL1SHByNormalizedClampedCosine(float4 SkyVisibilitySH)
 // SH係数ではなく評価基底側へCos畳み込みを移す。
 // dot(SH * Kernel, Basis) == dot(SH, Basis * Kernel) なので、
 // RGB各チャンネルの係数を個別に畳み込むより、基底を一度だけ計算する方が軽い。
-// Cos畳み込みを基底側へ移して、Diffuse Irradiance評価用基底を返す。
+// Cos畳み込みを基底側へ移して、PI除算前のDiffuse Irradiance評価用基底を返す。
 float4 FspUtilEvaluateL1ShBasisWithClampedCosine(float3 DirectionWs)
 {
     const float4 ShBasis = FspUtilEvaluateL1ShBasis(DirectionWs);
@@ -629,7 +630,8 @@ float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
 }
 
 // 指定セルの入射Radiance SHをCos畳み込みし、Diffuse Irradianceを評価する。
-// 戻り値はLambert積分済みの照度相当値であり、利用側でPI除算しない。
+// 戻り値はPI除算前のE(N) = integral(L * max(N・omega, 0) domega)である。
+// Lambert BRDFへの入力ではBRDF側の1/PIを使い、最終Diffuse反射値では利用側でPI除算する。
 // 指定セルのRadiance SHからDiffuse Irradianceを評価する。
 float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
     StructuredBuffer<float4> IrradianceVolumeSH,
