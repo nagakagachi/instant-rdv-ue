@@ -47,17 +47,6 @@ uint FspPopFreeProbeIndex()
     }
 }
 
-void FspPushFreeProbeIndex(uint ProbeIndex)
-{
-    uint OldCount = 0u;
-    InterlockedAdd(RWFspProbeFreeStack[0], 1u, OldCount);
-    const uint WriteIndex = OldCount + 1u;
-    if (WriteIndex <= FspProbePoolElementCount)
-    {
-        RWFspProbeFreeStack[WriteIndex] = ProbeIndex;
-    }
-}
-
 void FspPushCurrActiveProbeIndex(uint ProbeIndex)
 {
     uint ActiveListIndex = 0u;
@@ -66,6 +55,58 @@ void FspPushCurrActiveProbeIndex(uint ProbeIndex)
     {
         RWFspActiveProbeListCurr[ActiveListIndex + 1u] = ProbeIndex;
     }
+}
+
+void FspCopyProbeAtlas(uint DstProbeIndex, uint SrcProbeIndex)
+{
+    [unroll]
+    for (uint OctIndex = 0u; OctIndex < kFspRayCountPerProbe; ++OctIndex)
+    {
+        RWFspProbeAtlas[DstProbeIndex * kFspRayCountPerProbe + OctIndex] =
+            RWFspProbeAtlas[SrcProbeIndex * kFspRayCountPerProbe + OctIndex];
+    }
+}
+
+bool FspTrySeedProbeFromUpperCascade(
+    float3 SamplePositionWs,
+    uint DstCascadeIndex,
+    uint DstProbeIndex)
+{
+    const uint CascadeCount = FspEffectiveCascadeCount();
+    [loop]
+    for (uint SrcCascadeIndex = DstCascadeIndex + 1u;
+         SrcCascadeIndex < CascadeCount;
+         ++SrcCascadeIndex)
+    {
+        uint SrcGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
+        if (!FspTryGetGlobalCellIndexFromWorldPos(
+            SamplePositionWs,
+            SrcCascadeIndex,
+            SrcGlobalCellIndex))
+        {
+            continue;
+        }
+
+        const uint SrcProbeIndex = RWFspCellProbeIndex[SrcGlobalCellIndex];
+        if (SrcProbeIndex == k_irdv_fsp_invalid_probe_index ||
+            SrcProbeIndex >= FspProbePoolElementCount)
+        {
+            continue;
+        }
+
+        const FInstantRdvFspProbePoolData SrcData =
+            FspLoadProbePoolData(RWFspProbePool, SrcProbeIndex);
+        if (SrcData.OwnerCellIndex != SrcGlobalCellIndex ||
+            SrcData.LastUpdateFrame == 0u)
+        {
+            continue;
+        }
+
+        FspCopyProbeAtlas(DstProbeIndex, SrcProbeIndex);
+        return true;
+    }
+
+    return false;
 }
 
 void FspClearProbeAtlas(uint ProbeIndex)
@@ -113,23 +154,10 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             return;
         }
 
-        uint OriginalCellProbeIndex = k_irdv_fsp_invalid_probe_index;
-        InterlockedCompareExchange(RWFspCellProbeIndex[GlobalCellIndex], k_irdv_fsp_invalid_probe_index, ProbeIndex, OriginalCellProbeIndex);
-        if (OriginalCellProbeIndex == k_irdv_fsp_invalid_probe_index)
-        {
-            // 新規probeだけCurrへpushする。既存probeはBeginUpdateでPrevからCurrへ引き継がれている。
-            FspPushCurrActiveProbeIndex(ProbeIndex);
-            bNewProbe = true;
-        }
-        else
-        {
-            FspPushFreeProbeIndex(ProbeIndex);
-            ProbeIndex = OriginalCellProbeIndex;
-            if (ProbeIndex >= FspProbePoolElementCount)
-            {
-                return;
-            }
-        }
+        // ScreenSpaceCollectがセル単位でdedup済みのため、参照実装と同じく直接所有権を確定する。
+        RWFspCellProbeIndex[GlobalCellIndex] = ProbeIndex;
+        FspPushCurrActiveProbeIndex(ProbeIndex);
+        bNewProbe = true;
     }
     else if (ProbeIndex >= FspProbePoolElementCount)
     {
@@ -146,10 +174,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(RWFspProbePool, ProbeIndex);
     if (bNewProbe)
     {
-        // 新規割り当て時は古いoct atlas履歴を持ち越さない。
+        // 新規probeはoffsetと更新時刻を初期化する。
         Data.ProbeOffsetV3 = 0u;
         Data.LastUpdateFrame = 0u;
-        FspClearProbeAtlas(ProbeIndex);
     }
 
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
@@ -197,6 +224,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 bAcceptedVisibleFirst = true;
                 break;
             }
+
         }
 
         if (!bAcceptedVisibleFirst)
@@ -294,6 +322,18 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                     }
                 }
             }
+        }
+    }
+
+    if (bNewProbe)
+    {
+        // 上位Cascadeに安定したAtlasがあれば初期値として利用し、黒い初期フレームを短縮する。
+        if (!FspTrySeedProbeFromUpperCascade(
+            ProbeSamplePosWs,
+            CascadeIndex,
+            ProbeIndex))
+        {
+            FspClearProbeAtlas(ProbeIndex);
         }
     }
 

@@ -86,6 +86,48 @@ uint3 EncodeRadianceToFixed(float3 AbsoluteRadiance)
     return uint3(Clamped * kRadianceFixedPointScale + 0.5.xxx);
 }
 
+bool BallotAny(uint4 BallotMask)
+{
+    return (BallotMask.x | BallotMask.y | BallotMask.z | BallotMask.w) != 0u;
+}
+
+uint FirstLaneFromBallot(uint4 BallotMask)
+{
+    if (BallotMask.x != 0u) { return firstbitlow(BallotMask.x); }
+    if (BallotMask.y != 0u) { return firstbitlow(BallotMask.y) + 32u; }
+    if (BallotMask.z != 0u) { return firstbitlow(BallotMask.z) + 64u; }
+    return firstbitlow(BallotMask.w) + 96u;
+}
+
+void AccumulateRadianceToWave(
+    uint BrickIndex,
+    uint3 FixedRadiance,
+    bool bHasInjection)
+{
+    uint4 PendingLanes = WaveActiveBallot(bHasInjection);
+    while (BallotAny(PendingLanes))
+    {
+        const uint LeaderLane = FirstLaneFromBallot(PendingLanes);
+        const uint LeaderBrickIndex = WaveReadLaneAt(BrickIndex, LeaderLane);
+        const bool bSameTarget = bHasInjection && (BrickIndex == LeaderBrickIndex);
+        const uint4 SameTargetLanes = WaveActiveBallot(bSameTarget);
+        const uint MergedR = WaveActiveSum(bSameTarget ? FixedRadiance.r : 0u);
+        const uint MergedG = WaveActiveSum(bSameTarget ? FixedRadiance.g : 0u);
+        const uint MergedB = WaveActiveSum(bSameTarget ? FixedRadiance.b : 0u);
+        const uint MergedCount = WaveActiveCountBits(bSameTarget);
+
+        if (WaveGetLaneIndex() == LeaderLane)
+        {
+            InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(LeaderBrickIndex, 0u)], MergedR);
+            InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(LeaderBrickIndex, 1u)], MergedG);
+            InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(LeaderBrickIndex, 2u)], MergedB);
+            InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(LeaderBrickIndex, 3u)], MergedCount);
+        }
+
+        PendingLanes &= ~SameTargetLanes;
+    }
+}
+
 [numthreads(8, 8, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
@@ -136,8 +178,5 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float3 AbsoluteRadiance = PreExposedRadiance / max(SceneColorPreExposure, 1.0e-6);
     const uint3 FixedRadiance = EncodeRadianceToFixed(AbsoluteRadiance);
 
-    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 0u)], FixedRadiance.r);
-    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 1u)], FixedRadiance.g);
-    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 2u)], FixedRadiance.b);
-    InterlockedAdd(RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 3u)], 1u);
+    AccumulateRadianceToWave(BrickIndex, FixedRadiance, true);
 }

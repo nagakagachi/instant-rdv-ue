@@ -219,6 +219,7 @@ public:
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBitmaskBrickVoxel)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBitmaskBrickVoxelOptionData)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBbvRadianceAccumBuffer)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -1010,6 +1011,25 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvBeginViewUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(1, 1, 1));
     }
 
+    if (!SystemState.bbv.TrGrid.FrameCellDelta.IsZero())
+    {
+        FInstantRdvBbvToroidalClearCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvToroidalClearCS::FParameters>();
+        {
+            Parameters->BrickCount = BrickCount;
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+            Parameters->GridMoveDeltaCells = FIntVector4(SystemState.bbv.TrGrid.FrameCellDelta, 0);
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
+            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.bbv.OptionalDataBuffer.Handle);
+            Parameters->RWBbvRadianceAccumBuffer = GraphBuilder.CreateUAV(SystemState.bbv.RadianceAccumBuffer.Handle);
+        }
+        TShaderMapRef<FInstantRdvBbvToroidalClearCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+        const uint32 GroupX = FMath::DivideAndRoundUp(BrickCount, 64u);
+        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvToroidalClear"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
+    }
+
     if (bEnableMainViewGeometryInjection)
     {
         FInstantRdvBbvDepthInjectionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthInjectionCS::FParameters>();
@@ -1041,24 +1061,6 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
         const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthInjectionMainView"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
-    }
-
-    if (!SystemState.bbv.TrGrid.FrameCellDelta.IsZero())
-    {
-        FInstantRdvBbvToroidalClearCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvToroidalClearCS::FParameters>();
-        {
-            Parameters->BrickCount = BrickCount;
-            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
-            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
-            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-            Parameters->GridMoveDeltaCells = FIntVector4(SystemState.bbv.TrGrid.FrameCellDelta, 0);
-            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
-            Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
-            Parameters->RWBitmaskBrickVoxelOptionData = GraphBuilder.CreateUAV(SystemState.bbv.OptionalDataBuffer.Handle);
-        }
-        TShaderMapRef<FInstantRdvBbvToroidalClearCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(BrickCount, 64u);
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvToroidalClear"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
     if (bEnableMainViewGeometryRemoval)
@@ -1248,10 +1250,10 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     const uint32 FspCellCount = Config.fsp.GetFspTotalCellCount();
     const uint32 FspCascadeCount = FMath::Max(Config.fsp.ProbeCascadeCount, 1u);
     const FVector3f FspGridCenterPositionWs(SystemState.fsp.CurrentGridCenterPositionWs);
-    const FVector3f FspPrevGridCenterPositionWs(SystemState.FrameCount == 0 ? SystemState.fsp.CurrentGridCenterPositionWs : SystemState.fsp.PreviousGridCenterPositionWs);
+    const FVector3f FspPrevGridCenterPositionWs(SystemState.fsp.FspUpdateFrameCount == 0 ? SystemState.fsp.CurrentGridCenterPositionWs : SystemState.fsp.PreviousGridCenterPositionWs);
     // 参照InstantRDVと同じActiveProbeList double buffering。
     // frame_count & 1 をCurr、反対側をPrevにして、フレーム末尾のCurr->Prev全コピーを不要にする。
-    const uint32 FspActiveProbeCurrListIndex = SystemState.FrameCount & 1u;
+    const uint32 FspActiveProbeCurrListIndex = SystemState.fsp.FspUpdateFrameCount & 1u;
     const uint32 FspActiveProbePrevListIndex = 1u - FspActiveProbeCurrListIndex;
     FRDGBufferRef FspActiveProbeListCurrBuffer = SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbeCurrListIndex].Handle;
     FRDGBufferRef FspActiveProbeListPrevBuffer = SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbePrevListIndex].Handle;
@@ -1273,7 +1275,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
             return IndirectArgBuffer;
         };
 
-    const bool bNeedInitialize = (0 == SystemState.FrameCount);
+    const bool bNeedInitialize = (0 == SystemState.fsp.FspUpdateFrameCount);
     // 初回フレームか, 強制された場合.
     if (bNeedInitialize)
     {
@@ -1314,7 +1316,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspPrevGridCenterPositionWs = FspPrevGridCenterPositionWs;
@@ -1375,7 +1377,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
@@ -1428,7 +1430,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->bUseProbeTraceOffset = bUseProbeTraceOffset ? 1u : 0u;
         Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
         Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
@@ -1462,7 +1464,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspProbeRayResultBuffer = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeRayResultBuffer.Handle);
@@ -1501,7 +1503,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
-        Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspCellProbeIndex = GraphBuilder.CreateSRV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
@@ -1513,6 +1515,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
 
     // 次フレームのtoroidal invalidationで「前回のgrid center」として使う。
     SystemState.fsp.PreviousGridCenterPositionWs = View.ViewLocation;
+    ++SystemState.fsp.FspUpdateFrameCount;
 }
 
 void FInstantRdvBbv::ExecuteDebugVisualize(
@@ -1702,7 +1705,9 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
             Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
             Parameters->FspProbePoolElementCount = ProbeCount;
-            const uint32 FspActiveProbeCurrListIndex = SystemState.FrameCount & 1u;
+            const uint32 FspActiveProbeCurrListIndex = (SystemState.fsp.FspUpdateFrameCount == 0u)
+                ? 0u
+                : (1u - (SystemState.fsp.FspUpdateFrameCount & 1u));
             Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
             Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbeCurrListIndex].Handle);
             Parameters->FspProbeRayRequestBuffer = GraphBuilder.CreateSRV(SystemState.fsp.FspProbeRayRequestBuffer.Handle);

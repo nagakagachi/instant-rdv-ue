@@ -93,9 +93,9 @@ public:
     // 初期化/解放 (Editor/Device 初期化タイミングで呼ぶ)
     void Initialize();
 
-    // RDV永続リソースをそのフレームのRDGへ接続し、参照InstantRDVのframe_count相当を1つ進める。
-    // ActiveProbeListのCurr/PrevはFrameCountで決まるため、SceneViewExtension側で選んだ代表ViewFamily/Viewにつき
-    // 1回だけ呼ぶこと。View単位callbackから複数回呼ぶとFSP lifecycleが破綻する。
+    // RDV永続リソースをそのフレームのRDGへ接続し、BBVの全体フレーム状態を1つ進める。
+    // FSPのActiveProbe世代は実際にFSP更新を実行したときだけ進むため、SceneViewExtension側で選んだ
+    // 代表ViewFamily/Viewにつき1回だけ呼ぶこと。View単位callbackから複数回呼ぶとライフサイクルが破綻する。
     void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InView);
 
     // Material CustomNodeから利用するSceneUniformBuffer拡張値へ、当フレームのRDGリソースを設定する。
@@ -188,7 +188,7 @@ private:
             FPersistentRdgPooledBufferSet FspCellProbeIndexBuffer;
             FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
             // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
-            // ActiveProbeListは参照InstantRDVと同じダブルバッファで、FrameCount & 1 をCurr、反対側をPrevとして使う。
+            // ActiveProbeListはFSP更新が実行された世代だけを進め、UpdateFrameCount & 1をCurrに使う。
             FPersistentRdgPooledBufferSet FspProbePoolBuffer;
             FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
             FPersistentRdgPooledBufferSet FspActiveProbeListBuffers[2];
@@ -197,6 +197,7 @@ private:
             FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
             FPersistentRdgPooledBufferSet FspProbeRayResultBuffer;
             FPersistentRdgPooledBufferSet FspPackedSHBuffer;
+            uint32 FspUpdateFrameCount = 0;
         };
 
 

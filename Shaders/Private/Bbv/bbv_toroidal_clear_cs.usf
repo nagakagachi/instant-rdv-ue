@@ -4,6 +4,7 @@
 
 RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
 RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
+RWStructuredBuffer<uint> RWBbvRadianceAccumBuffer;
 
 uint BrickCount;
 uint GridResolutionX;
@@ -46,8 +47,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const uint PhysicalBrickIndex = FlattenGridCoord(PhysicalCoord, uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
 	const uint WordStart = PhysicalBrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick;
 	const uint OptionalStart = PhysicalBrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
+    const uint RadianceStart = PhysicalBrickIndex * k_irdv_bbv_radiance_accum_component_count;
     [loop]
-	for (uint WordOffset = 0; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
+    for (uint WordOffset = 0; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
     {
         const uint ElementIndex = WordStart + WordOffset;
         RWBitmaskBrickVoxel[ElementIndex] = 0u;
@@ -55,5 +57,10 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         {
             RWBitmaskBrickVoxelOptionData[OptionalStart + WordOffset] = 0u;
         }
+    }
+    [unroll]
+    for (uint Component = 0u; Component < k_irdv_bbv_radiance_accum_component_count; ++Component)
+    {
+        RWBbvRadianceAccumBuffer[RadianceStart + Component] = 0u;
     }
 }
