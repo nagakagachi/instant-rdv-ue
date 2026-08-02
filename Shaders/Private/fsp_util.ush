@@ -728,7 +728,7 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
         RadianceB);
 
     const float4 ShBasis =
-        FspUtilEvaluateL1ShBasisWithClampedCosine(normalize(NormalWs));
+        FspUtilEvaluateL1ShBasisWithClampedCosine(normalize(NormalWs));// Cos畳み込み
     OutDiffuseIrradiance = max(
         0.0.xxx,
         float3(
@@ -844,7 +844,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
         0.0,
         dot(
             SkyVisibility,
-            FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs))));
+            FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs)))); // Cos畳み込み
     return true;
 }
 
