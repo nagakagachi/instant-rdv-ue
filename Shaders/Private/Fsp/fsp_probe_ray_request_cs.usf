@@ -29,9 +29,29 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     [unroll]
     for (uint OctCellIndex = 0u; OctCellIndex < kFspRayCountPerProbe; ++OctCellIndex)
     {
-        // [0]をcounter、[1..]をrequest payloadとして使う。
-        uint RequestIndex = 0u;
-        InterlockedAdd(RWFspProbeRayRequestBuffer[0], 1u, RequestIndex);
-        RWFspProbeRayRequestBuffer[RequestIndex + 1u] = FspPackRayRequestKey(ProbeIndex, OctCellIndex);
+        // Wave内の出力対象をprefix sumで詰め、共有appendカウンタへのAtomicを
+        // laneごとの実行から1 Waveあたり1回へ集約する。将来、probe単位または
+        // oct cell単位で方向を間引く場合も、ここではemit条件だけを変更すればよい。
+        const bool bEmitRequest = ProbeIndex < FspProbePoolElementCount;
+        const uint WaveEmitCount = WaveActiveCountBits(bEmitRequest);
+        if (WaveEmitCount == 0u)
+        {
+            continue;
+        }
+
+        const uint WaveEmitPrefix = WavePrefixCountBits(bEmitRequest);
+        uint WaveBaseIndex = 0u;
+        if (WaveIsFirstLane())
+        {
+            InterlockedAdd(RWFspProbeRayRequestBuffer[0], WaveEmitCount, WaveBaseIndex);
+        }
+        WaveBaseIndex = WaveReadLaneFirst(WaveBaseIndex);
+
+        if (bEmitRequest)
+        {
+            const uint RequestIndex = WaveBaseIndex + WaveEmitPrefix;
+            RWFspProbeRayRequestBuffer[RequestIndex + 1u] =
+                FspPackRayRequestKey(ProbeIndex, OctCellIndex);
+        }
     }
 }

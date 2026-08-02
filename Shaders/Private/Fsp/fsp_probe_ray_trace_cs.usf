@@ -52,6 +52,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const uint OctCellIndex = FspUnpackRayRequestOctCellIndex(PackedKey);
 
     uint HitInfo = 0u;
+    bool bEmitResult = false;
     if (ProbeIndex < FspProbePoolElementCount && OctCellIndex < kFspRayCountPerProbe)
     {
         const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
@@ -99,13 +100,32 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 BrickIndex,
                 BitIndex);
             HitInfo = bHit ? (BrickIndex + 1u) : 0u;
+            bEmitResult = true;
         }
     }
 
-    uint ResultIndex = 0u;
-    InterlockedAdd(RWFspProbeRayResultBuffer[0], 1u, ResultIndex);
-    // ResultBufferも [0]=count, [1..]=stride付きpayload。PackedKeyを残してresolveでprobe/octへ戻す。
-	const uint ResultWordOffset = 1u + ResultIndex * k_irdv_fsp_ray_result_data_stride;
-    RWFspProbeRayResultBuffer[ResultWordOffset + 0u] = PackedKey;
-    RWFspProbeRayResultBuffer[ResultWordOffset + 1u] = HitInfo;
+    // 無効なrequestは結果へ追加せず、有効結果だけをWave内でprefix sum圧縮する。
+    // そのWaveの出力領域を予約するAtomicは代表laneの1回だけで済ませる。
+    const uint WaveEmitCount = WaveActiveCountBits(bEmitResult);
+    if (WaveEmitCount == 0u)
+    {
+        return;
+    }
+
+    const uint WaveEmitPrefix = WavePrefixCountBits(bEmitResult);
+    uint WaveBaseIndex = 0u;
+    if (WaveIsFirstLane())
+    {
+        InterlockedAdd(RWFspProbeRayResultBuffer[0], WaveEmitCount, WaveBaseIndex);
+    }
+    WaveBaseIndex = WaveReadLaneFirst(WaveBaseIndex);
+
+    if (bEmitResult)
+    {
+        // ResultBufferも [0]=count、[1..]=stride付きpayload。
+        const uint ResultIndex = WaveBaseIndex + WaveEmitPrefix;
+        const uint ResultWordOffset = 1u + ResultIndex * k_irdv_fsp_ray_result_data_stride;
+        RWFspProbeRayResultBuffer[ResultWordOffset + 0u] = PackedKey;
+        RWFspProbeRayResultBuffer[ResultWordOffset + 1u] = HitInfo;
+    }
 }
