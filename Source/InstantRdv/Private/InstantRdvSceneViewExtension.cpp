@@ -293,7 +293,7 @@ bool FInstantRdvSceneViewExtension::IsRdvFamilyAlreadyUpdated_RenderThread(const
 void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily)
 {
     ResetAcceptedViewFamilyState_RenderThread();
-    TryAcceptViewFamilyForRdv_RenderThread(GraphBuilder, InViewFamily);
+    const bool bAcceptedForRdv = TryAcceptViewFamilyForRdv_RenderThread(GraphBuilder, InViewFamily);
 
 
     // SceneUniformBufferへのパラメータ追加テスト. ダミーのfloatカウンタ.
@@ -302,8 +302,11 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     if (sceneRenderer)
     {
         FSceneUniformBuffer& sceneUniformBuffer = sceneRenderer->GetSceneUniforms();
-        FInstantRdvSceneUniformBufferParams params;
-        params.TestColor = FVector3f(FMath::Fmod(tempCounter, 1.0f), FMath::Fmod(tempCounter*0.25, 1.0f), 0.0f);
+        FInstantRdvSceneUniformBufferParams params{};
+        if (BbvSystem.IsValid())
+        {
+            BbvSystem->FillSceneUniformBufferParams_RenderThread(GraphBuilder, params, bAcceptedForRdv);
+        }
         sceneUniformBuffer.Set(SceneUB::InstantRdvParam, params);
         tempCounter += 0.01f;
     }

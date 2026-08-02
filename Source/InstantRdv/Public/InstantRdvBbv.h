@@ -13,7 +13,9 @@
 class FRDGBuilder;
 class FRDGTexture;
 class FSceneView;
+class FSceneUniformBuffer;
 class FInstantRdvFsp;
+class FInstantRdvSceneUniformBufferParams;
 
 struct FInstantRdvBbvConfig
 {
@@ -95,6 +97,12 @@ public:
     // ActiveProbeListのCurr/PrevはFrameCountで決まるため、SceneViewExtension側で選んだ代表ViewFamily/Viewにつき
     // 1回だけ呼ぶこと。View単位callbackから複数回呼ぶとFSP lifecycleが破綻する。
     void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InView);
+
+    // Material CustomNodeから利用するSceneUniformBuffer拡張値へ、当フレームのRDGリソースを設定する。
+    void FillSceneUniformBufferParams_RenderThread(
+        FRDGBuilder& GraphBuilder,
+        FInstantRdvSceneUniformBufferParams& OutParams,
+        bool bUseLiveResources);
 
     // BBV Geometry 更新（Injection / Removal）本体。
     void ExecuteGeometryUpdate(

@@ -299,7 +299,7 @@ uint FspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)
 
 uint FspIrradianceVolumeSHAddress(uint CellIndex, uint CoeffIndex)
 {
-    return CellIndex * k_irdv_fsp_irradiance_volume_sh_float4_count + CoeffIndex;
+    return FspUtilIrradianceVolumeSHAddress(CellIndex, CoeffIndex);
 }
 
 uint FspPackRayRequestKey(uint ProbeIndex, uint OctCellIndex)
@@ -339,20 +339,12 @@ float2 FspOctEncode(float3 N)
 
 float4 FspEvaluateL1ShBasis(float3 Dir)
 {
-    return float4(
-        0.2820947918,
-        0.4886025119 * Dir.y,
-        0.4886025119 * Dir.z,
-        0.4886025119 * Dir.x);
+    return FspUtilEvaluateL1ShBasis(Dir);
 }
 
 bool FspIrradianceVolumeHasValidSH(StructuredBuffer<float4> SHBuffer, uint CellIndex)
 {
-    const float4 C0 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 0u)];
-    const float4 C1 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 1u)];
-    const float4 C2 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 2u)];
-    const float4 C3 = SHBuffer[FspIrradianceVolumeSHAddress(CellIndex, 3u)];
-    return any(abs(C0) > 0.0.xxxx) || any(abs(C1) > 0.0.xxxx) || any(abs(C2) > 0.0.xxxx) || any(abs(C3) > 0.0.xxxx);
+    return FspUtilIrradianceVolumeHasValidSH(SHBuffer, CellIndex);
 }
 
 #endif // INSTANT_RDV_FSP_STATE_USH

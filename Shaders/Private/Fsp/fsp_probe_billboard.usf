@@ -161,29 +161,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     float3 NormalWs = float3(UnitDist.x, UnitDist.y, sqrt(saturate(1.0 - UnitDistLenSq)));
     NormalWs = normalize(NormalWs.x * QuadSide + NormalWs.y * QuadUp + NormalWs.z * DirToCamera);
 
-    const float4 ShBasis = FspEvaluateL1ShBasis(NormalWs);
     const uint CellIndex = Input.GlobalCellIndex;
-    // SH bufferは各係数をfloat4(sky, r, g, b)で保持しているため、表示時はcomponentごとに係数ベクトルへ戻す。
-    const float4 ShSkyVis = float4(
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].r,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].r,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].r,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].r);
-    const float4 ShRadianceR = float4(
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].g,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].g,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].g,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].g);
-    const float4 ShRadianceG = float4(
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].b,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].b,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].b,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].b);
-    const float4 ShRadianceB = float4(
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)].a,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)].a,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)].a,
-        FspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)].a);
 
     float4 Color = float4(NormalWs * 0.5 + 0.5, 1.0);
     if (DebugMode == 0u)
@@ -229,7 +207,12 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     }
     else if (DebugMode == 6u || DebugMode == 9u)
     {
-        const float3 Radiance = max(0.0.xxx, float3(dot(ShRadianceR, ShBasis), dot(ShRadianceG, ShBasis), dot(ShRadianceB, ShBasis)));
+        // デバッグ表示では、格納された入射Radiance SHの指定方向評価をそのまま表示する。
+        // ライティング用のDiffuse Irradiance評価（Cos畳み込み済み）とは意図的に分けている。
+        const float3 Radiance = FspUtilEvaluateIrradianceVolumeRadianceAtCell(
+            FspPackedSH,
+            CellIndex,
+            NormalWs);
         const float3 Mapped = Radiance / (1.0.xxx + Radiance);
         Color = float4(pow(Mapped, 1.0 / 2.2), 1.0);
     }
@@ -253,7 +236,12 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     }
     else if (DebugMode == 7u || DebugMode == 10u)
     {
-        Color = max(0.0, dot(ShSkyVis, ShBasis)).xxxx;
+        // デバッグ表示では、SkyVisibility SHの指定方向評価を表示する。
+        // IBL可視性として使う場合は、正規化Cos畳み込み版のAPIを利用する。
+        Color = FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
+            FspPackedSH,
+            CellIndex,
+            NormalWs).xxxx;
     }
 
     return Color;

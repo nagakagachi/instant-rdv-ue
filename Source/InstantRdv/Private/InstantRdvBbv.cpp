@@ -3,6 +3,7 @@
 */
 
 #include "InstantRdvBbv.h"
+#include "InstantRdvSceneUniformBuffer.h"
 
 #include "FXRenderingUtils.h"
 #include "GlobalShader.h"
@@ -886,6 +887,64 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
     }
 
 
+}
+
+void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
+    FRDGBuilder& GraphBuilder,
+    FInstantRdvSceneUniformBufferParams& OutParams,
+    bool bUseLiveResources)
+{
+    const FRDGBufferRef DummyFloat4Buffer = GraphBuilder.CreateBuffer(
+        FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4u, 1u),
+        TEXT("InstantRdv.SceneUniformBuffer.DummyFloat4"));
+    const FRDGBufferRef DummyUintBuffer = GraphBuilder.CreateBuffer(
+        FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1u),
+        TEXT("InstantRdv.SceneUniformBuffer.DummyUint"));
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Buffer), 0u);
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyUintBuffer), 0u);
+
+    OutParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Buffer);
+    OutParams.BbvBitmaskBrickVoxel = GraphBuilder.CreateSRV(DummyUintBuffer);
+    OutParams.BbvBrickData = GraphBuilder.CreateSRV(DummyUintBuffer);
+    OutParams.BbvRadianceAccum = GraphBuilder.CreateSRV(DummyUintBuffer);
+
+    const FIntVector& Resolution = SystemState.fsp.TrGrid.GridReso;
+    const uint32 CellCount = Config.fsp.GetFspTotalCellCount();
+
+    OutParams.FspEnabled = bUseLiveResources && SystemState.bRenderInitialized ? 1u : 0u;
+    OutParams.FspGridResolutionX = static_cast<uint32>(FMath::Max(Resolution.X, 0));
+    OutParams.FspGridResolutionY = static_cast<uint32>(FMath::Max(Resolution.Y, 0));
+    OutParams.FspGridResolutionZ = static_cast<uint32>(FMath::Max(Resolution.Z, 0));
+    OutParams.FspCascadeCount = Config.fsp.ProbeCascadeCount;
+    OutParams.FspIrradianceVolumeCellCount = CellCount;
+    OutParams.FspIrradianceVolumeSHFloat4Count = kFspIrradianceVolumeShFloat4Count;
+    OutParams.FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+    OutParams.FspGridCenterPositionWs = FVector3f(SystemState.fsp.CurrentGridCenterPositionWs);
+    OutParams.FspIrradianceVolumeSH = bUseLiveResources && SystemState.fsp.FspPackedSHBuffer.Handle != nullptr
+        ? GraphBuilder.CreateSRV(SystemState.fsp.FspPackedSHBuffer.Handle)
+        : OutParams.FspIrradianceVolumeSH;
+
+    const FIntVector& BbvResolution = SystemState.bbv.TrGrid.GridReso;
+    OutParams.BbvEnabled = bUseLiveResources && SystemState.bRenderInitialized ? 1u : 0u;
+    OutParams.BbvGridResolutionX = static_cast<uint32>(FMath::Max(BbvResolution.X, 0));
+    OutParams.BbvGridResolutionY = static_cast<uint32>(FMath::Max(BbvResolution.Y, 0));
+    OutParams.BbvGridResolutionZ = static_cast<uint32>(FMath::Max(BbvResolution.Z, 0));
+    OutParams.BbvBrickResolution = k_irdv_bbv_brick_reso;
+    OutParams.BbvBrickSizeCm = Config.bbv.BbvBrickSizeCm;
+    OutParams.BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+    OutParams.BbvToroidalOffsetCells = FVector3f(
+        static_cast<float>(SystemState.bbv.TrGrid.ToroidalOffsetCells.X),
+        static_cast<float>(SystemState.bbv.TrGrid.ToroidalOffsetCells.Y),
+        static_cast<float>(SystemState.bbv.TrGrid.ToroidalOffsetCells.Z));
+    OutParams.BbvBitmaskBrickVoxel = bUseLiveResources && SystemState.bbv.BitmaskBuffer.Handle != nullptr
+        ? GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle)
+        : OutParams.BbvBitmaskBrickVoxel;
+    OutParams.BbvBrickData = bUseLiveResources && SystemState.bbv.BrickDataBuffer.Handle != nullptr
+        ? GraphBuilder.CreateSRV(SystemState.bbv.BrickDataBuffer.Handle)
+        : OutParams.BbvBrickData;
+    OutParams.BbvRadianceAccum = bUseLiveResources && SystemState.bbv.RadianceAccumBuffer.Handle != nullptr
+        ? GraphBuilder.CreateSRV(SystemState.bbv.RadianceAccumBuffer.Handle)
+        : OutParams.BbvRadianceAccum;
 }
 
 void FInstantRdvBbv::ExecuteGeometryUpdate(
