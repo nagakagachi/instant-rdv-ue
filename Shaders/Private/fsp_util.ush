@@ -413,6 +413,8 @@ void FspUtilLoadIrradianceVolumeL1SHTrilinear(
         GridParams.GridCenterPositionWs);
     const uint CascadeCellBase =
         CascadeIndex * FspUtilCellCountPerCascade(GridParams);
+    const float3 Weight0 = 1.0.xxx - CellFraction;
+    const float3 Weight1 = CellFraction;
 
     // SHは線形なので、8セルの係数を補間してから1回だけ法線方向へ評価する。
     [unroll]
@@ -424,9 +426,9 @@ void FspUtilLoadIrradianceVolumeL1SHTrilinear(
             [unroll]
             for (uint X = 0u; X < 2u; ++X)
             {
-                const float WeightX = (X == 0u) ? (1.0 - CellFraction.x) : CellFraction.x;
-                const float WeightY = (Y == 0u) ? (1.0 - CellFraction.y) : CellFraction.y;
-                const float WeightZ = (Z == 0u) ? (1.0 - CellFraction.z) : CellFraction.z;
+                const float WeightX = (X == 0u) ? Weight0.x : Weight1.x;
+                const float WeightY = (Y == 0u) ? Weight0.y : Weight1.y;
+                const float WeightZ = (Z == 0u) ? Weight0.z : Weight1.z;
                 const float Weight = WeightX * WeightY * WeightZ;
 
                 // Toroidal offset、cascade内のベースアドレス、解像度はループ外で

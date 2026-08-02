@@ -29,22 +29,35 @@ bool FspIsActiveProbeOwnedCell(uint CellIndex)
     return Data.OwnerCellIndex == CellIndex;
 }
 
-bool FspTryLoadNeighborSH(out float4 C0, out float4 C1, out float4 C2, out float4 C3, uint CascadeIndex, int3 Coord)
+bool FspTryLoadNeighborSH(
+    out float4 C0,
+    out float4 C1,
+    out float4 C2,
+    out float4 C3,
+    int3 Coord,
+    int3 ToroidalOffset,
+    uint3 GridResolution,
+    uint CascadeCellBase)
 {
     C0 = 0.0.xxxx;
     C1 = 0.0.xxxx;
     C2 = 0.0.xxxx;
     C3 = 0.0.xxxx;
     if (any(Coord < 0) ||
-        Coord.x >= int(FspGridResolutionX) ||
-        Coord.y >= int(FspGridResolutionY) ||
-        Coord.z >= int(FspGridResolutionZ))
+        Coord.x >= int(GridResolution.x) ||
+        Coord.y >= int(GridResolution.y) ||
+        Coord.z >= int(GridResolution.z))
     {
         return false;
     }
 
     // Coordは論理座標なので、dense bufferのglobal cell indexへ戻す前にtoroidal物理座標へ変換する。
-    const uint CellIndex = FspEncodeGlobalCellIndex(CascadeIndex, FspPhysicalCellCoordToLocalIndex(FspLinearToPhysicalCoord(Coord, CascadeIndex)));
+    const uint3 PhysicalCoord = LogicalToPhysicalGridCoord(
+        Coord,
+        ToroidalOffset,
+        GridResolution);
+    const uint LocalCellIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
+    const uint CellIndex = CascadeCellBase + LocalCellIndex;
     C0 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)];
     C1 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)];
     C2 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)];
@@ -91,11 +104,25 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     float4 Accum2 = 0.0.xxxx;
     float4 Accum3 = 0.0.xxxx;
     uint Count = 0u;
+    const uint3 GridResolution = uint3(
+        FspGridResolutionX,
+        FspGridResolutionY,
+        FspGridResolutionZ);
+    const int3 ToroidalOffset = FspCascadeToroidalOffset(CascadeIndex);
+    const uint CascadeCellBase = CascadeIndex * FspCellCountPerCascade();
     [unroll]
     for (uint I = 0u; I < 6u; ++I)
     {
         float4 C0, C1, C2, C3;
-        if (FspTryLoadNeighborSH(C0, C1, C2, C3, CascadeIndex, Coord + Offsets[I]))
+        if (FspTryLoadNeighborSH(
+            C0,
+            C1,
+            C2,
+            C3,
+            Coord + Offsets[I],
+            ToroidalOffset,
+            GridResolution,
+            CascadeCellBase))
         {
             Accum0 += C0;
             Accum1 += C1;

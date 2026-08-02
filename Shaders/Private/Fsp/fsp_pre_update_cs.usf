@@ -154,6 +154,11 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
     const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
+    const uint3 BbvGridResolution = uint3(
+        BbvGridResolutionX,
+        BbvGridResolutionY,
+        BbvGridResolutionZ);
+    const int3 BbvToroidalOffset = int3(BbvToroidalOffsetCells);
     const float3 PrevProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
     const float3 ToCamera = CameraPositionWs - CellCenterWs;
     const float ToCameraLenSq = dot(ToCamera, ToCamera);
@@ -183,8 +188,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 CandidateWs,
                 BbvGridMinPositionWs,
                 BbvCellSizeCm,
-                uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
-                int3(BbvToroidalOffsetCells),
+                BbvGridResolution,
+                BbvToroidalOffset,
                 bOccupied);
             if (!bOccupied)
             {
@@ -204,8 +209,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 SeedCandidateWs,
                 BbvGridMinPositionWs,
                 BbvCellSizeCm,
-                uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
-                int3(BbvToroidalOffsetCells),
+                BbvGridResolution,
+                BbvToroidalOffset,
                 bOccupied);
             if (!bOccupied)
             {
@@ -228,8 +233,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             ProbeSamplePosWs,
             BbvGridMinPositionWs,
             BbvCellSizeCm,
-            uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
-            int3(BbvToroidalOffsetCells),
+            BbvGridResolution,
+            BbvToroidalOffset,
             bOccupied);
         if (bOccupied)
         {
@@ -249,8 +254,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                         ProbeSamplePosWs,
                         BbvGridMinPositionWs,
                         BbvCellSizeCm,
-                        uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
-                        int3(BbvToroidalOffsetCells),
+                        BbvGridResolution,
+                        BbvToroidalOffset,
                         bCandidateOccupied);
                     if (!bCandidateOccupied)
                     {
@@ -280,8 +285,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                         ProbeSamplePosWs,
                         BbvGridMinPositionWs,
                         BbvCellSizeCm,
-                        uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
-                        int3(BbvToroidalOffsetCells),
+                        BbvGridResolution,
+                        BbvToroidalOffset,
                         bCandidateOccupied);
                     if (!bCandidateOccupied)
                     {
