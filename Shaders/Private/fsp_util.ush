@@ -24,10 +24,17 @@ uint FspUtilCellCountPerCascade(FInstantRdvFspGridParams Params)
     return Params.GridResolutionX * Params.GridResolutionY * Params.GridResolutionZ;
 }
 
+// 実際に参照可能なCascade数を上限値内へ正規化する。
+uint FspUtilEffectiveCascadeCount(FInstantRdvFspGridParams Params)
+{
+    return min(Params.CascadeCount, k_irdv_fsp_max_cascade_count);
+}
+
 // 全Cascadeを含むIVの総セル数を返す。
 uint FspUtilTotalCellCount(FInstantRdvFspGridParams Params)
 {
-    return FspUtilCellCountPerCascade(Params) * max(Params.CascadeCount, 1u);
+    return FspUtilCellCountPerCascade(Params) *
+        max(FspUtilEffectiveCascadeCount(Params), 1u);
 }
 
 // Cascade番号と物理セル番号を連続バッファのglobal indexへ変換する。
@@ -53,7 +60,7 @@ bool FspUtilDecodeGlobalCellIndex(
 
     OutCascadeIndex = GlobalCellIndex / CellCountPerCascade;
     OutLocalCellIndex = GlobalCellIndex - OutCascadeIndex * CellCountPerCascade;
-    return OutCascadeIndex < Params.CascadeCount;
+    return OutCascadeIndex < FspUtilEffectiveCascadeCount(Params);
 }
 
 // Cascade内の線形セル番号を物理XYZ座標へ変換する。
@@ -174,9 +181,15 @@ bool FspUtilTryGetFinestCascadeCellFromWorldPos(
     OutCascadeIndex = 0u;
     OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
 
-    [loop]
-    for (uint CascadeIndex = 0u; CascadeIndex < Params.CascadeCount; ++CascadeIndex)
+    [unroll]
+    for (uint CascadeIndex = 0u;
+         CascadeIndex < k_irdv_fsp_max_cascade_count;
+         ++CascadeIndex)
     {
+        if (CascadeIndex >= FspUtilEffectiveCascadeCount(Params))
+        {
+            break;
+        }
         uint CellIndex = k_irdv_fsp_invalid_probe_index;
         if (FspUtilTryGetGlobalCellIndexFromWorldPos(
             Params,
@@ -206,7 +219,7 @@ bool FspUtilTryGetTrilinearCellCoordinates(
     if (Params.GridResolutionX == 0u ||
         Params.GridResolutionY == 0u ||
         Params.GridResolutionZ == 0u ||
-        CascadeIndex >= Params.CascadeCount)
+        CascadeIndex >= FspUtilEffectiveCascadeCount(Params))
     {
         return false;
     }
@@ -233,6 +246,44 @@ bool FspUtilTryGetTrilinearCellCoordinates(
     OutBaseCellCoord = clamp(UnclampedBaseCellCoord, 0.xxx, MaxBaseCellCoord);
     OutCellFraction = saturate(ContinuousCellCoord - float3(OutBaseCellCoord));
     return true;
+}
+
+// ワールド位置を含む最細Cascadeと、そのCascadeのトリリニア座標を一度に求める。
+bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
+    FInstantRdvFspGridParams Params,
+    float3 WorldPositionWs,
+    out uint OutCascadeIndex,
+    out int3 OutBaseCellCoord,
+    out float3 OutCellFraction)
+{
+    OutCascadeIndex = 0u;
+    OutBaseCellCoord = int3(0, 0, 0);
+    OutCellFraction = 0.0.xxx;
+
+    const uint CascadeCount = FspUtilEffectiveCascadeCount(Params);
+    [unroll]
+    for (uint CascadeIndex = 0u;
+         CascadeIndex < k_irdv_fsp_max_cascade_count;
+         ++CascadeIndex)
+    {
+        if (CascadeIndex >= CascadeCount)
+        {
+            break;
+        }
+
+        if (FspUtilTryGetTrilinearCellCoordinates(
+            Params,
+            WorldPositionWs,
+            CascadeIndex,
+            OutBaseCellCoord,
+            OutCellFraction))
+        {
+            OutCascadeIndex = CascadeIndex;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // IVセルとSH係数番号からStructuredBufferの要素アドレスを求める。
@@ -332,12 +383,16 @@ bool FspUtilTryLoadIrradianceVolumeL1SH(
 }
 
 // 同一Cascade内の8セルからSH係数をトリリニア補間する。
+// 不要な成分の加算を避けるため、SkyVisibilityとRadianceのどちらを出力するかを
+// 呼び出し側が定数フラグで指定する。
 void FspUtilLoadIrradianceVolumeL1SHTrilinear(
     StructuredBuffer<float4> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     uint CascadeIndex,
     int3 BaseCellCoord,
     float3 CellFraction,
+    bool bNeedSkyVisibility,
+    bool bNeedRadiance,
     out float4 OutSkyVisibility,
     out float4 OutRadianceR,
     out float4 OutRadianceG,
@@ -395,10 +450,16 @@ void FspUtilLoadIrradianceVolumeL1SHTrilinear(
                 const float4 C2 = IrradianceVolumeSH[BaseAddress + 2u];
                 const float4 C3 = IrradianceVolumeSH[BaseAddress + 3u];
 
-                OutSkyVisibility += float4(C0.r, C1.r, C2.r, C3.r) * Weight;
-                OutRadianceR += float4(C0.g, C1.g, C2.g, C3.g) * Weight;
-                OutRadianceG += float4(C0.b, C1.b, C2.b, C3.b) * Weight;
-                OutRadianceB += float4(C0.a, C1.a, C2.a, C3.a) * Weight;
+                if (bNeedSkyVisibility)
+                {
+                    OutSkyVisibility += float4(C0.r, C1.r, C2.r, C3.r) * Weight;
+                }
+                if (bNeedRadiance)
+                {
+                    OutRadianceR += float4(C0.g, C1.g, C2.g, C3.g) * Weight;
+                    OutRadianceG += float4(C0.b, C1.b, C2.b, C3.b) * Weight;
+                    OutRadianceB += float4(C0.a, C1.a, C2.a, C3.a) * Weight;
+                }
             }
         }
     }
@@ -827,20 +888,10 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
 {
     OutRadiance = 0.0.xxx;
 
-    uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
-        GridParams,
-        WorldPositionWs,
-        CascadeIndex,
-        CellIndex))
-    {
-        return false;
-    }
-
     int3 BaseCellCoord;
     float3 CellFraction;
-    if (!FspUtilTryGetTrilinearCellCoordinates(
+    uint CascadeIndex = 0u;
+    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -860,6 +911,8 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
+        false,
+        true,
         SkyVisibility,
         RadianceR,
         RadianceG,
@@ -887,20 +940,10 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
 {
     OutDiffuseIrradiance = 0.0.xxx;
 
-    uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
-        GridParams,
-        WorldPositionWs,
-        CascadeIndex,
-        CellIndex))
-    {
-        return false;
-    }
-
     int3 BaseCellCoord;
     float3 CellFraction;
-    if (!FspUtilTryGetTrilinearCellCoordinates(
+    uint CascadeIndex = 0u;
+    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -920,13 +963,15 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
+        false,
+        true,
         SkyVisibility,
         RadianceR,
         RadianceG,
         RadianceB);
 
     const float4 ShBasis =
-        FspUtilEvaluateL1ShBasisWithClampedCosine(normalize(NormalWs));// Cos畳み込み
+        FspUtilEvaluateL1ShBasisWithClampedCosine(normalize(NormalWs));
     OutDiffuseIrradiance = max(
         0.0.xxx,
         float3(
@@ -946,20 +991,10 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
 {
     OutSkyVisibility = 0.0;
 
-    uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
-        GridParams,
-        WorldPositionWs,
-        CascadeIndex,
-        CellIndex))
-    {
-        return false;
-    }
-
     int3 BaseCellCoord;
     float3 CellFraction;
-    if (!FspUtilTryGetTrilinearCellCoordinates(
+    uint CascadeIndex = 0u;
+    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -979,6 +1014,8 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
+        true,
+        false,
         SkyVisibility,
         RadianceR,
         RadianceG,
@@ -1002,20 +1039,10 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
 {
     OutSkyVisibility = 0.0;
 
-    uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
-        GridParams,
-        WorldPositionWs,
-        CascadeIndex,
-        CellIndex))
-    {
-        return false;
-    }
-
     int3 BaseCellCoord;
     float3 CellFraction;
-    if (!FspUtilTryGetTrilinearCellCoordinates(
+    uint CascadeIndex = 0u;
+    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -1035,6 +1062,8 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
+        true,
+        false,
         SkyVisibility,
         RadianceR,
         RadianceG,

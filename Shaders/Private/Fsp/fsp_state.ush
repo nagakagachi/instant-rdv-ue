@@ -24,9 +24,15 @@ uint FspCellCountPerCascade()
     return FspGridResolutionX * FspGridResolutionY * FspGridResolutionZ;
 }
 
+// シェーダ側で処理するCascade数を共通上限へ正規化する。
+uint FspEffectiveCascadeCount()
+{
+    return min(FspCascadeCount, k_irdv_fsp_max_cascade_count);
+}
+
 uint FspTotalCellCount()
 {
-    return FspCellCountPerCascade() * max(FspCascadeCount, 1u);
+    return FspCellCountPerCascade() * max(FspEffectiveCascadeCount(), 1u);
 }
 
 uint FspEncodeGlobalCellIndex(uint CascadeIndex, uint LocalCellIndex)
@@ -46,7 +52,7 @@ bool FspDecodeGlobalCellIndex(uint GlobalCellIndex, out uint OutCascadeIndex, ou
 
     OutCascadeIndex = GlobalCellIndex / CellCountPerCascade;
     OutLocalCellIndex = GlobalCellIndex - OutCascadeIndex * CellCountPerCascade;
-    return OutCascadeIndex < FspCascadeCount;
+    return OutCascadeIndex < FspEffectiveCascadeCount();
 }
 
 uint3 FspLocalCellIndexToCoord(uint LocalCellIndex)
@@ -164,9 +170,15 @@ bool FspTryGetFinestCascadeCellFromWorldPos(float3 WorldPos, out uint OutCascade
     OutCascadeIndex = 0u;
     OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
 
-    [loop]
-    for (uint CascadeIndex = 0u; CascadeIndex < FspCascadeCount; ++CascadeIndex)
+    [unroll]
+    for (uint CascadeIndex = 0u;
+         CascadeIndex < k_irdv_fsp_max_cascade_count;
+         ++CascadeIndex)
     {
+        if (CascadeIndex >= FspEffectiveCascadeCount())
+        {
+            break;
+        }
         uint CellIndex = k_irdv_fsp_invalid_probe_index;
         if (FspTryGetGlobalCellIndexFromWorldPos(WorldPos, CascadeIndex, CellIndex))
         {
@@ -181,7 +193,7 @@ bool FspTryGetFinestCascadeCellFromWorldPos(float3 WorldPos, out uint OutCascade
 
 float FspCalcCascadeBoundaryDitherRate(float3 WorldPos, uint CascadeIndex)
 {
-    if ((CascadeIndex + 1u) >= FspCascadeCount)
+    if ((CascadeIndex + 1u) >= FspEffectiveCascadeCount())
     {
         return 0.0;
     }

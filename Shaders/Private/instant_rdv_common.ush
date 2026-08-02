@@ -28,6 +28,8 @@
 
 // FSP probeあたりのOctahedralMap Atlas解像度.
 #define k_irdv_fsp_probe_octmap_width 6u
+// Material評価を含むFSP Cascade走査の上限。現行実装は5 Cascadeまでを対象とする。
+#define k_irdv_fsp_max_cascade_count 5u
 // FSP レイトレース結果格納バッファのエレメント単位のu32数.
 #define k_irdv_fsp_ray_result_data_stride 2u
 
