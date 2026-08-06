@@ -27,6 +27,14 @@ static constexpr uint32 kBbvElementUpdateSkipCount = 3;
 static constexpr uint32 kFspIrradianceVolumeShFloat4Count = 4;
 static constexpr uint32 kFspTraceDistanceCm = 5000;
 
+static TAutoConsoleVariable<int32> CVarInstantRdvFspWarmStart(
+    TEXT("r.InstantRdv.Fsp.WarmStart"),
+    1,
+    TEXT("新規FSP ActiveProbeのAtlas warm start。\n")
+    TEXT("0: Disabled\n")
+    TEXT("1: Enabled"),
+    ECVF_RenderThreadSafe);
+
 
 
 // Minimal vertex declaration that represents "no vertex attributes".
@@ -392,6 +400,7 @@ public:
         SHADER_PARAMETER(uint32, FspCascadeCount)
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
         SHADER_PARAMETER(uint32, FrameCount)
+        SHADER_PARAMETER(uint32, bEnableWarmStart)
         SHADER_PARAMETER(float, FspCellSizeCm)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
@@ -1378,6 +1387,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
         Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
+        Parameters->bEnableWarmStart = CVarInstantRdvFspWarmStart.GetValueOnRenderThread() != 0 ? 1u : 0u;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);

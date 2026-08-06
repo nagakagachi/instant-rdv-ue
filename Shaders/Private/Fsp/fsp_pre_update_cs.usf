@@ -18,6 +18,7 @@ StructuredBuffer<uint> BrickData;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
+uint bEnableWarmStart;
 float3 CameraPositionWs;
 uint BbvGridResolutionX;
 uint BbvGridResolutionY;
@@ -67,45 +68,97 @@ void FspCopyProbeAtlas(uint DstProbeIndex, uint SrcProbeIndex)
     }
 }
 
-bool FspTrySeedProbeFromUpperCascade(
+bool FspTryFindNearestWarmStartProbe(
+    float3 SamplePositionWs,
+    uint DstCascadeIndex,
+    uint DstProbeIndex,
+    out uint OutProbeIndex)
+{
+    OutProbeIndex = k_irdv_fsp_invalid_probe_index;
+    const uint CascadeCount = FspEffectiveCascadeCount();
+    float BestDistanceSq = 3.402823466e+38;
+    [loop]
+    for (uint CascadeOffset = 0u; CascadeOffset < CascadeCount - DstCascadeIndex; ++CascadeOffset)
+    {
+        const uint SrcCascadeIndex = DstCascadeIndex + CascadeOffset;
+        const float CellSize = FspCascadeCellSizeCm(SrcCascadeIndex);
+        const float3 GridMin = FspCascadeGridMinPositionWs(SrcCascadeIndex);
+        const float3 ContinuousCoord = (SamplePositionWs - GridMin) / max(CellSize, 0.001) - 0.5.xxx;
+        const int3 CenterCoord = int3(floor(ContinuousCoord));
+        const int3 Resolution = int3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ);
+
+        [loop]
+        for (int Z = -1; Z <= 1; ++Z)
+        {
+            for (int Y = -1; Y <= 1; ++Y)
+            {
+                for (int X = -1; X <= 1; ++X)
+                {
+                    const int3 LogicalCoord = CenterCoord + int3(X, Y, Z);
+                    if (any(LogicalCoord < 0) || any(LogicalCoord >= Resolution))
+                    {
+                        continue;
+                    }
+
+                    const uint LocalCellIndex = FspPhysicalCellCoordToLocalIndex(
+                        FspLinearToPhysicalCoord(LogicalCoord, SrcCascadeIndex));
+                    const uint SrcGlobalCellIndex = FspEncodeGlobalCellIndex(
+                        SrcCascadeIndex,
+                        LocalCellIndex);
+                    const uint SrcProbeIndex = RWFspCellProbeIndex[SrcGlobalCellIndex];
+                    if (SrcProbeIndex == k_irdv_fsp_invalid_probe_index ||
+                        SrcProbeIndex >= FspProbePoolElementCount ||
+                        SrcProbeIndex == DstProbeIndex)
+                    {
+                        continue;
+                    }
+
+                    const FInstantRdvFspProbePoolData SrcData =
+                        FspLoadProbePoolData(RWFspProbePool, SrcProbeIndex);
+                    if (SrcData.OwnerCellIndex != SrcGlobalCellIndex ||
+                        SrcData.LastUpdateFrame == 0u)
+                    {
+                        continue;
+                    }
+
+                    const float3 SourcePositionWs =
+                        FspCalcCellCenterWs(SrcCascadeIndex, LocalCellIndex) +
+                        FspDecodeProbeOffset(SrcData.ProbeOffsetV3) *
+                        FspProbeMaxOffsetDistanceCm(SrcCascadeIndex);
+                    const float3 Delta = SourcePositionWs - SamplePositionWs;
+                    const float DistanceSq = dot(Delta, Delta);
+                    if (DistanceSq < BestDistanceSq)
+                    {
+                        BestDistanceSq = DistanceSq;
+                        OutProbeIndex = SrcProbeIndex;
+                    }
+                }
+            }
+        }
+
+        if (OutProbeIndex != k_irdv_fsp_invalid_probe_index)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool FspTrySeedProbeFromNearestActiveProbe(
     float3 SamplePositionWs,
     uint DstCascadeIndex,
     uint DstProbeIndex)
 {
-    const uint CascadeCount = FspEffectiveCascadeCount();
-    [loop]
-    for (uint SrcCascadeIndex = DstCascadeIndex + 1u;
-         SrcCascadeIndex < CascadeCount;
-         ++SrcCascadeIndex)
+    uint SrcProbeIndex = k_irdv_fsp_invalid_probe_index;
+    if (FspTryFindNearestWarmStartProbe(
+        SamplePositionWs,
+        DstCascadeIndex,
+        DstProbeIndex,
+        SrcProbeIndex))
     {
-        uint SrcGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
-        if (!FspTryGetGlobalCellIndexFromWorldPos(
-            SamplePositionWs,
-            SrcCascadeIndex,
-            SrcGlobalCellIndex))
-        {
-            continue;
-        }
-
-        const uint SrcProbeIndex = RWFspCellProbeIndex[SrcGlobalCellIndex];
-        if (SrcProbeIndex == k_irdv_fsp_invalid_probe_index ||
-            SrcProbeIndex >= FspProbePoolElementCount)
-        {
-            continue;
-        }
-
-        const FInstantRdvFspProbePoolData SrcData =
-            FspLoadProbePoolData(RWFspProbePool, SrcProbeIndex);
-        if (SrcData.OwnerCellIndex != SrcGlobalCellIndex ||
-            SrcData.LastUpdateFrame == 0u)
-        {
-            continue;
-        }
-
         FspCopyProbeAtlas(DstProbeIndex, SrcProbeIndex);
         return true;
     }
-
     return false;
 }
 
@@ -327,8 +380,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     if (bNewProbe)
     {
-        // 上位Cascadeに安定したAtlasがあれば初期値として利用し、黒い初期フレームを短縮する。
-        if (!FspTrySeedProbeFromUpperCascade(
+        // 同じCascadeを優先し、無ければ上位Cascadeの近傍ActiveProbeからAtlasを引き継ぐ。
+        if (bEnableWarmStart != 0u &&
+            !FspTrySeedProbeFromNearestActiveProbe(
             ProbeSamplePosWs,
             CascadeIndex,
             ProbeIndex))
