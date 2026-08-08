@@ -63,6 +63,13 @@ static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionOffsetFine
     2.0f,
     TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / k_irdv_bbv_brick_reso) で算出。"),
     ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthCullMode(
+    TEXT("r.InstantRdv.Bbv.DepthCullMode"),
+    1,
+    TEXT("BBV DepthCull frustum candidate mode.\n")
+    TEXT("0: Legacy Brick-center XY test\n")
+    TEXT("1: Conservative world-space Brick AABB vs six frustum planes"),
+    ECVF_RenderThreadSafe);
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthInjectionMethod(
     TEXT("r.InstantRdv.Bbv.DepthInjectionMethod"),
     0,
@@ -160,6 +167,28 @@ public:
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, CellSizeCm)
         SHADER_PARAMETER(FMatrix44f, ViewProjectionMatrix)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFrustumBrickCounter)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFrustumBrickList)
+    END_SHADER_PARAMETER_STRUCT()
+};
+
+class FInstantRdvBbvDepthFrustumCullAabbCS final : public FGlobalShader
+{
+public:
+    DECLARE_GLOBAL_SHADER(FInstantRdvBbvDepthFrustumCullAabbCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvBbvDepthFrustumCullAabbCS, FGlobalShader);
+
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER(uint32, BrickCount)
+        SHADER_PARAMETER(uint32, GridResolutionX)
+        SHADER_PARAMETER(uint32, GridResolutionY)
+        SHADER_PARAMETER(uint32, GridResolutionZ)
+        SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
+        SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
+        SHADER_PARAMETER(float, CellSizeCm)
+        SHADER_PARAMETER(FMatrix44f, ViewProjectionMatrix)
+        SHADER_PARAMETER(float, NearPlaneDeviceDepth)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFrustumBrickCounter)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFrustumBrickList)
@@ -680,6 +709,7 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBeginViewUpdateCS, "/InstantRdvShaders/Pri
 
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthInjectionCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_injection_apply_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthFrustumCullCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_frustum_cull_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthFrustumCullAabbCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_frustum_cull_aabb_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthCarvingIndirectArgBuildCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_carving_indirect_arg_build_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthCarvingCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_carving_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvToroidalClearCS, "/InstantRdvShaders/Private/Bbv/bbv_toroidal_clear_cs.usf", "MainCS", SF_Compute);
@@ -1065,23 +1095,48 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
     if (bEnableMainViewGeometryRemoval)
     {
         {
-            FInstantRdvBbvDepthFrustumCullCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthFrustumCullCS::FParameters>();
-            {
-                Parameters->BrickCount = BrickCount;
-                Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
-                Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
-                Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
-                Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
-                Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
-                Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
-                Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
-                Parameters->BbvBuffer = GraphBuilder.CreateSRV(SystemState.bbv.BbvBuffer.Handle);
-                Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
-                Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
-            }
-            TShaderMapRef<FInstantRdvBbvDepthFrustumCullCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
             const uint32 GroupX = FMath::DivideAndRoundUp(BrickCount, 64u);
-            FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthFrustumCull"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
+            const int32 DepthCullMode = FMath::Clamp(CVarInstantRdvBbvDepthCullMode.GetValueOnRenderThread(), 0, 1);
+            if (DepthCullMode == 1)
+            {
+                FInstantRdvBbvDepthFrustumCullAabbCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthFrustumCullAabbCS::FParameters>();
+                {
+                    Parameters->BrickCount = BrickCount;
+                    Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+                    Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+                    Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+                    Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+                    Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+                    Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
+                    Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
+                    const FMatrix ProjectionMatrix = View.ViewMatrices.GetViewToClip();
+                    Parameters->NearPlaneDeviceDepth = (ProjectionMatrix.M[2][3] > 0.0f) ? 1.0f : 0.0f;
+                    Parameters->BbvBuffer = GraphBuilder.CreateSRV(SystemState.bbv.BbvBuffer.Handle);
+                    Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
+                    Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
+                }
+                TShaderMapRef<FInstantRdvBbvDepthFrustumCullAabbCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+                FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthFrustumCull[AABB]"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
+            }
+            else
+            {
+                FInstantRdvBbvDepthFrustumCullCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthFrustumCullCS::FParameters>();
+                {
+                    Parameters->BrickCount = BrickCount;
+                    Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+                    Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+                    Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+                    Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+                    Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+                    Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
+                    Parameters->ViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetWorldToClip());
+                    Parameters->BbvBuffer = GraphBuilder.CreateSRV(SystemState.bbv.BbvBuffer.Handle);
+                    Parameters->RWFrustumBrickCounter = GraphBuilder.CreateUAV(FrustumBrickCounterBuffer);
+                    Parameters->RWFrustumBrickList = GraphBuilder.CreateUAV(FrustumBrickListBuffer);
+                }
+                TShaderMapRef<FInstantRdvBbvDepthFrustumCullCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+                FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthFrustumCull[Legacy]"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
+            }
         }
 
         // Frustum候補数から、Carving(1thread=1u32 job)向けのDispatchIndirect引数を生成する。

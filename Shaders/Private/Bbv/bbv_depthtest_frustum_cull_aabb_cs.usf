@@ -1,0 +1,146 @@
+// ファイル名: bbv_depthtest_frustum_cull_aabb_cs.usf
+// ファイル説明: World-space Brick AABB と六面Frustumの保守的な交差判定で候補を収集する。
+// Plane距離 + 投影AABB半径が負のときだけ棄却するため、Frustumと交差するBrickを落とさない。
+
+#include "/Engine/Public/Platform.ush"
+
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
+
+StructuredBuffer<uint> BbvBuffer;
+RWStructuredBuffer<uint> RWFrustumBrickCounter;
+RWStructuredBuffer<uint> RWFrustumBrickList;
+
+uint BrickCount;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+float3 BbvToroidalOffsetCells;
+float3 BbvGridMinPositionWs;
+float CellSizeCm;
+float4x4 ViewProjectionMatrix;
+float NearPlaneDeviceDepth;
+
+groupshared float4 GFrustumPlanes[6];
+
+float4 MatrixColumn(float4x4 Matrix, uint ColumnIndex)
+{
+    return float4(
+        Matrix[0][ColumnIndex],
+        Matrix[1][ColumnIndex],
+        Matrix[2][ColumnIndex],
+        Matrix[3][ColumnIndex]);
+}
+
+float4 NormalizeFrustumPlane(float4 Plane)
+{
+    const float InvLength = rsqrt(max(dot(Plane.xyz, Plane.xyz), 1e-20));
+    return Plane * InvLength;
+}
+
+bool RejectByFrustumPlane(float4 Plane, float3 BrickCenterWs, float3 BrickExtentsWs)
+{
+    const float3 Normal = Plane.xyz;
+    if (dot(Normal, Normal) <= 1e-20)
+    {
+        // Infinite-far projections can produce a zero far-plane equation.
+        return false;
+    }
+
+    const float Distance = dot(Normal, BrickCenterWs) + Plane.w;
+    const float ProjectedRadius = dot(abs(Normal), BrickExtentsWs);
+    return (Distance + ProjectedRadius) < 0.0;
+}
+
+void BuildFrustumPlanes()
+{
+    // The current shader uses row-vector clip transforms. Build the same
+    // homogeneous plane equations, then normalize them in world space.
+    const float4 ClipX = MatrixColumn(ViewProjectionMatrix, 0u);
+    const float4 ClipY = MatrixColumn(ViewProjectionMatrix, 1u);
+    const float4 ClipZ = MatrixColumn(ViewProjectionMatrix, 2u);
+    const float4 ClipW = MatrixColumn(ViewProjectionMatrix, 3u);
+
+    const float4 NearClipPlane = (NearPlaneDeviceDepth > 0.5) ? (ClipW - ClipZ) : ClipZ;
+    const float4 FarClipPlane = (NearPlaneDeviceDepth > 0.5) ? ClipZ : (ClipW - ClipZ);
+    GFrustumPlanes[0] = NormalizeFrustumPlane(ClipW + ClipX);
+    GFrustumPlanes[1] = NormalizeFrustumPlane(ClipW - ClipX);
+    GFrustumPlanes[2] = NormalizeFrustumPlane(ClipW + ClipY);
+    GFrustumPlanes[3] = NormalizeFrustumPlane(ClipW - ClipY);
+    GFrustumPlanes[4] = NormalizeFrustumPlane(NearClipPlane);
+    GFrustumPlanes[5] = NormalizeFrustumPlane(FarClipPlane);
+}
+
+bool IsBrickInsideFrustumAabb(float3 BrickCenterWs)
+{
+    const float3 BrickExtentsWs = 0.5 * CellSizeCm.xxx;
+
+    // Near/far first so mobile views reject depth-outside Bricks early.
+    if (RejectByFrustumPlane(GFrustumPlanes[4], BrickCenterWs, BrickExtentsWs) ||
+        RejectByFrustumPlane(GFrustumPlanes[5], BrickCenterWs, BrickExtentsWs))
+    {
+        return false;
+    }
+    return !(
+        RejectByFrustumPlane(GFrustumPlanes[0], BrickCenterWs, BrickExtentsWs) ||
+        RejectByFrustumPlane(GFrustumPlanes[1], BrickCenterWs, BrickExtentsWs) ||
+        RejectByFrustumPlane(GFrustumPlanes[2], BrickCenterWs, BrickExtentsWs) ||
+        RejectByFrustumPlane(GFrustumPlanes[3], BrickCenterWs, BrickExtentsWs));
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID, uint3 GroupThreadId : SV_GroupThreadID)
+{
+    if (GroupThreadId.x == 0u)
+    {
+        BuildFrustumPlanes();
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    bool bHasCandidate = false;
+    uint CandidateBrickIndex = 0u;
+
+    if (DispatchThreadId.x < BrickCount)
+    {
+        const uint BrickIndex = DispatchThreadId.x;
+        const uint SliceStride = GridResolutionX * GridResolutionY;
+        const uint PhysicalZ = BrickIndex / SliceStride;
+        const uint Rem = BrickIndex - PhysicalZ * SliceStride;
+        const uint PhysicalY = Rem / GridResolutionX;
+        const uint PhysicalX = Rem - PhysicalY * GridResolutionX;
+        const uint3 PhysicalCoord = uint3(PhysicalX, PhysicalY, PhysicalZ);
+        const int3 LogicalCoord = PhysicalToLogicalGridCoord(PhysicalCoord, int3(BbvToroidalOffsetCells + 0.5), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+
+        const float3 BrickCenterWs = BbvGridMinPositionWs + (float3(LogicalCoord) + 0.5) * CellSizeCm;
+        if (IsBrickInsideFrustumAabb(BrickCenterWs))
+        {
+            const uint WordStart = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick;
+            uint OccupiedBits = 0u;
+            [loop]
+            for (uint WordOffset = 0u; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
+            {
+                OccupiedBits |= BbvBuffer[WordStart + WordOffset];
+            }
+            bHasCandidate = (OccupiedBits != 0u);
+            CandidateBrickIndex = BrickIndex;
+        }
+    }
+
+    const uint LaneLocalOffset = WavePrefixCountBits(bHasCandidate);
+    const uint WaveCandidateCount = WaveActiveCountBits(bHasCandidate);
+
+    uint WaveReservedBegin = 0u;
+    if (WaveIsFirstLane() && (WaveCandidateCount != 0u))
+    {
+        InterlockedAdd(RWFrustumBrickCounter[0], WaveCandidateCount, WaveReservedBegin);
+    }
+    const uint WaveBaseIndex = WaveReadLaneFirst(WaveReservedBegin);
+
+    if (bHasCandidate)
+    {
+        const uint WriteIndex = WaveBaseIndex + LaneLocalOffset;
+        if (WriteIndex < BrickCount)
+        {
+            RWFrustumBrickList[WriteIndex] = CandidateBrickIndex;
+        }
+    }
+}
