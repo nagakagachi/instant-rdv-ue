@@ -16,6 +16,7 @@ uint FspGridResolutionY;
 uint FspGridResolutionZ;
 uint FspCascadeCount;
 float FspCellSizeCm;
+float FspRelocationOffsetScale;
 float3 FspGridCenterPositionWs;
 float3 FspPrevGridCenterPositionWs;
 
@@ -82,7 +83,7 @@ float FspProbeMaxOffsetDistanceCm(uint CascadeIndex)
     // 参照実装では cascade cell size に対する比率で最大移動距離を決め、
     // PreUpdate / RayTrace / DebugVisualize の全経路で同じ距離規約を共有している。
     // UE側も world unit が cm である点だけを保ったまま、この規約をそのまま使う。
-    return FspCascadeCellSizeCm(CascadeIndex) * 0.9;
+    return FspCascadeCellSizeCm(CascadeIndex) * FspRelocationOffsetScale;
 }
 
 int3 FspCascadeCenterCellIdFromPosition(uint CascadeIndex, float3 CenterPositionWs)
@@ -292,16 +293,30 @@ void FspStoreProbePoolData(RWStructuredBuffer<uint> ProbePoolBuffer, uint ProbeI
 
 float3 FspDecodeProbeOffset(uint Encoded)
 {
-    const uint X = Encoded & 1023u;
-    const uint Y = (Encoded >> 10u) & 1023u;
-    const uint Z = (Encoded >> 20u) & 1023u;
-    return float3(X, Y, Z) / 511.5.xxx - 1.0.xxx;
+    const uint SignBits = (Encoded >> 27u) & 0x7u;
+    const uint X = (Encoded >> 18u) & 0x1ffu;
+    const uint Y = (Encoded >> 9u) & 0x1ffu;
+    const uint Z = Encoded & 0x1ffu;
+    float3 Offset = float3(X, Y, Z) / 511.0.xxx;
+    Offset *= select(
+        bool3((SignBits & 0x4u) != 0u, (SignBits & 0x2u) != 0u, (SignBits & 0x1u) != 0u),
+        -1.0.xxx,
+        1.0.xxx);
+    return Offset;
 }
 
 uint FspEncodeProbeOffset(float3 Offset)
 {
-    const uint3 Enc = uint3(clamp(Offset, -1.0.xxx, 1.0.xxx) * 511.5.xxx + 511.5.xxx + 0.5.xxx);
-    return (Enc.x & 1023u) | ((Enc.y & 1023u) << 10u) | ((Enc.z & 1023u) << 20u);
+    Offset = clamp(Offset, -1.0.xxx, 1.0.xxx);
+    const uint SignBits =
+        ((Offset.x < 0.0 ? 1u : 0u) << 2u) |
+        ((Offset.y < 0.0 ? 1u : 0u) << 1u) |
+        ((Offset.z < 0.0 ? 1u : 0u) << 0u);
+    const uint3 Fixed = uint3(abs(Offset) * 511.0.xxx + 0.5.xxx);
+    return (SignBits << 27u) |
+        ((Fixed.x & 0x1ffu) << 18u) |
+        ((Fixed.y & 0x1ffu) << 9u) |
+        (Fixed.z & 0x1ffu);
 }
 
 uint FspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)

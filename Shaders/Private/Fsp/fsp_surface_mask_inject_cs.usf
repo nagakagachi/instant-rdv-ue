@@ -1,0 +1,103 @@
+// Depth surfaceが所有するFSP cellを1bit/cellのmaskへ注入する。
+// Native InstantRDVと同じく、Wave内で同じuint wordを指すbitをまとめてAtomicOrを削減する。
+
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+
+Texture2D<float> SceneDepthTexture;
+RWStructuredBuffer<uint> RWFspSurfaceCellMask;
+
+uint DepthSizeX;
+uint DepthSizeY;
+uint ViewRectMinX;
+uint ViewRectMinY;
+uint ViewRectSizeX;
+uint ViewRectSizeY;
+float4x4 InvViewProjectionMatrix;
+
+bool IsValidDepth(float DeviceDepth)
+{
+    return (0.0 < DeviceDepth) && (DeviceDepth < 1.0);
+}
+
+float3 ReconstructWorldPos(float2 ViewUv, float DeviceDepth)
+{
+    const float2 Ndc = float2(ViewUv.x * 2.0 - 1.0, (1.0 - ViewUv.y) * 2.0 - 1.0);
+    float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    World.xyz /= max(abs(World.w), 1.0e-6);
+    return World.xyz;
+}
+
+bool BallotAny(uint4 BallotMask)
+{
+    return any(BallotMask != 0u);
+}
+
+uint FirstLaneFromBallot(uint4 BallotMask)
+{
+    if (BallotMask.x != 0u) { return firstbitlow(BallotMask.x); }
+    if (BallotMask.y != 0u) { return firstbitlow(BallotMask.y) + 32u; }
+    if (BallotMask.z != 0u) { return firstbitlow(BallotMask.z) + 64u; }
+    return firstbitlow(BallotMask.w) + 96u;
+}
+
+void FspInjectSurfaceCellMaskWave(bool bHasCell, uint GlobalCellIndex)
+{
+    const uint WordIndex = bHasCell ? (GlobalCellIndex >> 5u) : 0u;
+    const uint BitMask = bHasCell ? (1u << (GlobalCellIndex & 31u)) : 0u;
+    uint4 PendingLanes = WaveActiveBallot(bHasCell);
+    while (BallotAny(PendingLanes))
+    {
+        const uint LeaderLane = FirstLaneFromBallot(PendingLanes);
+        const uint LeaderWordIndex = WaveReadLaneAt(WordIndex, LeaderLane);
+        const bool bSameWord = bHasCell && (WordIndex == LeaderWordIndex);
+        const uint4 SameWordLanes = WaveActiveBallot(bSameWord);
+        const uint MergedMask = WaveActiveBitOr(bSameWord ? BitMask : 0u);
+        if (WaveGetLaneIndex() == LeaderLane)
+        {
+            InterlockedOr(RWFspSurfaceCellMask[LeaderWordIndex], MergedMask);
+        }
+        PendingLanes &= ~SameWordLanes;
+    }
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const bool bValidPixel =
+        DispatchThreadId.x < ViewRectSizeX &&
+        DispatchThreadId.y < ViewRectSizeY;
+    float3 WorldPos = 0.0.xxx;
+    bool bHasSurface = false;
+    if (bValidPixel)
+    {
+        const uint2 ScenePixelCoord = uint2(
+            ViewRectMinX + DispatchThreadId.x,
+            ViewRectMinY + DispatchThreadId.y);
+        if (ScenePixelCoord.x < DepthSizeX && ScenePixelCoord.y < DepthSizeY)
+        {
+            const float DeviceDepth = SceneDepthTexture.Load(int3(ScenePixelCoord, 0));
+            bHasSurface = IsValidDepth(DeviceDepth);
+            if (bHasSurface)
+            {
+                const float2 ViewUv =
+                    (float2(DispatchThreadId.xy) + 0.5) /
+                    float2(max(ViewRectSizeX, 1u), max(ViewRectSizeY, 1u));
+                WorldPos = ReconstructWorldPos(ViewUv, DeviceDepth);
+            }
+        }
+    }
+
+    uint2 OwnerCellIndices = k_irdv_fsp_invalid_probe_index.xx;
+    const uint OwnerCellCount = bHasSurface
+        ? FspGetSurfaceOwnerCells(WorldPos, OwnerCellIndices)
+        : 0u;
+    [unroll]
+    for (uint OwnerIndex = 0u; OwnerIndex < 2u; ++OwnerIndex)
+    {
+        const bool bHasOwnerCell = OwnerIndex < OwnerCellCount;
+        FspInjectSurfaceCellMaskWave(
+            bHasOwnerCell,
+            bHasOwnerCell ? OwnerCellIndices[OwnerIndex] : 0u);
+    }
+}

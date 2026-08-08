@@ -35,6 +35,13 @@ static TAutoConsoleVariable<int32> CVarInstantRdvFspWarmStart(
     TEXT("1: Enabled"),
     ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<float> CVarInstantRdvFspRelocationOffsetScale(
+    TEXT("r.InstantRdv.Fsp.RelocationOffsetScale"),
+    0.9f,
+    TEXT("ActiveProbe relocationの最大距離をCascade cell sizeに対する比率で指定する。\n")
+    TEXT("Native InstantRDV default: 0.9"),
+    ECVF_RenderThreadSafe);
+
 
 
 // Minimal vertex declaration that represents "no vertex attributes".
@@ -75,6 +82,18 @@ static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionOffsetFine
     TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"),
     2.0f,
     TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / k_irdv_bbv_brick_reso) で算出。"),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthInjectionMethod(
+    TEXT("r.InstantRdv.Bbv.DepthInjectionMethod"),
+    0,
+    TEXT("Depth Injectionの表面->Near方向計算方式。\n")
+    TEXT("0: UE現行方式（NDC z=0/1の距離比較）\n")
+    TEXT("1: Native方式（ProjectionのNear Plane深度を使用）"),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthRelationRangeFineCells(
+    TEXT("r.InstantRdv.Bbv.DepthRelationRangeFineCells"),
+    8.0f,
+    TEXT("BBV Depth Relation debugの表示範囲（±fine cell数）。"),
     ECVF_RenderThreadSafe);
 // 移植ミス再発防止:
 // - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
@@ -140,6 +159,8 @@ public:
         SHADER_PARAMETER(float, DepthtestInjectionWorldOffsetWs)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
+        SHADER_PARAMETER(float, NativeNearPlaneDeviceDepth)
+        SHADER_PARAMETER(uint32, DepthInjectionMethod)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
         SHADER_PARAMETER_SAMPLER(SamplerState, SceneDepthSampler)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBitmaskBrickVoxel)
@@ -303,11 +324,11 @@ public:
     END_SHADER_PARAMETER_STRUCT()
 };
 
-class FInstantRdvFspScreenSpaceCollectCS final : public FGlobalShader
+class FInstantRdvFspSurfaceMaskInjectCS final : public FGlobalShader
 {
 public:
-    DECLARE_GLOBAL_SHADER(FInstantRdvFspScreenSpaceCollectCS);
-    SHADER_USE_PARAMETER_STRUCT(FInstantRdvFspScreenSpaceCollectCS, FGlobalShader);
+    DECLARE_GLOBAL_SHADER(FInstantRdvFspSurfaceMaskInjectCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvFspSurfaceMaskInjectCS, FGlobalShader);
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, DepthSizeX)
@@ -320,12 +341,24 @@ public:
         SHADER_PARAMETER(uint32, FspGridResolutionY)
         SHADER_PARAMETER(uint32, FspGridResolutionZ)
         SHADER_PARAMETER(uint32, FspCascadeCount)
-        SHADER_PARAMETER(uint32, FspVisibleSurfaceListCapacity)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(float, FspCellSizeCm)
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspCellVisibleMarkTemporalBuffer)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspSurfaceCellMask)
+    END_SHADER_PARAMETER_STRUCT()
+};
+
+class FInstantRdvFspSurfaceMaskCompactCS final : public FGlobalShader
+{
+public:
+    DECLARE_GLOBAL_SHADER(FInstantRdvFspSurfaceMaskCompactCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvFspSurfaceMaskCompactCS, FGlobalShader);
+
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER(uint32, FspTotalCellCount)
+        SHADER_PARAMETER(uint32, FspVisibleSurfaceListCapacity)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspSurfaceCellMask)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspVisibleSurfaceList)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -402,6 +435,7 @@ public:
         SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(uint32, bEnableWarmStart)
         SHADER_PARAMETER(float, FspCellSizeCm)
+        SHADER_PARAMETER(float, FspRelocationOffsetScale)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
@@ -412,7 +446,6 @@ public:
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceList)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BrickData)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspActiveProbeListCurr)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeFreeStack)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspCellProbeIndex)
@@ -454,6 +487,7 @@ public:
         SHADER_PARAMETER(uint32, BbvGridResolutionY)
         SHADER_PARAMETER(uint32, BbvGridResolutionZ)
         SHADER_PARAMETER(float, FspCellSizeCm)
+        SHADER_PARAMETER(float, FspRelocationOffsetScale)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, BbvCellSizeCm)
@@ -560,6 +594,7 @@ public:
         SHADER_PARAMETER(float, CellSizeCm)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, MaxTraceDistanceCm)
+        SHADER_PARAMETER(float, DepthRelationRangeFineCells)
         SHADER_PARAMETER(int32, DebugMode)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BitmaskBrickVoxel)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BrickData)
@@ -582,6 +617,7 @@ public:
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(float, FspCellSizeCm)
+        SHADER_PARAMETER(float, FspRelocationOffsetScale)
         SHADER_PARAMETER(float, DebugProbeRadiusCm)
         SHADER_PARAMETER(uint32, FspGridResolutionX)
         SHADER_PARAMETER(uint32, FspGridResolutionY)
@@ -618,6 +654,7 @@ public:
         SHADER_PARAMETER(uint32, DebugMode)
         SHADER_PARAMETER(uint32, bUseProbeTraceOffset)
         SHADER_PARAMETER(float, FspCellSizeCm)
+        SHADER_PARAMETER(float, FspRelocationOffsetScale)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
         SHADER_PARAMETER(uint32, BbvGridResolutionY)
@@ -673,7 +710,8 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvElementUpdateCS, "/InstantRdvShaders/Priva
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvRadianceInjectionCS, "/InstantRdvShaders/Private/Bbv/bbv_radiance_injection_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvRadianceResolveCS, "/InstantRdvShaders/Private/Bbv/bbv_radiance_resolve_cs.usf", "MainCS", SF_Compute);
 
-IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspScreenSpaceCollectCS, "/InstantRdvShaders/Private/Fsp/fsp_screen_space_collect_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspSurfaceMaskInjectCS, "/InstantRdvShaders/Private/Fsp/fsp_surface_mask_inject_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspSurfaceMaskCompactCS, "/InstantRdvShaders/Private/Fsp/fsp_surface_mask_compact_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspInitPoolCS, "/InstantRdvShaders/Private/Fsp/fsp_init_pool_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspCounterIndirectArgBuildCS, "/InstantRdvShaders/Private/Fsp/fsp_counter_indirect_arg_build_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspBeginUpdateCS, "/InstantRdvShaders/Private/Fsp/fsp_begin_update_cs.usf", "MainCS", SF_Compute);
@@ -813,7 +851,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             const uint32 FspRayWorkCount = FspCellCount * (k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width);
 
 
-            SystemState.fsp.FspCellVisibleMarkTemporalBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount * k_irdv_fsp_cell_visible_mark_temporal_data_u32_count), TEXT("InstantRdv.fsp.FspCellVisibleMarkTemporalBuffer"));
             SystemState.fsp.FspCellProbeIndexBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount), TEXT("InstantRdv.fsp.FspCellProbeIndexBuffer"));
             SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1), TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
             SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount * k_irdv_fsp_probe_pool_data_u32_count), TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
@@ -828,7 +865,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, FspCellCount * kFspIrradianceVolumeShFloat4Count), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
 
 
-            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellVisibleMarkTemporalBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle), 0u);
@@ -841,7 +877,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle), 0u);
 
 
-            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspCellVisibleMarkTemporalBuffer.Handle, &SystemState.fsp.FspCellVisibleMarkTemporalBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspCellProbeIndexBuffer.Handle, &SystemState.fsp.FspCellProbeIndexBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle, &SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbePoolBuffer.Handle, &SystemState.fsp.FspProbePoolBuffer.PooledBuffer);
@@ -872,7 +907,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
 
         // Fsp
         {
-            SystemState.fsp.FspCellVisibleMarkTemporalBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspCellVisibleMarkTemporalBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspCellVisibleMarkTemporalBuffer"));
             SystemState.fsp.FspCellProbeIndexBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspCellProbeIndexBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspCellProbeIndexBuffer"));
             SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
             SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbePoolBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
@@ -1062,6 +1096,9 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
+            const FMatrix ProjectionMatrix = View.ViewMatrices.GetViewToClip();
+            Parameters->NativeNearPlaneDeviceDepth = (ProjectionMatrix.M[2][3] > 0.0f) ? 1.0f : 0.0f;
+            Parameters->DepthInjectionMethod = static_cast<uint32>(FMath::Clamp(CVarInstantRdvBbvDepthInjectionMethod.GetValueOnRenderThread(), 0, 1));
             Parameters->SceneDepthTexture = SceneDepthTexture;
             Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
             Parameters->RWBitmaskBrickVoxel = GraphBuilder.CreateUAV(SystemState.bbv.BitmaskBuffer.Handle);
@@ -1303,10 +1340,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     }
 
     // フレーム一時counter類を初期化する。
-    // FspCellVisibleMarkTemporalBuffer[0]のdedupe flagも毎フレームclearしないと、visible surface cellが再登録されず
-    // LastSeenFrameが更新されないため、静止カメラでもActiveProbeがstaleで消える。
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellVisibleMarkTemporalBuffer.Handle), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle), 0u);
@@ -1344,11 +1378,15 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     }
 
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+    const uint32 FspSurfaceMaskWordCount = FMath::DivideAndRoundUp(FspCellCount, 32u);
+    FRDGBufferRef FspSurfaceCellMaskBuffer = GraphBuilder.CreateBuffer(
+        FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspSurfaceMaskWordCount),
+        TEXT("InstantRdv.FspSurfaceCellMask"));
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer), 0u);
 
     {
-        // SceneDepthからsurface world positionを復元し、FSP owner cell listを作る。
-        // このlistがActiveProbe割り当てとLastSeenFrame更新の唯一の入口になる。
-        FInstantRdvFspScreenSpaceCollectCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspScreenSpaceCollectCS::FParameters>();
+        // Nativeと同じくDepth pixelを直接appendせず、Wave集約した1bit/cell maskへ注入する。
+        FInstantRdvFspSurfaceMaskInjectCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspSurfaceMaskInjectCS::FParameters>();
         Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
         Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
         Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
@@ -1359,17 +1397,26 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
-        Parameters->FspVisibleSurfaceListCapacity = FspCellCount;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
         Parameters->SceneDepthTexture = SceneDepthTexture;
-        Parameters->RWFspCellVisibleMarkTemporalBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspCellVisibleMarkTemporalBuffer.Handle);
-        Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
-        TShaderMapRef<FInstantRdvFspScreenSpaceCollectCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+        Parameters->RWFspSurfaceCellMask = GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer);
+        TShaderMapRef<FInstantRdvFspSurfaceMaskInjectCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
         const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspScreenSpaceCollect"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
+        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspSurfaceMaskInject"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
+    }
+
+    {
+        FInstantRdvFspSurfaceMaskCompactCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspSurfaceMaskCompactCS::FParameters>();
+        Parameters->FspTotalCellCount = FspCellCount;
+        Parameters->FspVisibleSurfaceListCapacity = FspCellCount;
+        Parameters->FspSurfaceCellMask = GraphBuilder.CreateSRV(FspSurfaceCellMaskBuffer);
+        Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
+        TShaderMapRef<FInstantRdvFspSurfaceMaskCompactCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+        const uint32 GroupX = FMath::DivideAndRoundUp(FspSurfaceMaskWordCount, 128u);
+        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspSurfaceMaskCompact"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
     FRDGBufferRef FspPreUpdateIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
@@ -1389,6 +1436,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->bEnableWarmStart = CVarInstantRdvFspWarmStart.GetValueOnRenderThread() != 0 ? 1u : 0u;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+        Parameters->FspRelocationOffsetScale = FMath::Max(CVarInstantRdvFspRelocationOffsetScale.GetValueOnRenderThread(), 0.01f);
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
         Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
@@ -1399,7 +1447,6 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
         Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
         Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(SystemState.bbv.BitmaskBuffer.Handle);
-        Parameters->BrickData = GraphBuilder.CreateSRV(SystemState.bbv.BrickDataBuffer.Handle);
         Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);
         Parameters->RWFspCellProbeIndex = GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
@@ -1446,6 +1493,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
         Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+        Parameters->FspRelocationOffsetScale = FMath::Max(CVarInstantRdvFspRelocationOffsetScale.GetValueOnRenderThread(), 0.01f);
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
         Parameters->BbvCellSizeCm = Config.bbv.BbvBrickSizeCm;
@@ -1537,6 +1585,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
     int32 BbvDebugMode,
     int32 FspProbeDebugMode,
     int32 FspIvProbeDebugMode,
+    bool bProbeDepthTest,
     bool bUseProbeVisualizationOffset,
     bool bUseProbeTraceOffset)
 {
@@ -1557,6 +1606,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
         BbvDebugMode == 2 ||
         BbvDebugMode == 3 ||
         BbvDebugMode == 4 ||
+        BbvDebugMode == 5 ||
 
         false
         )
@@ -1585,6 +1635,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->MaxTraceDistanceCm = Config.bbv.BbvBrickSizeCm * static_cast<float>(SystemState.bbv.TrGrid.GridReso.GetMax());
+            Parameters->DepthRelationRangeFineCells = FMath::Max(CVarInstantRdvBbvDepthRelationRangeFineCells.GetValueOnRenderThread(), 0.001f);
             Parameters->DebugMode = BbvDebugMode;
             Parameters->BitmaskBrickVoxel = GraphBuilder.CreateSRV(BitmaskBuffer);
             Parameters->BrickData = GraphBuilder.CreateSRV(BrickDataBuffer);
@@ -1626,6 +1677,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 VSParams->CameraPositionWs = FVector3f(View.ViewLocation);
                 VSParams->FspGridCenterPositionWs = FspGridCenterPositionWs;
                 VSParams->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+                VSParams->FspRelocationOffsetScale = FMath::Max(CVarInstantRdvFspRelocationOffsetScale.GetValueOnRenderThread(), 0.01f);
                 VSParams->DebugProbeRadiusCm = CVarInstantRdvFspDebugProbeRadiusCm.GetValueOnRenderThread();
                 VSParams->FspGridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
                 VSParams->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
@@ -1655,6 +1707,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 PSParams->DebugMode = InternalDebugMode;
                 PSParams->bUseProbeTraceOffset = bUseProbeTraceOffset ? 1u : 0u;
                 PSParams->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+                PSParams->FspRelocationOffsetScale = FMath::Max(CVarInstantRdvFspRelocationOffsetScale.GetValueOnRenderThread(), 0.01f);
                 PSParams->FspGridCenterPositionWs = FspGridCenterPositionWs;
                 PSParams->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
                 PSParams->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
@@ -1678,7 +1731,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             TShaderMapRef<FInstantRdvFspProbeBillboardVS> ProbeVS(GetGlobalShaderMap(View.GetFeatureLevel()));
             TShaderMapRef<FInstantRdvFspProbeBillboardPS> ProbePS(GetGlobalShaderMap(View.GetFeatureLevel()));
 
-            GraphBuilder.AddPass(RDG_EVENT_NAME("%s", PassName), Params, ERDGPassFlags::Raster, [ViewRect, ProbeVS, ProbePS, VSParams, PSParams, ProbeCount](FRHICommandListImmediate& RHICmdList)
+            GraphBuilder.AddPass(RDG_EVENT_NAME("%s", PassName), Params, ERDGPassFlags::Raster, [ViewRect, ProbeVS, ProbePS, VSParams, PSParams, ProbeCount, bProbeDepthTest](FRHICommandListImmediate& RHICmdList)
             {
                 FGraphicsPipelineStateInitializer GraphicsPSOInit;
                 RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
@@ -1695,7 +1748,9 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 GraphicsPSOInit.PrimitiveType = PT_TriangleList;
                 GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
                 GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
-                GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI();
+                GraphicsPSOInit.DepthStencilState = bProbeDepthTest
+                    ? TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI()
+                    : TStaticDepthStencilState<false, CF_Always>::GetRHI();
 
                 SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
                 

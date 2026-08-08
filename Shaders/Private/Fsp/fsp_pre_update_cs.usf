@@ -4,7 +4,7 @@
 #include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
 // 参照InstantRDVのfsp_pre_update_cs相当。
-// ScreenSpaceCollectで得たvisible surface cellを処理し、未所有cellにはprobe poolからActiveProbeを割り当てる。
+// SurfaceMask Compactで得たvisible surface cellを処理し、未所有cellにはprobe poolからActiveProbeを割り当てる。
 // 既存probeがあるcellはLastSeenFrameだけ更新し、BeginUpdateのstale判定で消えないようにする。
 
 StructuredBuffer<uint> FspVisibleSurfaceList;
@@ -14,7 +14,6 @@ RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
 RWStructuredBuffer<uint4> RWFspProbeAtlas;
 StructuredBuffer<uint> BitmaskBrickVoxel;
-StructuredBuffer<uint> BrickData;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -171,14 +170,141 @@ void FspClearProbeAtlas(uint ProbeIndex)
     }
 }
 
-float FspHash01(uint Seed)
+uint FspNativeHashUint32Iq(uint2 Value)
 {
-    Seed ^= Seed >> 16u;
-    Seed *= 0x7feb352du;
-    Seed ^= Seed >> 15u;
-    Seed *= 0x846ca68bu;
-    Seed ^= Seed >> 16u;
-    return float(Seed & 0x00ffffffu) / 16777216.0;
+    Value *= uint2(73333u, 7777u);
+    Value ^= uint2(3333777777u, 3333777777u) >> (Value >> 28u);
+    const uint Product = Value.x * Value.y;
+    return Product ^ (Product >> 15u);
+}
+
+float FspNativeNoiseFloat2(float2 Value)
+{
+    return float(FspNativeHashUint32Iq(asuint(Value))) * 2.3283064365386962890625e-10;
+}
+
+bool FspIsProbePositionOccupied(float3 PositionWs)
+{
+    return BbvReadFineVoxelOccupancyAtWorldPos(
+        BitmaskBrickVoxel,
+        PositionWs,
+        BbvGridMinPositionWs,
+        BbvCellSizeCm,
+        uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+        int3(BbvToroidalOffsetCells));
+}
+
+float3 FspRelocateProbeNative(
+    float3 CellCenterWs,
+    float3 PreviousProbeOffset,
+    float MaxProbeOffsetDistanceCm,
+    uint CascadeIndex,
+    uint GlobalCellIndex)
+{
+    const float3 ToCamera = CameraPositionWs - CellCenterWs;
+    const float ToCameraLenSq = dot(ToCamera, ToCamera);
+    const bool bHasSurfaceAnchor = ToCameraLenSq > 1.0e-6;
+    float3 ProbeSamplePosWs = CellCenterWs + PreviousProbeOffset;
+    bool bAcceptedVisibleFirst = false;
+    if (bHasSurfaceAnchor)
+    {
+        const float3 DirectionToCamera = ToCamera * rsqrt(ToCameraLenSq);
+        const float FrontSamples[6] = {0.95, 0.80, 0.65, 0.50, 0.35, 0.20};
+        [unroll]
+        for (uint SampleIndex = 0u; SampleIndex < 6u; ++SampleIndex)
+        {
+            const float3 CandidateWs =
+                CellCenterWs +
+                DirectionToCamera *
+                (MaxProbeOffsetDistanceCm * FrontSamples[SampleIndex]);
+            if (!FspIsProbePositionOccupied(CandidateWs))
+            {
+                ProbeSamplePosWs = CandidateWs;
+                bAcceptedVisibleFirst = true;
+                break;
+            }
+        }
+
+        if (!bAcceptedVisibleFirst)
+        {
+            const float3 SeedCandidateWs =
+                CellCenterWs +
+                clamp(
+                    PreviousProbeOffset,
+                    -MaxProbeOffsetDistanceCm.xxx,
+                    MaxProbeOffsetDistanceCm.xxx);
+            if (!FspIsProbePositionOccupied(SeedCandidateWs))
+            {
+                ProbeSamplePosWs = SeedCandidateWs;
+                bAcceptedVisibleFirst = true;
+            }
+        }
+    }
+
+    if (!bHasSurfaceAnchor || !bAcceptedVisibleFirst)
+    {
+        bool bFoundNonSolid = false;
+        if (FspIsProbePositionOccupied(ProbeSamplePosWs))
+        {
+            const float SeedLengthSq = dot(PreviousProbeOffset, PreviousProbeOffset);
+            const float3 PreferredDirection =
+                SeedLengthSq > 1.0e-6
+                ? PreviousProbeOffset * rsqrt(SeedLengthSq)
+                : 0.0.xxx;
+            if (any(PreferredDirection != 0.0.xxx))
+            {
+                const float FrontBiasSamples[4] = {0.95, 0.75, 0.55, 0.35};
+                [unroll]
+                for (uint SampleIndex = 0u; SampleIndex < 4u; ++SampleIndex)
+                {
+                    ProbeSamplePosWs =
+                        CellCenterWs +
+                        PreferredDirection *
+                        (MaxProbeOffsetDistanceCm * FrontBiasSamples[SampleIndex]);
+                    if (!FspIsProbePositionOccupied(ProbeSamplePosWs))
+                    {
+                        bFoundNonSolid = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!bFoundNonSolid)
+            {
+                [unroll]
+                for (uint RandomIndex = 0u; RandomIndex < 4u; ++RandomIndex)
+                {
+                    const uint Seed0 =
+                        GlobalCellIndex * 1664525u +
+                        (RandomIndex + 1u) * 1013904223u;
+                    const uint Seed1 =
+                        Seed0 ^
+                        (GlobalCellIndex * 2246822519u + 3266489917u);
+                    const uint Seed2 =
+                        Seed0 ^
+                        ((GlobalCellIndex + 1u) * 668265263u + 374761393u);
+                    const float3 RandomOffset = float3(
+                        FspNativeNoiseFloat2(float2(GlobalCellIndex, Seed0)),
+                        FspNativeNoiseFloat2(float2(Seed1, GlobalCellIndex)),
+                        FspNativeNoiseFloat2(float2(Seed2, Seed0))) - 0.5.xxx;
+                    ProbeSamplePosWs =
+                        CellCenterWs +
+                        RandomOffset *
+                        (FspCascadeCellSizeCm(CascadeIndex) * 0.4);
+                    if (!FspIsProbePositionOccupied(ProbeSamplePosWs))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    const float3 NormalizedOffset = clamp(
+        (ProbeSamplePosWs - CellCenterWs) / MaxProbeOffsetDistanceCm,
+        -1.0.xxx,
+        1.0.xxx);
+    return CellCenterWs + NormalizedOffset * MaxProbeOffsetDistanceCm;
 }
 
 [numthreads(64, 1, 1)]
@@ -207,7 +333,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             return;
         }
 
-        // ScreenSpaceCollectがセル単位でdedup済みのため、参照実装と同じく直接所有権を確定する。
+        // SurfaceMaskがセル単位でdedup済みのため、参照実装と同じく直接所有権を確定する。
         RWFspCellProbeIndex[GlobalCellIndex] = ProbeIndex;
         FspPushCurrActiveProbeIndex(ProbeIndex);
         bNewProbe = true;
@@ -234,149 +360,13 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
     const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
-    const uint3 BbvGridResolution = uint3(
-        BbvGridResolutionX,
-        BbvGridResolutionY,
-        BbvGridResolutionZ);
-    const int3 BbvToroidalOffset = int3(BbvToroidalOffsetCells);
     const float3 PrevProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
-    const float3 ToCamera = CameraPositionWs - CellCenterWs;
-    const float ToCameraLenSq = dot(ToCamera, ToCamera);
-    const bool bHasSurfaceAnchor = (ToCameraLenSq > 1.0e-6);
-    float3 ProbeSamplePosWs = CellCenterWs + PrevProbeOffset;
-    bool bAcceptedVisibleFirst = false;
-
-    if (bHasSurfaceAnchor)
-    {
-        // ここがFSP offsetの中核。
-        // ActiveProbe は「Depth surfaceを代表するcell」だけでなく、
-        // そのcell内のどこをレイトレ始点にするかで結果が大きく変わる。
-        // 参照実装はまず surface/view 側へ向かう候補を優先し、
-        // BBV non-solid を満たす位置を探してから encode する。
-        // これを省くと、斜め床や特定距離の平面で probe が埋まり、
-        // self-hit によって周囲入射輝度が壊れる。
-        const float3 DirToCamera = ToCamera * rsqrt(ToCameraLenSq);
-        const float FrontSamples[6] = {0.95, 0.80, 0.65, 0.50, 0.35, 0.20};
-        [unroll]
-        for (int SampleIndex = 0; SampleIndex < 6; ++SampleIndex)
-        {
-            const float3 CandidateWs = CellCenterWs + DirToCamera * (MaxProbeOffsetDistanceCm * FrontSamples[SampleIndex]);
-            bool bOccupied = false;
-            BbvTryGetProbeOccupancyAtWorldPos(
-                BitmaskBrickVoxel,
-                BrickData,
-                CandidateWs,
-                BbvGridMinPositionWs,
-                BbvCellSizeCm,
-                BbvGridResolution,
-                BbvToroidalOffset,
-                bOccupied);
-            if (!bOccupied)
-            {
-                ProbeSamplePosWs = CandidateWs;
-                bAcceptedVisibleFirst = true;
-                break;
-            }
-
-        }
-
-        if (!bAcceptedVisibleFirst)
-        {
-            const float3 SeedCandidateWs = CellCenterWs + clamp(PrevProbeOffset, -MaxProbeOffsetDistanceCm.xxx, MaxProbeOffsetDistanceCm.xxx);
-            bool bOccupied = false;
-            BbvTryGetProbeOccupancyAtWorldPos(
-                BitmaskBrickVoxel,
-                BrickData,
-                SeedCandidateWs,
-                BbvGridMinPositionWs,
-                BbvCellSizeCm,
-                BbvGridResolution,
-                BbvToroidalOffset,
-                bOccupied);
-            if (!bOccupied)
-            {
-                ProbeSamplePosWs = SeedCandidateWs;
-                bAcceptedVisibleFirst = true;
-            }
-        }
-    }
-
-    if ((!bHasSurfaceAnchor) || (!bAcceptedVisibleFirst))
-    {
-        // 可視優先候補が失敗した場合も、前回offset方向を活かした再探索と
-        // 最後のランダムfallbackで「cell内の non-solid 位置」を確保する。
-        // ここまでやることで、静止時の継続性を保ちつつ埋まり probe を減らす。
-        bool bFoundNonSolid = false;
-        bool bOccupied = false;
-        BbvTryGetProbeOccupancyAtWorldPos(
-            BitmaskBrickVoxel,
-            BrickData,
-            ProbeSamplePosWs,
-            BbvGridMinPositionWs,
-            BbvCellSizeCm,
-            BbvGridResolution,
-            BbvToroidalOffset,
-            bOccupied);
-        if (bOccupied)
-        {
-            const float SeedLenSq = dot(PrevProbeOffset, PrevProbeOffset);
-            const float3 PreferredDir = (SeedLenSq > 1.0e-6) ? (PrevProbeOffset * rsqrt(SeedLenSq)) : 0.0.xxx;
-            if (any(PreferredDir != 0.0.xxx))
-            {
-                const float FrontBiasSamples[4] = {0.95, 0.75, 0.55, 0.35};
-                [unroll]
-                for (int SampleIndex = 0; SampleIndex < 4; ++SampleIndex)
-                {
-                    ProbeSamplePosWs = CellCenterWs + PreferredDir * (MaxProbeOffsetDistanceCm * FrontBiasSamples[SampleIndex]);
-                    bool bCandidateOccupied = false;
-                    BbvTryGetProbeOccupancyAtWorldPos(
-                        BitmaskBrickVoxel,
-                        BrickData,
-                        ProbeSamplePosWs,
-                        BbvGridMinPositionWs,
-                        BbvCellSizeCm,
-                        BbvGridResolution,
-                        BbvToroidalOffset,
-                        bCandidateOccupied);
-                    if (!bCandidateOccupied)
-                    {
-                        bFoundNonSolid = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!bFoundNonSolid)
-            {
-                [unroll]
-                for (int RandomIndex = 0; RandomIndex < 4; ++RandomIndex)
-                {
-                    const uint Seed0 = GlobalCellIndex * 1664525u + uint(RandomIndex + 1) * 1013904223u;
-                    const uint Seed1 = Seed0 ^ (GlobalCellIndex * 2246822519u + 3266489917u);
-                    const uint Seed2 = Seed0 ^ ((GlobalCellIndex + 1u) * 668265263u + 374761393u);
-                    const float3 RandomOffset = float3(
-                        FspHash01(Seed0),
-                        FspHash01(Seed1),
-                        FspHash01(Seed2)) - 0.5.xxx;
-                    ProbeSamplePosWs = CellCenterWs + RandomOffset * (FspCascadeCellSizeCm(CascadeIndex) * 0.4);
-                    bool bCandidateOccupied = false;
-                    BbvTryGetProbeOccupancyAtWorldPos(
-                        BitmaskBrickVoxel,
-                        BrickData,
-                        ProbeSamplePosWs,
-                        BbvGridMinPositionWs,
-                        BbvCellSizeCm,
-                        BbvGridResolution,
-                        BbvToroidalOffset,
-                        bCandidateOccupied);
-                    if (!bCandidateOccupied)
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    const float3 ProbeSamplePosWs = FspRelocateProbeNative(
+        CellCenterWs,
+        PrevProbeOffset,
+        MaxProbeOffsetDistanceCm,
+        CascadeIndex,
+        GlobalCellIndex);
 
     if (bNewProbe)
     {

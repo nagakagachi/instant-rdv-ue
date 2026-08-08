@@ -27,6 +27,7 @@ float3 BbvToroidalOffsetCells;
 float CellSizeCm;
 float3 BbvGridMinPositionWs;
 float MaxTraceDistanceCm;
+float DepthRelationRangeFineCells;
 int DebugMode;
 
 #include "/InstantRdvShaders/Private/bbv_trace_util.ush"
@@ -98,6 +99,14 @@ float3 ReconstructRayDirection(float2 Uv)
     const float3 rayNear = (d0 < d1) ? world0.xyz : world1.xyz;
     const float3 rayFar = (d0 < d1) ? world1.xyz : world0.xyz;
     return normalize(rayFar - rayNear);
+}
+
+float3 ReconstructWorldPosFromUv(float2 Uv, float DeviceDepth)
+{
+    const float2 Ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
+    World.xyz /= max(abs(World.w), 1e-6);
+    return World.xyz;
 }
 
 // デバッグ表示用の薄いアダプタ。
@@ -220,7 +229,7 @@ PsOut MainPS(VsOutput Input)
         return Output;
     }
 
-    if (DebugMode != 2 && DebugMode != 3 && DebugMode != 4)
+    if (DebugMode != 2 && DebugMode != 3 && DebugMode != 4 && DebugMode != 5)
     {
         Output.Color = BaseColor;
         return Output;
@@ -228,6 +237,55 @@ PsOut MainPS(VsOutput Input)
 
     const float3 RayDirWs = ReconstructRayDirection(RayUv);
     const float maxTraceDistanceCm = MaxTraceDistanceCm;
+    if (DebugMode == 5)
+    {
+        const float SurfaceDepth = SceneDepthTexture.Load(int3(ScenePixelCoord, 0)).r;
+        if (!((0.0 < SurfaceDepth) && (SurfaceDepth < 1.0)))
+        {
+            Output.Color = BaseColor;
+            return Output;
+        }
+
+        const float3 SurfacePositionWs = ReconstructWorldPosFromUv(ViewUv, SurfaceDepth);
+        const float SurfaceDistanceCm = dot(SurfacePositionWs - CameraPositionWs, RayDirWs);
+        float BbvHitDistanceCm = -1.0;
+        int3 DummyLogicalBrickCoord = int3(-1, -1, -1);
+        int3 DummyLogicalFineCoord = int3(-1, -1, -1);
+        uint DummyBrickIndex = 0u;
+        uint DummyBitIndex = 0u;
+        const bool bBbvHit = TraceBbvVoxelRayReference(
+            CameraPositionWs,
+            RayDirWs,
+            maxTraceDistanceCm,
+            uint3(GridResolutionX, GridResolutionY, GridResolutionZ),
+            CellSizeCm,
+            int3(BbvToroidalOffsetCells),
+            BbvHitDistanceCm,
+            DummyLogicalBrickCoord,
+            DummyLogicalFineCoord,
+            DummyBrickIndex,
+            DummyBitIndex);
+        if (!bBbvHit || BbvHitDistanceCm < 0.0)
+        {
+            Output.Color = float4(lerp(BaseColor.rgb, float3(0.05, 0.05, 0.05), 0.35), BaseColor.a);
+            return Output;
+        }
+
+        const float FineCellSizeCm = CellSizeCm / max(float(k_irdv_bbv_brick_reso), 1.0);
+        const float DeltaFineCells = (BbvHitDistanceCm - SurfaceDistanceCm) / max(FineCellSizeCm, 1e-3);
+        const float SignedAmount = saturate(abs(DeltaFineCells) / max(DepthRelationRangeFineCells, 1e-3));
+        const float3 NeutralColor = float3(0.01, 0.01, 0.01);
+        const float3 FrontColor = float3(1.0, 0.0, 0.0);
+        const float3 BehindColor = float3(0.0, 0.18, 1.0);
+        // 手前側は差が小さくても検出しやすいよう最低輝度を持たせる。
+        const float FrontAmount = 0.35 + 0.65 * SignedAmount;
+        const float3 RelationColor = (DeltaFineCells < 0.0)
+            ? lerp(NeutralColor, FrontColor, FrontAmount)
+            : lerp(NeutralColor, BehindColor, SignedAmount);
+        Output.Color = float4(lerp(BaseColor.rgb, RelationColor, 0.9), BaseColor.a);
+        return Output;
+    }
+
     float HitDistanceCm = -1.0;
     int3 HitLogicalBrickCoord = int3(-1, -1, -1);
     int3 HitLogicalFineCoord = int3(-1, -1, -1);

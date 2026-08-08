@@ -1,0 +1,56 @@
+// 1bit/cellのSurface maskを、[0]=count, [1..]=global cell indexのlistへcompactする。
+// Native InstantRDVと同じく、append reservationは非ゼロmask wordごとに1回だけ行う。
+
+#include "/Engine/Public/Platform.ush"
+
+StructuredBuffer<uint> FspSurfaceCellMask;
+RWStructuredBuffer<uint> RWFspVisibleSurfaceList;
+
+uint FspTotalCellCount;
+uint FspVisibleSurfaceListCapacity;
+
+[numthreads(128, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint MaskWordCount = (FspTotalCellCount + 31u) / 32u;
+    const uint MaskWordIndex = DispatchThreadId.x;
+    if (MaskWordIndex >= MaskWordCount)
+    {
+        return;
+    }
+
+    const uint MaskBits = FspSurfaceCellMask[MaskWordIndex];
+    if (MaskBits == 0u)
+    {
+        return;
+    }
+
+    const uint BitCount = countbits(MaskBits);
+    uint AppendBaseIndex = 0u;
+    InterlockedAdd(RWFspVisibleSurfaceList[0], BitCount, AppendBaseIndex);
+
+    uint WritableCount = 0u;
+    if (AppendBaseIndex < FspVisibleSurfaceListCapacity)
+    {
+        WritableCount = min(BitCount, FspVisibleSurfaceListCapacity - AppendBaseIndex);
+    }
+    const uint OverflowCount = BitCount - WritableCount;
+    if (OverflowCount > 0u)
+    {
+        InterlockedAdd(RWFspVisibleSurfaceList[0], -int(OverflowCount));
+    }
+
+    uint RemainingBits = MaskBits;
+    uint LocalRank = 0u;
+    while (RemainingBits != 0u)
+    {
+        const uint BitIndex = firstbitlow(RemainingBits);
+        RemainingBits &= RemainingBits - 1u;
+        const uint GlobalCellIndex = MaskWordIndex * 32u + BitIndex;
+        if (GlobalCellIndex < FspTotalCellCount && LocalRank < WritableCount)
+        {
+            RWFspVisibleSurfaceList[AppendBaseIndex + LocalRank + 1u] = GlobalCellIndex;
+        }
+        ++LocalRank;
+    }
+}

@@ -37,7 +37,6 @@
 #define k_irdv_fsp_irradiance_volume_sh_float4_count 4u
 
 // FSP CellのVisibleMark用一時バッファの1Cellあたりのu32数.
-#define k_irdv_fsp_cell_visible_mark_temporal_data_u32_count 1u
 
 
 // Fspのレイリクエスト, レイトレースのCSのスレッドグループサイズ.

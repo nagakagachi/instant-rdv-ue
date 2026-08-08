@@ -78,6 +78,43 @@ bool IsFineVoxelOccupiedInBrick(StructuredBuffer<uint> BbvBuffer, uint BrickInde
 	return (BbvBuffer[WordIndex] & WordMask) != 0u;
 }
 
+bool BbvReadFineVoxelOccupancyAtWorldPos(
+    StructuredBuffer<uint> BitmaskBrickVoxel,
+    float3 WorldPosWs,
+    float3 GridMinPositionWs,
+    float CellSizeCm,
+    uint3 GridResolution,
+    int3 ToroidalOffsetCells)
+{
+    if (any(GridResolution == 0u))
+    {
+        return false;
+    }
+
+    const float FineCellSizeCm = max(CellSizeCm, 0.001) / float(k_irdv_bbv_brick_reso);
+    const int3 FineCoord = int3(floor((WorldPosWs - GridMinPositionWs) / FineCellSizeCm));
+    const int3 FineGridResolution = int3(GridResolution) * int(k_irdv_bbv_brick_reso);
+    if (any(FineCoord < 0) || any(FineCoord >= FineGridResolution))
+    {
+        return false;
+    }
+
+    const int FineResolution = int(k_irdv_bbv_brick_reso);
+    const int3 LogicalBrickCoord = FineCoord / FineResolution;
+    const int3 LocalFineCoord = FineCoord - LogicalBrickCoord * FineResolution;
+    const uint3 PhysicalBrickCoord = LogicalToPhysicalGridCoord(
+        LogicalBrickCoord,
+        ToroidalOffsetCells,
+        GridResolution);
+    const uint BrickIndex = FlattenGridCoord(PhysicalBrickCoord, GridResolution);
+    uint BitIndex = 0u;
+    return IsFineVoxelOccupiedInBrick(
+        BitmaskBrickVoxel,
+        BrickIndex,
+        LocalFineCoord,
+        BitIndex);
+}
+
 // ワールド空間のBBV占有判定。製品レイトレース、プローブ再配置、デバッグおよびMaterial用アダプタで共有する。
 // 呼び出し側がファイルローカルなシェーダパラメータへ依存しないよう、リソースとグリッド状態をすべて引数で受け取る。
 // 有効なBBV範囲外の位置ではfalseを返し、OutOccupiedもfalseに設定する。

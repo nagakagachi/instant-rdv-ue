@@ -29,6 +29,8 @@ float CellSizeCm;
 float DepthtestInjectionWorldOffsetWs;
 float3 CameraPositionWs;
 float4x4 InvViewProjectionMatrix;
+float NativeNearPlaneDeviceDepth;
+uint DepthInjectionMethod;
 
 
 
@@ -92,7 +94,11 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             const float3 WorldPos1 = ReconstructWorldPosFromUv(Uv, 1.0);
             const float Dist0 = dot(WorldPos0 - CameraPositionWs, WorldPos0 - CameraPositionWs);
             const float Dist1 = dot(WorldPos1 - CameraPositionWs, WorldPos1 - CameraPositionWs);
-            const float3 ViewRayOriginWs = (Dist0 < Dist1) ? WorldPos0 : WorldPos1;
+            const float3 CurrentMethodNearPointWs = (Dist0 < Dist1) ? WorldPos0 : WorldPos1;
+            const float3 NativeMethodNearPointWs = ReconstructWorldPosFromUv(Uv, NativeNearPlaneDeviceDepth);
+            const float3 ViewRayOriginWs = (DepthInjectionMethod != 0u)
+                ? NativeMethodNearPointWs
+                : CurrentMethodNearPointWs;
             const float3 ToSurface = WorldPos - ViewRayOriginWs;
             const float ToSurfaceLenSq = dot(ToSurface, ToSurface);
             const float3 ViewDir = (ToSurfaceLenSq > 1e-10) ? (ToSurface * rsqrt(ToSurfaceLenSq)) : float3(0.0, 0.0, 1.0);

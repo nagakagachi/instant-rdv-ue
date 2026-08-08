@@ -38,7 +38,8 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvVisDebug(
     TEXT("1: XY fine-voxel Z-count map (no raytrace)\n")
     TEXT("2: Brick raytrace debug\n")
     TEXT("3: Voxel raytrace debug\n")
-    TEXT("4: Voxel radiance debug"),
+    TEXT("4: Voxel radiance debug\n")
+    TEXT("5: BBV hitとDepth Surfaceの前後距離（青=手前、赤=奥）"),
     ECVF_RenderThreadSafe);
 
 static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbe(
@@ -65,6 +66,14 @@ static TAutoConsoleVariable<int32> CVarInstantRdvFspVisIvProbe(
     TEXT("0: Off\n")
     TEXT("1: IrradianceVolume SH radiance\n")
     TEXT("2: IrradianceVolume SH sky visibility"),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarInstantRdvFspDebugDepthTest(
+    TEXT("r.InstantRdv.Fsp.DebugDepthTest"),
+    1,
+    TEXT("Enable SceneDepth testing for ActiveProbe and IrradianceVolume debug spheres.\n")
+    TEXT("0: Draw without depth test\n")
+    TEXT("1: Respect SceneDepth occlusion"),
     ECVF_RenderThreadSafe);
 
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewInjection(
@@ -445,6 +454,7 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
         const int32 BbvDebugMode = CVarInstantRdvBbvVisDebug.GetValueOnRenderThread();
         const int32 FspProbeDebugMode = CVarInstantRdvFspVisProbe.GetValueOnRenderThread();
         const int32 FspIvProbeDebugMode = CVarInstantRdvFspVisIvProbe.GetValueOnRenderThread();
+        const bool bProbeDepthTest = (CVarInstantRdvFspDebugDepthTest.GetValueOnRenderThread() != 0);
         const bool bUseProbeTraceOffset = (CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
         const bool bUseProbeVisualizationOffset = (CVarInstantRdvFspVisProbeUseOffset.GetValueOnRenderThread() != 0);
         if (CanRunDebugVisualize_RenderThread(View))
@@ -458,6 +468,7 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 BbvDebugMode,
                 FspProbeDebugMode,
                 FspIvProbeDebugMode,
+                bProbeDepthTest,
                 bUseProbeVisualizationOffset,
                 bUseProbeTraceOffset);
         }
