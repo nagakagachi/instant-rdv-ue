@@ -305,8 +305,6 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     const bool bAcceptedForRdv = TryAcceptViewFamilyForRdv_RenderThread(GraphBuilder, InViewFamily);
 
 
-    // SceneUniformBufferへのパラメータ追加テスト. ダミーのfloatカウンタ.
-    static float tempCounter = 0.0f;
     ISceneRenderer* sceneRenderer = InViewFamily.GetSceneRenderer();
     if (sceneRenderer)
     {
@@ -317,7 +315,6 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
             BbvSystem->FillSceneUniformBufferParams_RenderThread(GraphBuilder, params, bAcceptedForRdv);
         }
         sceneUniformBuffer.Set(SceneUB::InstantRdvParam, params);
-        tempCounter += 0.01f;
     }
 }
 

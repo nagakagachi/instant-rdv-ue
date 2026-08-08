@@ -44,26 +44,6 @@ static TAutoConsoleVariable<float> CVarInstantRdvFspRelocationOffsetScale(
 
 
 
-// Minimal vertex declaration that represents "no vertex attributes".
-// Used for SV_VertexID-driven shaders that compute positions from VertexID and external buffers.
-class FInstantRdvNullVertexDeclaration : public FRenderResource
-{
-public:
-	FVertexDeclarationRHIRef VertexDeclarationRHI;
-
-	virtual void InitRHI(FRHICommandListBase& RHICmdList) override
-	{
-		FVertexDeclarationElementList Elements; // empty list
-		VertexDeclarationRHI = PipelineStateCache::GetOrCreateVertexDeclaration(Elements);
-	}
-
-	virtual void ReleaseRHI() override
-	{
-		VertexDeclarationRHI.SafeRelease();
-	}
-};
-
-//TGlobalResource<FInstantRdvNullVertexDeclaration> GInstantRdvNullVertexDeclaration;
 TGlobalResource<FEmptyVertexDeclaration, FRenderResource::EInitPhase::Pre> GInstantRdvNullVertexDeclaration;
 
 // 移植時の重要注意（RDG/RHI）:
