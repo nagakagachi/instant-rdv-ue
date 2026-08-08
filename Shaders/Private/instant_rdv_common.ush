@@ -11,9 +11,6 @@
 // BbvのBrickの1辺のセル数. 4固定.
 #define k_irdv_bbv_brick_data_u32_count 4u
 
-// Bbv HiBrickあたりのu32データの個数. 1固定.
-#define k_irdv_bbv_hi_brick_data_u32_count 1u
-
 // Bbv Brickあたりの追加属性データのU32数. 4固定.
 #define k_irdv_bbv_brick_optional_data_u32_count 4u
 

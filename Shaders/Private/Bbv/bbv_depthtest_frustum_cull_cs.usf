@@ -6,7 +6,7 @@
 
 #include "/InstantRdvShaders/Private/instant_rdv_util.ush"
 
-StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BbvBuffer;
 RWStructuredBuffer<uint> RWFrustumBrickCounter;
 RWStructuredBuffer<uint> RWFrustumBrickList;
 
@@ -50,7 +50,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 [loop]
 				for (uint WordOffset = 0u; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
                 {
-                    OccupiedBits |= BitmaskBrickVoxel[WordStart + WordOffset];
+                    OccupiedBits |= BbvBuffer[WordStart + WordOffset];
                 }
                 bHasCandidate = (OccupiedBits != 0u);
                 CandidateBrickIndex = BrickIndex;

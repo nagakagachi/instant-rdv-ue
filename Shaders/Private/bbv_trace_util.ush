@@ -78,8 +78,13 @@ bool IsFineVoxelOccupiedInBrick(StructuredBuffer<uint> BbvBuffer, uint BrickInde
 	return (BbvBuffer[WordIndex] & WordMask) != 0u;
 }
 
+uint BbvBrickDataAddress(uint BrickDataBaseOffset, uint BrickIndex, uint Component)
+{
+    return BrickDataBaseOffset + BrickIndex * k_irdv_bbv_brick_data_u32_count + Component;
+}
+
 bool BbvReadFineVoxelOccupancyAtWorldPos(
-    StructuredBuffer<uint> BitmaskBrickVoxel,
+    StructuredBuffer<uint> BbvBuffer,
     float3 WorldPosWs,
     float3 GridMinPositionWs,
     float CellSizeCm,
@@ -109,7 +114,7 @@ bool BbvReadFineVoxelOccupancyAtWorldPos(
     const uint BrickIndex = FlattenGridCoord(PhysicalBrickCoord, GridResolution);
     uint BitIndex = 0u;
     return IsFineVoxelOccupiedInBrick(
-        BitmaskBrickVoxel,
+        BbvBuffer,
         BrickIndex,
         LocalFineCoord,
         BitIndex);
@@ -119,8 +124,8 @@ bool BbvReadFineVoxelOccupancyAtWorldPos(
 // 呼び出し側がファイルローカルなシェーダパラメータへ依存しないよう、リソースとグリッド状態をすべて引数で受け取る。
 // 有効なBBV範囲外の位置ではfalseを返し、OutOccupiedもfalseに設定する。
 bool BbvTryGetProbeOccupancyAtWorldPos(
-    StructuredBuffer<uint> BitmaskBrickVoxel,
-    StructuredBuffer<uint> BrickData,
+    StructuredBuffer<uint> BbvBuffer,
+    uint BrickDataBaseOffset,
     float3 WorldPosWs,
     float3 GridMinPositionWs,
     float CellSizeCm,
@@ -153,13 +158,13 @@ bool BbvTryGetProbeOccupancyAtWorldPos(
         GridResolution);
     const uint BrickIndex = FlattenGridCoord(PhysicalBrickCoord, GridResolution);
 
-    if (BrickData[BrickIndex * 4u] == 0u)
+    if (BbvBuffer[BbvBrickDataAddress(BrickDataBaseOffset, BrickIndex, 0u)] == 0u)
     {
         return true;
     }
 
     uint BitIndex = 0u;
-    OutOccupied = IsFineVoxelOccupiedInBrick(BitmaskBrickVoxel, BrickIndex, LocalFineCoord, BitIndex);
+    OutOccupied = IsFineVoxelOccupiedInBrick(BbvBuffer, BrickIndex, LocalFineCoord, BitIndex);
     return true;
 }
 
@@ -227,7 +232,7 @@ int3 TraceBitmaskBrickReference(
 // - IsBrickMode=false : Brick 内の bitmask 追跡へ進み、Fine Voxel ヒットまで探索。
 bool TraceBbvRayReference(
     StructuredBuffer<uint> BbvBuffer,
-    StructuredBuffer<uint> BbvDataBuffer,
+    uint BrickDataBaseOffset,
     float3 RayOriginWs,
     float3 RayDirWs,
     float MaxDistanceCm,
@@ -308,7 +313,7 @@ bool TraceBbvRayReference(
         // 論理座標をトロイダル物理座標へ写像して実データへアクセスする。
         const uint3 PhysicalCoord = LogicalToPhysicalGridCoord(MapPos, ToroidalOffset, GridResolution);
         const uint BrickIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
-		const bool bBrickOccupied = (BbvDataBuffer[BrickIndex * 4u + 0u] != 0u);
+		const bool bBrickOccupied = (BbvBuffer[BbvBrickDataAddress(BrickDataBaseOffset, BrickIndex, 0u)] != 0u);
         if (bBrickOccupied)
         {
             if (IsBrickMode)

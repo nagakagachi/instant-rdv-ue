@@ -13,7 +13,7 @@ RWStructuredBuffer<uint> RWFspProbeFreeStack;
 RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
 RWStructuredBuffer<uint4> RWFspProbeAtlas;
-StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BbvBuffer;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -186,7 +186,7 @@ float FspNativeNoiseFloat2(float2 Value)
 bool FspIsProbePositionOccupied(float3 PositionWs)
 {
     return BbvReadFineVoxelOccupancyAtWorldPos(
-        BitmaskBrickVoxel,
+        BbvBuffer,
         PositionWs,
         BbvGridMinPositionWs,
         BbvCellSizeCm,

@@ -7,7 +7,7 @@
 
 Texture2D<float> SceneDepthTexture;
 Texture2D SceneColorTexture;
-StructuredBuffer<uint> BitmaskBrickVoxel;
+StructuredBuffer<uint> BbvBuffer;
 RWStructuredBuffer<uint> RWBbvRadianceAccumBuffer;
 
 uint DepthSizeX;
@@ -72,7 +72,7 @@ bool IsBrickOccupied(uint BrickIndex)
     [loop]
 	for (uint WordOffset = 0u; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
     {
-		if (BitmaskBrickVoxel[BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + WordOffset] != 0u)
+		if (BbvBuffer[BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + WordOffset] != 0u)
         {
             return true;
         }

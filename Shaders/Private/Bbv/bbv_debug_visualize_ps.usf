@@ -7,8 +7,8 @@ Texture2D<float> SceneDepthTexture;
 Texture2D SceneColorTexture;
 SamplerState PointClampSampler;
 
-StructuredBuffer<uint> BitmaskBrickVoxel;
-StructuredBuffer<uint> BrickData;
+StructuredBuffer<uint> BbvBuffer;
+uint BrickDataBaseOffset;
 StructuredBuffer<uint> BitmaskBrickVoxelOptionData;
 
 float4x4 InvViewProjectionMatrix;
@@ -81,7 +81,7 @@ bool IsFineVoxelOccupied(int3 LogicalFineCoord)
     const uint BitIndex = CalcFineBitIndex(FineCoord);
 	const uint WordIndex = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + (BitIndex / 32u);
     const uint WordMask = 1u << (BitIndex & 31u);
-    return (BitmaskBrickVoxel[WordIndex] & WordMask) != 0u;
+    return (BbvBuffer[WordIndex] & WordMask) != 0u;
 }
 
 float3 ReconstructRayDirection(float2 Uv)
@@ -126,8 +126,8 @@ bool TraceBbvVoxelRayReference(
     out uint OutBitIndex)
 {
     return TraceBbvRayReference(
-        BitmaskBrickVoxel,
-        BrickData,
+        BbvBuffer,
+        BrickDataBaseOffset,
         RayOriginWs,
         RayDirWs,
         MaxDistanceCm,
@@ -158,8 +158,8 @@ bool TraceBbvBrickRayReference(
     int3 DummyFineCoord = int3(-1, -1, -1);
     uint DummyBitIndex = 0u;
 	return TraceBbvRayReference(
-        BitmaskBrickVoxel,
-        BrickData,
+        BbvBuffer,
+        BrickDataBaseOffset,
         RayOriginWs,
         RayDirWs,
         MaxDistanceCm,

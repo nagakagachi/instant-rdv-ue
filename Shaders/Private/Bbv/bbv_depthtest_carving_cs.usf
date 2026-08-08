@@ -14,7 +14,7 @@ Texture2D<float> SceneDepthTexture;
 SamplerState SceneDepthSampler;
 StructuredBuffer<uint> FrustumBrickCounter;
 StructuredBuffer<uint> FrustumBrickList;
-RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
+RWStructuredBuffer<uint> RWBbvBuffer;
 
 uint DepthSizeX;
 uint DepthSizeY;
@@ -106,7 +106,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float3 BitCellStepWs = CellSizeCm / max(float(k_irdv_bbv_brick_reso), 1.0);
 	const uint WordAddress = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + U32Offset;
 
-    uint BitBlock = RWBitmaskBrickVoxel[WordAddress];
+    uint BitBlock = RWBbvBuffer[WordAddress];
     if (WaveActiveCountBits(BitBlock != 0u) == 0u)
     {
         return;
@@ -173,5 +173,5 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     // 4. lane担当u32を書き戻す。
-    RWBitmaskBrickVoxel[WordAddress] = RemainMask;
+    RWBbvBuffer[WordAddress] = RemainMask;
 }

@@ -9,8 +9,8 @@
 StructuredBuffer<uint> FspProbeRayRequestBuffer;
 RWStructuredBuffer<uint> RWFspProbeRayResultBuffer;
 StructuredBuffer<uint> FspProbePool;
-StructuredBuffer<uint> BitmaskBrickVoxel;
-StructuredBuffer<uint> BrickData;
+StructuredBuffer<uint> BbvBuffer;
+uint BrickDataBaseOffset;
 
 uint FspProbePoolElementCount;
 uint BbvGridResolutionX;
@@ -84,8 +84,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             uint BrickIndex = 0u;
             uint BitIndex = 0u;
             const bool bHit = TraceBbvRayReference(
-                BitmaskBrickVoxel,
-                BrickData,
+                BbvBuffer,
+                BrickDataBaseOffset,
                 ProbePositionWs,
                 RayDirWs,
                 FspTraceDistanceCm,

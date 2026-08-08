@@ -37,8 +37,8 @@ static void GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams(FIn
     ShaderParams.BbvBrickSizeCm = 0.0f;
     ShaderParams.BbvGridMinPositionWs = FVector3f::ZeroVector;
     ShaderParams.BbvToroidalOffsetCells = FVector3f::ZeroVector;
-    ShaderParams.BbvBitmaskBrickVoxel = GraphBuilder.CreateSRV(DummyUintBuffer);
-    ShaderParams.BbvBrickData = GraphBuilder.CreateSRV(DummyUintBuffer);
+    ShaderParams.BbvBuffer = GraphBuilder.CreateSRV(DummyUintBuffer);
+    ShaderParams.BbvBrickDataBaseOffset = 0u;
     ShaderParams.BbvRadianceAccum = GraphBuilder.CreateSRV(DummyUintBuffer);
 }
 

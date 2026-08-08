@@ -33,8 +33,8 @@ StructuredBuffer<uint> FspCellProbeIndex;
 StructuredBuffer<uint> FspProbePool;
 StructuredBuffer<uint4> FspProbeAtlas;
 StructuredBuffer<float4> FspPackedSH;
-StructuredBuffer<uint> BitmaskBrickVoxel;
-StructuredBuffer<uint> BrickData;
+StructuredBuffer<uint> BbvBuffer;
+uint BrickDataBaseOffset;
 
 struct VS_OUTPUT
 {
@@ -222,8 +222,8 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         // 自己ヒット調査では「free / embedded / BBV範囲外」を切り分けることが重要なので、3値で色分けする。
         bool bEmbeddedInBbv = false;
         const bool bInsideBbv = BbvTryGetProbeOccupancyAtWorldPos(
-            BitmaskBrickVoxel,
-            BrickData,
+            BbvBuffer,
+            BrickDataBaseOffset,
             Input.ProbeSamplePosWs,
             BbvGridMinPositionWs,
             BbvCellSizeCm,

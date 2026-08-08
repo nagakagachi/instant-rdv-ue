@@ -25,8 +25,7 @@ struct FInstantRdvBbvConfig
     uint32 GetBbvBrickCount() const;
     uint32 GetBitmaskElementCount() const;
     uint32 GetBrickDataElementCount() const;
-    uint32 GetHiBrickBrickCount() const;
-    uint32 GetHiBrickDataElementCount() const;
+    uint32 GetBbvBufferElementCount() const;
     uint32 GetOptionalDataElementCount() const;
     uint32 GetRadianceAccumDataElementCount() const;
 };
@@ -164,9 +163,7 @@ private:
             FToroidalGrid TrGrid{};
 
             // システムがフレームをまたいで管理するリソース群.
-            FPersistentRdgPooledBufferSet BitmaskBuffer;
-            FPersistentRdgPooledBufferSet BrickDataBuffer;
-            FPersistentRdgPooledBufferSet HiBrickDataBuffer;
+            FPersistentRdgPooledBufferSet BbvBuffer;
             FPersistentRdgPooledBufferSet OptionalDataBuffer;
             FPersistentRdgPooledBufferSet RadianceAccumBuffer;
         };

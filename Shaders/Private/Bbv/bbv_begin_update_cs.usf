@@ -2,14 +2,12 @@
 
 #include "/InstantRdvShaders/Private/instant_rdv_util.ush"
 
-RWStructuredBuffer<uint> RWBitmaskBrickVoxel;
-RWStructuredBuffer<uint> RWBrickData;
-RWStructuredBuffer<uint> RWHiBrickData;
+RWStructuredBuffer<uint> RWBbvBuffer;
 RWStructuredBuffer<uint> RWBitmaskBrickVoxelOptionData;
 
 uint BitmaskElementCount;
 uint BrickDataElementCount;
-uint HiBrickDataElementCount;
+uint BrickDataBaseOffset;
 uint OptionalDataElementCount;
 uint DispatchLinearWidth;
 uint DispatchThreadCount;
@@ -21,17 +19,12 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     for (uint It = Index; It < BitmaskElementCount; It += DispatchThreadCount)
     {
-        RWBitmaskBrickVoxel[It] = 0;
+        RWBbvBuffer[It] = 0;
     }
 
     for (uint It = Index; It < BrickDataElementCount; It += DispatchThreadCount)
     {
-        RWBrickData[It] = 0;
-    }
-
-    for (uint It = Index; It < HiBrickDataElementCount; It += DispatchThreadCount)
-    {
-        RWHiBrickData[It] = 0;
+        RWBbvBuffer[BrickDataBaseOffset + It] = 0;
     }
 
     for (uint It = Index; It < OptionalDataElementCount; It += DispatchThreadCount)
