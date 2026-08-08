@@ -18,12 +18,33 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	const uint WordStart = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick;
     uint OccupiedFineVoxelCount = 0u;
-    [loop]
+	uint3 LocalCoordMin = uint3(k_irdv_bbv_brick_reso - 1u, k_irdv_bbv_brick_reso - 1u, k_irdv_bbv_brick_reso - 1u);
+	uint3 LocalCoordMax = uint3(0u, 0u, 0u);
+	[loop]
 	for (uint WordOffset = 0; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
-    {
-        const uint Word = RWBbvBuffer[WordStart + WordOffset];
-        OccupiedFineVoxelCount += countbits(Word);
-    }
+	{
+	    uint Word = RWBbvBuffer[WordStart + WordOffset];
+	    OccupiedFineVoxelCount += countbits(Word);
+	    while (Word != 0u)
+	    {
+	        const uint BitIndex = firstbitlow(Word);
+	        const uint3 LocalCoord = CalcFineCoordFromBitIndex(WordOffset * 32u + BitIndex);
+	        LocalCoordMin = min(LocalCoordMin, LocalCoord);
+	        LocalCoordMax = max(LocalCoordMax, LocalCoord);
+	        Word &= Word - 1u;
+	    }
+	}
 
-    RWBbvBuffer[BrickDataBaseOffset + BrickIndex * 4u + 0u] = OccupiedFineVoxelCount;
+	const uint BrickDataAddress = BrickDataBaseOffset + BrickIndex * k_irdv_bbv_brick_data_u32_count;
+	RWBbvBuffer[BrickDataAddress + 0u] = OccupiedFineVoxelCount;
+	if (OccupiedFineVoxelCount != 0u)
+	{
+	    RWBbvBuffer[BrickDataAddress + 2u] = BbvPackBrickLocalAabbCoord(LocalCoordMin);
+	    RWBbvBuffer[BrickDataAddress + 3u] = BbvPackBrickLocalAabbCoord(LocalCoordMax);
+	}
+	else
+	{
+	    RWBbvBuffer[BrickDataAddress + 2u] = 0u;
+	    RWBbvBuffer[BrickDataAddress + 3u] = 0u;
+	}
 }

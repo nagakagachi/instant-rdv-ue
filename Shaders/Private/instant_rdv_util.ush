@@ -48,4 +48,43 @@ uint CalcFineBitIndex(uint3 FineCoord)
     return SubbrickIndex * 64u + CalcSubbrickMortonBitIndex(SubbrickLocal);
 }
 
+uint3 CalcSubbrickLocalCoordFromMorton(uint MortonBitIndex)
+{
+    return uint3(
+        ((MortonBitIndex >> 0u) & 1u) | (((MortonBitIndex >> 3u) & 1u) << 1u),
+        ((MortonBitIndex >> 1u) & 1u) | (((MortonBitIndex >> 4u) & 1u) << 1u),
+        ((MortonBitIndex >> 2u) & 1u) | (((MortonBitIndex >> 5u) & 1u) << 1u));
+}
+
+uint3 CalcFineCoordFromBitIndex(uint BitIndex)
+{
+    const uint SubbrickIndex = BitIndex / 64u;
+    const uint MortonBitIndex = BitIndex % 64u;
+    const uint3 SubbrickCoord = uint3(
+        SubbrickIndex & 1u,
+        (SubbrickIndex >> 1u) & 1u,
+        (SubbrickIndex >> 2u) & 1u);
+    return SubbrickCoord * 4u + CalcSubbrickLocalCoordFromMorton(MortonBitIndex);
+}
+
+uint BbvBrickDataAddress(uint BrickDataBaseOffset, uint BrickIndex, uint Component)
+{
+    return BrickDataBaseOffset + BrickIndex * k_irdv_bbv_brick_data_u32_count + Component;
+}
+
+uint BbvPackBrickLocalAabbCoord(uint3 LocalCoord)
+{
+    return (LocalCoord.x & 0x7u)
+         | ((LocalCoord.y & 0x7u) << 3u)
+         | ((LocalCoord.z & 0x7u) << 6u);
+}
+
+uint3 BbvUnpackBrickLocalAabbCoord(uint PackedCoord)
+{
+    return uint3(
+        PackedCoord & 0x7u,
+        (PackedCoord >> 3u) & 0x7u,
+        (PackedCoord >> 6u) & 0x7u);
+}
+
 #endif // INSTANT_RDV_UTIL_USH

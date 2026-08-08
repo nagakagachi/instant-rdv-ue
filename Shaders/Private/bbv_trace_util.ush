@@ -78,11 +78,6 @@ bool IsFineVoxelOccupiedInBrick(StructuredBuffer<uint> BbvBuffer, uint BrickInde
 	return (BbvBuffer[WordIndex] & WordMask) != 0u;
 }
 
-uint BbvBrickDataAddress(uint BrickDataBaseOffset, uint BrickIndex, uint Component)
-{
-    return BrickDataBaseOffset + BrickIndex * k_irdv_bbv_brick_data_u32_count + Component;
-}
-
 bool BbvReadFineVoxelOccupancyAtWorldPos(
     StructuredBuffer<uint> BbvBuffer,
     float3 WorldPosWs,
@@ -259,6 +254,7 @@ bool TraceBbvRayReference(
     const float CellSize = max(GridCellSize, 0.001);
     const float CellSizeInv = 1.0 / CellSize;
     const int3 GridResI = GridResolution;
+    const int FineRes = int(k_irdv_bbv_brick_reso);
 
 	const float3 RayOrigin = (RayOriginWs - GridMinPositionWs) * CellSizeInv;
     const float3 RayDir = RayDirWs;
@@ -325,36 +321,73 @@ bool TraceBbvRayReference(
                 return true;
             }
 
-            // Voxel モードでは同じ進入点を使い、参照実装準拠の Brick 内追跡を実行。
-            const float DetailBeginT = BrickBeginT;
-            const float3 BrickEntryPos = ClampedStartPos + RayDir * DetailBeginT;
-            const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(k_irdv_bbv_brick_reso);
+            float DetailBeginT = BrickBeginT;
+            float DetailEndT = BrickEndT;
+            int3 TraceCoordMin = int3(0, 0, 0);
+            int3 TraceCoordMax = int3(FineRes, FineRes, FineRes);
+            bool bShouldTraceDetail = true;
 
-            bool3 DetailStepMask = bool3(false, false, false);
-            const int FineRes = int(k_irdv_bbv_brick_reso);
-            const int3 SubMapPos = TraceBitmaskBrickReference(
-                BbvBuffer,
-                PosInBrick,
+            const uint3 LocalCoordMin = BbvUnpackBrickLocalAabbCoord(
+                BbvBuffer[BbvBrickDataAddress(BrickDataBaseOffset, BrickIndex, 2u)]);
+            const uint3 LocalCoordMaxExclusive = BbvUnpackBrickLocalAabbCoord(
+                BbvBuffer[BbvBrickDataAddress(BrickDataBaseOffset, BrickIndex, 3u)]) + 1u;
+            const float3 LocalAabbMin = float3(MapPos) + float3(LocalCoordMin) / float(FineRes);
+            const float3 LocalAabbMax = float3(MapPos) + float3(LocalCoordMaxExclusive) / float(FineRes);
+
+            float AabbBeginT = 0.0;
+            float AabbEndT = BrickEndT;
+            if (!IntersectAabb(
+                AabbBeginT,
+                AabbEndT,
+                LocalAabbMin,
+                LocalAabbMax,
+                ClampedStartPos,
                 RayDir,
-                RayDirSign,
                 RayDirInv,
-                DetailStepMask,
-                int3(0, 0, 0),
-                int3(FineRes, FineRes, FineRes),
-                BrickIndex);
-            if (SubMapPos.x >= 0)
+                BrickEndT))
             {
-                const float3 FinalPos = float3(MapPos * FineRes + SubMapPos);
-                const float3 StartPos = ClampedStartPos * float(FineRes);
-                // Fine Voxel の面交差から安定したヒット時刻を再構成する。
-                const float3 Mini = ((FinalPos - StartPos) + 0.5 * RayComponentValidity - 0.5 * RayDirSign) * RayDirInv;
-                const float HitT = max(0.0, max(max(Mini.x, Mini.y), Mini.z) / float(FineRes));
-                OutHitDistanceCm = (HitT + RayTraceBeginT) * CellSize;
-                OutLogicalBrickCoord = MapPos;
-                OutLogicalFineCoord = MapPos * FineRes + SubMapPos;
-                OutBrickIndex = BrickIndex;
-                OutBitIndex = CalcFineBitIndex(uint3(SubMapPos));
-                return true;
+                bShouldTraceDetail = false;
+            }
+            else
+            {
+                DetailBeginT = max(DetailBeginT, AabbBeginT);
+                DetailEndT = min(DetailEndT, AabbEndT);
+                bShouldTraceDetail = DetailEndT >= DetailBeginT;
+            }
+
+            TraceCoordMin = int3(LocalCoordMin);
+            TraceCoordMax = int3(LocalCoordMaxExclusive);
+            if (bShouldTraceDetail)
+            {
+                // Voxel モードではLocalAABBへの進入点から参照実装準拠のBrick内追跡を実行。
+                const float3 BrickEntryPos = ClampedStartPos + RayDir * DetailBeginT;
+                const float3 PosInBrick = (BrickEntryPos - float3(MapPos)) * float(FineRes);
+
+                bool3 DetailStepMask = bool3(false, false, false);
+                const int3 SubMapPos = TraceBitmaskBrickReference(
+                    BbvBuffer,
+                    PosInBrick,
+                    RayDir,
+                    RayDirSign,
+                    RayDirInv,
+                    DetailStepMask,
+                    TraceCoordMin,
+                    TraceCoordMax,
+                    BrickIndex);
+                if (SubMapPos.x >= 0)
+                {
+                    const float3 FinalPos = float3(MapPos * FineRes + SubMapPos);
+                    const float3 StartPos = ClampedStartPos * float(FineRes);
+                    // Fine Voxel の面交差から安定したヒット時刻を再構成する。
+                    const float3 Mini = ((FinalPos - StartPos) + 0.5 * RayComponentValidity - 0.5 * RayDirSign) * RayDirInv;
+                    const float HitT = max(0.0, max(max(Mini.x, Mini.y), Mini.z) / float(FineRes));
+                    OutHitDistanceCm = (HitT + RayTraceBeginT) * CellSize;
+                    OutLogicalBrickCoord = MapPos;
+                    OutLogicalFineCoord = MapPos * FineRes + SubMapPos;
+                    OutBrickIndex = BrickIndex;
+                    OutBitIndex = CalcFineBitIndex(uint3(SubMapPos));
+                    return true;
+                }
             }
         }
 
