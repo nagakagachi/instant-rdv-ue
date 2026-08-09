@@ -45,6 +45,7 @@ struct VS_OUTPUT
     nointerpolation uint ProbeIndex : TEXCOORD3;
     nointerpolation uint ProbeFlags : TEXCOORD4;
     float3 ProbeSamplePosWs : TEXCOORD5;
+    float3 RelocatedProbeSamplePosWs : TEXCOORD6;
 };
 
 bool FspTryGetActiveProbeForCell(out uint OutProbeIndex, out FInstantRdvFspProbePoolData OutData, uint GlobalCellIndex)
@@ -137,6 +138,7 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
     // DebugMode 9 は現在のtrace origin設定そのものを診断する用途なので、
     // TraceUseProbeOffset=0 の場合はcell center、1 の場合はoffset sample positionを判定対象にする。
     Out.ProbeSamplePosWs = (bUseProbeTraceOffset != 0u) ? ProbeSamplePosWs : CellCenterWs;
+    Out.RelocatedProbeSamplePosWs = ProbeSamplePosWs;
     return Out;
 }
 
@@ -233,6 +235,39 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         Color = !bInsideBbv
             ? float4(0.2, 0.5, 1.0, 1.0)
             : (bEmbeddedInBbv ? float4(1.0, 0.15, 0.1, 1.0) : float4(0.2, 1.0, 0.3, 1.0));
+    }
+    else if (DebugMode == 11u)
+    {
+        // Relocation済みProbeまでの有限線分を追跡し、BBV遮蔽の有無を表示する。
+        const float3 Segment = Input.RelocatedProbeSamplePosWs - CameraPositionWs;
+        const float SegmentLength = length(Segment);
+        const float3 SegmentDirection = (SegmentLength > 1e-4) ? Segment / SegmentLength : float3(0.0, 0.0, 1.0);
+        const bool bTargetInsideBbv = all(Input.RelocatedProbeSamplePosWs >= BbvGridMinPositionWs) &&
+            all(Input.RelocatedProbeSamplePosWs < (BbvGridMinPositionWs + float3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ) * BbvCellSizeCm));
+        float HitDistanceCm = -1.0;
+        int3 HitBrickCoord = int3(-1, -1, -1);
+        int3 HitFineCoord = int3(-1, -1, -1);
+        uint HitBrickIndex = 0u;
+        uint HitBitIndex = 0u;
+        const bool bBlocked = bTargetInsideBbv && TraceBbvRayReference(
+            BbvBuffer,
+            BrickDataBaseOffset,
+            CameraPositionWs,
+            SegmentDirection,
+            SegmentLength,
+            false,
+            uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
+            BbvCellSizeCm,
+            BbvGridMinPositionWs,
+            int3(BbvToroidalOffsetCells),
+            HitDistanceCm,
+            HitBrickCoord,
+            HitFineCoord,
+            HitBrickIndex,
+            HitBitIndex);
+        Color = !bTargetInsideBbv
+            ? float4(0.2, 0.5, 1.0, 1.0)
+            : (bBlocked ? float4(1.0, 0.15, 0.1, 1.0) : float4(0.2, 1.0, 0.3, 1.0));
     }
     else if (DebugMode == 7u || DebugMode == 10u)
     {

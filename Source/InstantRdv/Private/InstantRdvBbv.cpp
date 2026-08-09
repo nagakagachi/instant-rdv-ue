@@ -72,7 +72,7 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthCullMode(
     ECVF_RenderThreadSafe);
 static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthInjectionMethod(
     TEXT("r.InstantRdv.Bbv.DepthInjectionMethod"),
-    0,
+    1,
     TEXT("Depth Injectionの表面->Near方向計算方式。\n")
     TEXT("0: UE現行方式（NDC z=0/1の距離比較）\n")
     TEXT("1: Native方式（ProjectionのNear Plane深度を使用）"),
@@ -1818,7 +1818,10 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
     // シェーダ内部の既存debug mode体系はそのまま使い、ここで外部CVar値を内部modeへ写像する。
     if (FspProbeDebugMode > 0)
     {
-        AddFspProbeBillboardPass(static_cast<uint32>(FspProbeDebugMode - 1), TEXT("InstantRdv.FspProbeBillboard"), true);
+        const uint32 InternalDebugMode = (FspProbeDebugMode == 10)
+            ? 11u
+            : static_cast<uint32>(FspProbeDebugMode - 1);
+        AddFspProbeBillboardPass(InternalDebugMode, TEXT("InstantRdv.FspProbeBillboard"), true);
     }
 
     if (FspIvProbeDebugMode > 0)

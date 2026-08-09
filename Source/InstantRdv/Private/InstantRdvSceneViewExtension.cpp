@@ -56,6 +56,7 @@ static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbe(
     TEXT("7: Active probe SH radiance\n")
     TEXT("8: Active probe SH sky visibility\n")
     TEXT("9: Probe sample position embedded in BBV occupancy\n")
+    TEXT("10: Camera-to-relocated-probe BBV reachability (blue=outside, red=blocked, green=reached)\n")
     TEXT("Active probe modes also draw counters at top-left: cyan=visible cells, green=active probes, yellow=ray requests, orange=ray results, purple=free probes"),
     ECVF_RenderThreadSafe);
 
