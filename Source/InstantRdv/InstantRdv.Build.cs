@@ -24,7 +24,9 @@ public class InstantRdv : ModuleRules
             {
                 "Core",
                 "CoreUObject",
-                "Engine"
+                "Engine",
+                "Slate",
+                "SlateCore"
             });
 
         PrivateDependencyModuleNames.AddRange(

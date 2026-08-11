@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
 #include "Delegates/Delegate.h"
 #include "Modules/ModuleManager.h"
 
@@ -18,7 +19,6 @@ public:
 private:
     void RegisterSceneViewExtension();
 
-    bool bShaderDirectoryMapped = false;
     FDelegateHandle PostEngineInitHandle;
     TSharedPtr<FInstantRdvSceneViewExtension, ESPMode::ThreadSafe> SceneViewExtension;
 };

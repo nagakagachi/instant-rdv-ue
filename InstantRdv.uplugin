@@ -14,6 +14,11 @@
       "Name": "InstantRdv",
       "Type": "Runtime",
       "LoadingPhase": "PostConfigInit"
+    },
+    {
+      "Name": "InstantRdvEditor",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit"
     }
   ],
   "EngineVersion": "5.8.0"

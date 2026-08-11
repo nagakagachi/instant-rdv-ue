@@ -20,7 +20,6 @@ void FInstantRdvModule::StartupModule()
     {
         const FString PluginShaderDir = FPaths::Combine(Plugin->GetBaseDir(), TEXT("Shaders"));
         AddShaderSourceDirectoryMapping(TEXT("/InstantRdvShaders"), PluginShaderDir);
-        bShaderDirectoryMapped = true;
     }
 
     if (!FApp::CanEverRender())
@@ -47,7 +46,6 @@ void FInstantRdvModule::ShutdownModule()
     }
 
     SceneViewExtension.Reset();
-    bShaderDirectoryMapped = false;
 }
 
 void FInstantRdvModule::RegisterSceneViewExtension()
