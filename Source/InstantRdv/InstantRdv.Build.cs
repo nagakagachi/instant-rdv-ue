@@ -32,6 +32,7 @@ public class InstantRdv : ModuleRules
         PrivateDependencyModuleNames.AddRange(
             new[]
             {
+                "ApplicationCore",
                 "Projects",
                 "RHI",
                 "RHICore",

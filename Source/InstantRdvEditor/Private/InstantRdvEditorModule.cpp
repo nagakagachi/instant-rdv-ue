@@ -1,5 +1,8 @@
 /*
     InstantRdvEditorModule.cpp
+
+    Editor専用モジュールとしてInstant-RDVデバッグSlateパネルの
+    Nomad Tab登録とLevel Editorへの公開を担当する。
 */
 
 #include "InstantRdvEditorModule.h"

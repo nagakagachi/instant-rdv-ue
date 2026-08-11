@@ -1,8 +1,12 @@
 ﻿/*
     InstantRdvBbv.cpp
+
+    BBVの永続リソース管理、Geometry/Radiance更新、FSP更新、
+    および関連するRenderThreadパスの実装を担当する。
 */
 
 #include "InstantRdvBbv.h"
+#include "InstantRdvConsoleVariables.h"
 #include "InstantRdvSceneUniformBuffer.h"
 
 #include "FXRenderingUtils.h"
@@ -27,20 +31,30 @@ static constexpr uint32 kBbvElementUpdateSkipCount = 3;
 static constexpr uint32 kFspIrradianceVolumeShFloat4Count = 4;
 static constexpr uint32 kFspTraceDistanceCm = 5000;
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspWarmStart(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspWarmStart,
     TEXT("r.InstantRdv.Fsp.WarmStart"),
     1,
     TEXT("新規FSP ActiveProbeのAtlas warm start。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("Warm start"),
+    10);
 
-static TAutoConsoleVariable<float> CVarInstantRdvFspRelocationOffsetScale(
+INSTANT_RDV_CVAR_FLOAT(
+    CVarInstantRdvFspRelocationOffsetScale,
     TEXT("r.InstantRdv.Fsp.RelocationOffsetScale"),
     0.9f,
     TEXT("ActiveProbe relocationの最大距離をCascade cell sizeに対する比率で指定する。\n")
     TEXT("Native InstantRDV default: 0.9"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("Relocation offset scale"),
+    0.0f,
+    1.5f,
+    20);
 
 
 
@@ -52,46 +66,83 @@ TGlobalResource<FEmptyVertexDeclaration, FRenderResource::EInitPhase::Pre> GInst
 // - Indirect dispatch は args バッファ生成だけでなく、消費パス側で IndirectArgs access を明示する。
 //   片側だけだと実行時 validation で失敗する。
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvReset(
+INSTANT_RDV_CVAR_ACTION(
+    CVarInstantRdvBbvReset,
     TEXT("r.InstantRdv.Bbv.Reset"),
     0,
     TEXT("Force BBV buffer reinitialization.\n0: Keep persistent BBV state\n1: Clear BBV state this frame"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Reset BBV state"),
+    1000);
 
-static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthtestInjectionOffsetFineCells(
+INSTANT_RDV_CVAR_FLOAT(
+    CVarInstantRdvBbvDepthtestInjectionOffsetFineCells,
     TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"),
     2.0f,
     TEXT("Depthtest Injectionの視線奥オフセット量（fine cell単位）。\n参照実装準拠で、実際の距離は CellSizeCm * (FineCells / k_irdv_bbv_brick_reso) で算出。"),
-    ECVF_RenderThreadSafe);
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthCullMode(
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Injection offset (fine cells)"),
+    0.0f,
+    8.0f,
+    220);
+
+INSTANT_RDV_CVAR_INT(
+    CVarInstantRdvBbvDepthCullMode,
     TEXT("r.InstantRdv.Bbv.DepthCullMode"),
     1,
     TEXT("BBV DepthCull frustum candidate mode.\n")
     TEXT("0: Legacy Brick-center XY test\n")
     TEXT("1: Conservative world-space Brick AABB vs six frustum planes"),
-    ECVF_RenderThreadSafe);
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvDepthInjectionMethod(
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Depth Cull mode"),
+    0.0f,
+    1.0f,
+    200);
+
+INSTANT_RDV_CVAR_INT(
+    CVarInstantRdvBbvDepthInjectionMethod,
     TEXT("r.InstantRdv.Bbv.DepthInjectionMethod"),
     1,
     TEXT("Depth Injectionの表面->Near方向計算方式。\n")
     TEXT("0: UE現行方式（NDC z=0/1の距離比較）\n")
     TEXT("1: Native方式（ProjectionのNear Plane深度を使用）"),
-    ECVF_RenderThreadSafe);
-static TAutoConsoleVariable<float> CVarInstantRdvBbvDepthRelationRangeFineCells(
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Depth Injection method"),
+    0.0f,
+    1.0f,
+    210);
+
+INSTANT_RDV_CVAR_FLOAT(
+    CVarInstantRdvBbvDepthRelationRangeFineCells,
     TEXT("r.InstantRdv.Bbv.DepthRelationRangeFineCells"),
     8.0f,
     TEXT("BBV Depth Relation debugの表示範囲（±fine cell数）。"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Depth relation range (fine cells)"),
+    0.0f,
+    32.0f,
+    230);
 // 移植ミス再発防止:
 // - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
 // - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/k_irdv_bbv_brick_reso で換算する。
 // - CVarの意味は「ワールド距離」ではなく「fine cell数」を維持すること。
 
-static TAutoConsoleVariable<float> CVarInstantRdvFspDebugProbeRadiusCm(
+INSTANT_RDV_CVAR_FLOAT(
+    CVarInstantRdvFspDebugProbeRadiusCm,
     TEXT("r.InstantRdv.Fsp.DebugProbeRadiusCm"),
     10.0f,
     TEXT("FSP probe sphere debug radius in centimeters."),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("Probe radius (cm)"),
+    0.0f,
+    100.0f,
+    40);
 
 class FInstantRdvBbvBeginUpdateCS final : public FGlobalShader
 {

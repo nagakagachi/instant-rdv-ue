@@ -1,11 +1,15 @@
 ﻿/*
     InstantRdvSceneViewExtension.cpp
+
+    UEのSceneViewExtensionへ接続し、BBV/FSPのRenderThread更新、
+    ポストプロセス処理、デバッグ可視化のタイミングを管理する。
 */
 
 #include "InstantRdvSceneViewExtension.h"
 
 #include "HAL/IConsoleManager.h"
 #include "InstantRdvBbv.h"
+#include "InstantRdvConsoleVariables.h"
 #include "PostProcess/PostProcessMaterialInputs.h"
 #include "PostProcess/PostProcessInputs.h"
 #include "SceneRendering.h"
@@ -14,23 +18,32 @@
 
 namespace
 {
-static TAutoConsoleVariable<int32> CVarInstantRdvEnable(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvEnable,
     TEXT("r.InstantRdv.GI"),
     1,
     TEXT("Enable Instant-RDV runtime hooks.\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Runtime"),
+    TEXT("Instant-RDV enabled"),
+    0);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvEnable(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvEnable,
     TEXT("r.InstantRdv.Bbv.Enable"),
     1,
     TEXT("Enable Instant-RDV BBV update passes.\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Runtime"),
+    TEXT("BBV enabled"),
+    10);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvVisDebug(
+INSTANT_RDV_CVAR_INT(
+    CVarInstantRdvBbvVisDebug,
     TEXT("r.InstantRdv.Bbv.VisDebug"),
     0,
     TEXT("Instant-RDV BBV voxel debug mode selector.\n")
@@ -40,9 +53,15 @@ static TAutoConsoleVariable<int32> CVarInstantRdvBbvVisDebug(
     TEXT("3: Voxel raytrace debug\n")
     TEXT("4: Voxel radiance debug\n")
     TEXT("5: BBV hitとDepth Surfaceの前後距離（青=手前、赤=奥）"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("BBV visualization mode"),
+    0.0f,
+    5.0f,
+    0);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbe(
+INSTANT_RDV_CVAR_INT(
+    CVarInstantRdvFspVisProbe,
     TEXT("r.InstantRdv.Fsp.VisProbe"),
     0,
     TEXT("Instant-RDV FSP active probe debug mode selector.\n")
@@ -58,96 +77,147 @@ static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbe(
     TEXT("9: Probe sample position embedded in BBV occupancy\n")
     TEXT("10: Camera-to-relocated-probe BBV reachability (blue=outside, red=blocked, green=reached)\n")
     TEXT("Active probe modes also draw counters at top-left: cyan=visible cells, green=active probes, yellow=ray requests, orange=ray results, purple=free probes"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("ActiveProbe visualization mode"),
+    0.0f,
+    10.0f,
+    10);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspVisIvProbe(
+INSTANT_RDV_CVAR_INT(
+    CVarInstantRdvFspVisIvProbe,
     TEXT("r.InstantRdv.Fsp.VisIvProbe"),
     0,
     TEXT("Instant-RDV FSP irradiance volume probe debug mode selector.\n")
     TEXT("0: Off\n")
     TEXT("1: IrradianceVolume SH radiance\n")
     TEXT("2: IrradianceVolume SH sky visibility"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("IrradianceVolume visualization mode"),
+    0.0f,
+    2.0f,
+    20);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspDebugDepthTest(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspDebugDepthTest,
     TEXT("r.InstantRdv.Fsp.DebugDepthTest"),
     1,
     TEXT("Enable SceneDepth testing for ActiveProbe and IrradianceVolume debug spheres.\n")
     TEXT("0: Draw without depth test\n")
     TEXT("1: Respect SceneDepth occlusion"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("Debug depth test"),
+    30);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewInjection(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvMainViewInjection,
     TEXT("r.InstantRdv.Bbv.MainViewInjection"),
     1,
     TEXT("Enable BBV main view injection pass.\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Main view injection"),
+    10);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewRemoval(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvMainViewRemoval,
     TEXT("r.InstantRdv.Bbv.MainViewRemoval"),
     1,
     TEXT("Enable BBV main view removal pass.\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Main view removal"),
+    20);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvMainViewUpdate(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvMainViewUpdate,
     TEXT("r.InstantRdv.Bbv.MainViewUpdate"),
     1,
     TEXT("Master toggle for BBV main view update passes (Injection + Removal).\n")
     TEXT("0: Disable both Injection and Removal\n")
     TEXT("1: Enable by individual pass toggles"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Main view update"),
+    0);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceUpdate(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvRadianceUpdate,
     TEXT("r.InstantRdv.Bbv.RadianceUpdate"),
     1,
     TEXT("BBV Radiance更新（Injection + Resolve）の有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled at SubscribeToPostProcessingPass BeforeDOF"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Radiance update"),
+    100);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceInjection(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvRadianceInjection,
     TEXT("r.InstantRdv.Bbv.RadianceInjection"),
     1,
     TEXT("BBV Radiance Injection passの有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Radiance injection"),
+    110);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvBbvRadianceResolve(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvRadianceResolve,
     TEXT("r.InstantRdv.Bbv.RadianceResolve"),
     1,
     TEXT("BBV Radiance Resolve passの有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("BBV"),
+    TEXT("Radiance resolve"),
+    120);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspUpdate(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspUpdate,
     TEXT("r.InstantRdv.Fsp.Update"),
     1,
     TEXT("Frustum Space Probe(FSP) lifecycle / ray trace / SH update の有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled after BBV Radiance Resolve"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("FSP update"),
+    0);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspTraceUseProbeOffset(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspTraceUseProbeOffset,
     TEXT("r.InstantRdv.Fsp.TraceUseProbeOffset"),
     1,
     TEXT("Apply active probe offset to FSP ray trace origins.\n")
     TEXT("0: Trace from owner cell center\n")
     TEXT("1: Trace from offset probe sample position"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("Trace uses probe offset"),
+    30);
 
-static TAutoConsoleVariable<int32> CVarInstantRdvFspVisProbeUseOffset(
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspVisProbeUseOffset,
     TEXT("r.InstantRdv.Fsp.VisProbeUseOffset"),
     1,
     TEXT("Apply active probe offset to ActiveProbe debug billboard positions.\n")
     TEXT("0: Draw at owner cell center\n")
     TEXT("1: Draw at offset probe sample position"),
-    ECVF_RenderThreadSafe);
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("Probe visualization uses offset"),
+    40);
 
 static FRDGTextureRef GetViewSceneDepthTexture_RenderThread(const FSceneView& View)
 {

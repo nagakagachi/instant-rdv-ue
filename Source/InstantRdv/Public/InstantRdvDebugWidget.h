@@ -1,5 +1,8 @@
 /*
     InstantRdvDebugWidget.h
+
+    CVarメタデータから生成されるInstant-RDVデバッグ操作パネルの
+    Slate Widgetインターフェースを定義する。
 */
 
 #pragma once

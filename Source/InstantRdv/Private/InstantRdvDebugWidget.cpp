@@ -1,11 +1,16 @@
 /*
     InstantRdvDebugWidget.cpp
+
+    Instant-RDVのCVarを列挙・分類・ソートし、チェックボックス、
+    スライダ、Reset、Tooltip、詳細説明を持つSlateデバッグUIへ構築する。
 */
 
 #include "InstantRdvDebugWidget.h"
 
 #include "Containers/Ticker.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "InstantRdvConsoleVariables.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSlider.h"
@@ -16,78 +21,78 @@
 
 namespace
 {
-enum class EInstantRdvCVarType : uint8
-{
-    Bool,
-    Int,
-    Float,
-    Action
-};
-
 struct FInstantRdvCVarDefinition
 {
-    const TCHAR* Category;
-    const TCHAR* Label;
-    const TCHAR* CVarName;
-    EInstantRdvCVarType Type;
-    float DefaultValue;
+    FString CategoryId;
+    FString Category;
+    FString Label;
+    FString CVarName;
+    EInstantRdvCVarUiType Type = EInstantRdvCVarUiType::Int;
     float MinValue;
     float MaxValue;
+    int32 CategoryOrder = MAX_int32;
+    int32 ItemOrder = MAX_int32;
 };
 
 static constexpr EConsoleVariableFlags UiSetFlags = ECVF_SetByGameSetting;
 static const FNumberFormattingOptions FloatFormattingOptions = FNumberFormattingOptions().SetMaximumFractionalDigits(2);
 
-static const FInstantRdvCVarDefinition CVarDefinitions[] =
+static FInstantRdvCVarDefinition MakeDefinition(const FInstantRdvCVarUiMetadata& Metadata)
 {
-    { TEXT("Runtime"), TEXT("Instant-RDV enabled"), TEXT("r.InstantRdv.GI"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("Runtime"), TEXT("BBV enabled"), TEXT("r.InstantRdv.Bbv.Enable"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
+    // 生成した定義はループ終了後もSlateのLambdaから参照されるため、
+    // リテラルのメタデータを所有文字列へコピーする。
+    FInstantRdvCVarDefinition Definition;
+    Definition.CategoryId = Metadata.CategoryId;
+    Definition.Category = TEXT("Unclassified");
+    Definition.Label = Metadata.Label;
+    Definition.CVarName = Metadata.CVarName;
+    Definition.Type = Metadata.Type;
+    Definition.MinValue = Metadata.MinValue;
+    Definition.MaxValue = Metadata.MaxValue;
+    Definition.ItemOrder = Metadata.ItemOrder;
 
-    { TEXT("BBV"), TEXT("Main view update"), TEXT("r.InstantRdv.Bbv.MainViewUpdate"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Main view injection"), TEXT("r.InstantRdv.Bbv.MainViewInjection"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Main view removal"), TEXT("r.InstantRdv.Bbv.MainViewRemoval"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Radiance update"), TEXT("r.InstantRdv.Bbv.RadianceUpdate"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Radiance injection"), TEXT("r.InstantRdv.Bbv.RadianceInjection"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Radiance resolve"), TEXT("r.InstantRdv.Bbv.RadianceResolve"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Depth Cull mode"), TEXT("r.InstantRdv.Bbv.DepthCullMode"), EInstantRdvCVarType::Int, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Depth Injection method"), TEXT("r.InstantRdv.Bbv.DepthInjectionMethod"), EInstantRdvCVarType::Int, 1.0f, 0.0f, 1.0f },
-    { TEXT("BBV"), TEXT("Injection offset (fine cells)"), TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"), EInstantRdvCVarType::Float, 2.0f, 0.0f, 8.0f },
-    { TEXT("BBV"), TEXT("Depth relation range (fine cells)"), TEXT("r.InstantRdv.Bbv.DepthRelationRangeFineCells"), EInstantRdvCVarType::Float, 8.0f, 0.0f, 32.0f },
-    { TEXT("BBV"), TEXT("Reset BBV state"), TEXT("r.InstantRdv.Bbv.Reset"), EInstantRdvCVarType::Action, 0.0f, 0.0f, 1.0f },
+    if (const FInstantRdvCVarUiCategory* Category = FInstantRdvCVarUiRegistry::FindCategory(Metadata.CategoryId))
+    {
+        Definition.Category = Category->Label;
+        Definition.CategoryOrder = Category->SortOrder;
+    }
+    else
+    {
+        // 古いカテゴリIDや誤記でCVarを非表示にしない。
+        // 最後のフォールバックカテゴリへ表示したうえで、開発ビルドでは
+        // 登録ミスをensureで明示する。
+        ensureMsgf(false, TEXT("Instant-RDV CVar metadata refers to an unregistered category: %s"), Metadata.CategoryId);
+        Definition.CategoryId = TEXT("Unclassified");
+        if (const FInstantRdvCVarUiCategory* FallbackCategory = FInstantRdvCVarUiRegistry::FindCategory(TEXT("Unclassified")))
+        {
+            Definition.Category = FallbackCategory->Label;
+            Definition.CategoryOrder = FallbackCategory->SortOrder;
+        }
+    }
 
-    { TEXT("FSP"), TEXT("FSP update"), TEXT("r.InstantRdv.Fsp.Update"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("FSP"), TEXT("Warm start"), TEXT("r.InstantRdv.Fsp.WarmStart"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("FSP"), TEXT("Relocation offset scale"), TEXT("r.InstantRdv.Fsp.RelocationOffsetScale"), EInstantRdvCVarType::Float, 0.9f, 0.0f, 1.5f },
-    { TEXT("FSP"), TEXT("Trace uses probe offset"), TEXT("r.InstantRdv.Fsp.TraceUseProbeOffset"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("FSP"), TEXT("Probe visualization uses offset"), TEXT("r.InstantRdv.Fsp.VisProbeUseOffset"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-
-    { TEXT("Debug"), TEXT("BBV visualization mode"), TEXT("r.InstantRdv.Bbv.VisDebug"), EInstantRdvCVarType::Int, 0.0f, 0.0f, 5.0f },
-    { TEXT("Debug"), TEXT("ActiveProbe visualization mode"), TEXT("r.InstantRdv.Fsp.VisProbe"), EInstantRdvCVarType::Int, 0.0f, 0.0f, 10.0f },
-    { TEXT("Debug"), TEXT("IrradianceVolume visualization mode"), TEXT("r.InstantRdv.Fsp.VisIvProbe"), EInstantRdvCVarType::Int, 0.0f, 0.0f, 2.0f },
-    { TEXT("Debug"), TEXT("Debug depth test"), TEXT("r.InstantRdv.Fsp.DebugDepthTest"), EInstantRdvCVarType::Bool, 1.0f, 0.0f, 1.0f },
-    { TEXT("Debug"), TEXT("Probe radius (cm)"), TEXT("r.InstantRdv.Fsp.DebugProbeRadiusCm"), EInstantRdvCVarType::Float, 10.0f, 0.0f, 100.0f },
-};
+    return Definition;
+}
 
 static IConsoleVariable* FindCVar(const FInstantRdvCVarDefinition& Definition)
 {
-    return IConsoleManager::Get().FindConsoleVariable(Definition.CVarName);
+    return IConsoleManager::Get().FindConsoleVariable(*Definition.CVarName);
 }
 
 static float GetValue(const FInstantRdvCVarDefinition& Definition)
 {
-    const IConsoleVariable* CVar = FindCVar(Definition);
+    IConsoleVariable* CVar = FindCVar(Definition);
     if (CVar == nullptr)
     {
-        return Definition.DefaultValue;
+        return 0.0f;
     }
 
-    return Definition.Type == EInstantRdvCVarType::Float ? CVar->GetFloat() : static_cast<float>(CVar->GetInt());
+    return Definition.Type == EInstantRdvCVarUiType::Float ? CVar->GetFloat() : static_cast<float>(CVar->GetInt());
 }
 
 static FText GetValueText(const FInstantRdvCVarDefinition& Definition)
 {
     const float Value = GetValue(Definition);
-    if (Definition.Type == EInstantRdvCVarType::Float)
+    if (Definition.Type == EInstantRdvCVarUiType::Float)
     {
         return FText::AsNumber(Value, &FloatFormattingOptions);
     }
@@ -99,17 +104,42 @@ static FText GetHelpText(const FInstantRdvCVarDefinition& Definition)
 {
     if (const IConsoleVariable* CVar = FindCVar(Definition))
     {
-        return FText::FromString(CVar->GetHelp());
+        const FString Help = CVar->GetHelp();
+        return FText::FromString(
+            FString::Printf(TEXT("%s\n\n%s"), *Definition.CVarName, *Help));
     }
 
-    return FText::FromString(TEXT("CVar is not registered."));
+    return FText::FromString(
+        FString::Printf(TEXT("%s\n\nCVar is not registered."), *Definition.CVarName));
+}
+
+static FReply CopyCVarName(const FInstantRdvCVarDefinition& Definition)
+{
+    FPlatformApplicationMisc::ClipboardCopy(*Definition.CVarName);
+    return FReply::Handled();
+}
+
+static float GetDefaultValue(const FInstantRdvCVarDefinition& Definition)
+{
+    IConsoleVariable* CVar = FindCVar(Definition);
+    if (CVar == nullptr)
+    {
+        return 0.0f;
+    }
+
+    // Reset値はUI側の二重定義ではなくCVar登録から取得する。
+    // Config／Console経由の動作とSlateボタンの既定値を一致させる。
+    const FString DefaultValue = CVar->GetDefaultValue();
+    return Definition.Type == EInstantRdvCVarUiType::Float
+        ? FCString::Atof(*DefaultValue)
+        : static_cast<float>(FCString::Atoi(*DefaultValue));
 }
 
 static void SetValue(const FInstantRdvCVarDefinition& Definition, float Value)
 {
     if (IConsoleVariable* CVar = FindCVar(Definition))
     {
-        if (Definition.Type == EInstantRdvCVarType::Float)
+        if (Definition.Type == EInstantRdvCVarUiType::Float)
         {
             CVar->Set(Value, UiSetFlags);
         }
@@ -122,11 +152,13 @@ static void SetValue(const FInstantRdvCVarDefinition& Definition, float Value)
 
 static void ResetValue(const FInstantRdvCVarDefinition& Definition)
 {
-    SetValue(Definition, Definition.DefaultValue);
+    SetValue(Definition, GetDefaultValue(Definition));
 }
 
 static void TriggerAction(const FInstantRdvCVarDefinition& Definition)
 {
+    // Action CVarはRender側で1フレームのパルスとして消費されるため、
+    // 有効状態を残さず、次のGameThread tickで0へ戻す。
     SetValue(Definition, 1.0f);
     FTSTicker::GetCoreTicker().AddTicker(
         FTickerDelegate::CreateLambda([Definition](float)
@@ -139,12 +171,92 @@ static void TriggerAction(const FInstantRdvCVarDefinition& Definition)
 
 void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
 {
-    TSharedRef<SVerticalBox> Content = SNew(SVerticalBox);
-    const TCHAR* LastCategory = nullptr;
+    TArray<FInstantRdvCVarDefinition> Definitions;
+    TSet<FString> RegisteredNames;
 
-    for (const FInstantRdvCVarDefinition& Definition : CVarDefinitions)
+    // 既知のメタデータから表示名、範囲、カテゴリ、順序を得る。
+    // 現在値・既定値・ヘルプ文は常にCVar本体から取得する。
+    for (const FInstantRdvCVarUiMetadata& Metadata : FInstantRdvCVarUiRegistry::GetAll())
     {
-        if (LastCategory == nullptr || FCString::Strcmp(LastCategory, Definition.Category) != 0)
+        FInstantRdvCVarDefinition Definition = MakeDefinition(Metadata);
+        if (FindCVar(Definition) != nullptr)
+        {
+            Definitions.Add(MoveTemp(Definition));
+            RegisteredNames.Add(Metadata.CVarName);
+        }
+        else
+        {
+            ensureMsgf(false, TEXT("Instant-RDV Slate metadata refers to an unregistered CVar: %s"), Metadata.CVarName);
+        }
+    }
+
+    IConsoleManager::Get().ForEachConsoleObjectThatStartsWith(
+        FConsoleObjectVisitor::CreateLambda(
+            [&Definitions, &RegisteredNames](const TCHAR* Name, IConsoleObject* Object)
+            {
+                // Prefix列挙により、専用メタデータが未登録の新規CVarも検出する。
+                // 未登録項目は保守的な汎用範囲と最後尾の順序で表示する。
+                if (Object == nullptr || Object->AsVariable() == nullptr || RegisteredNames.Contains(Name))
+                {
+                    return;
+                }
+
+                FInstantRdvCVarDefinition Definition;
+                Definition.CVarName = Name;
+                const FString NameString(Name);
+                int32 LastDotIndex = INDEX_NONE;
+                Definition.Label = NameString;
+                if (NameString.FindLastChar(TEXT('.'), LastDotIndex))
+                {
+                    Definition.Label = NameString.RightChop(LastDotIndex + 1);
+                }
+                Definition.CategoryId = TEXT("Unclassified");
+                Definition.Category = TEXT("Unclassified");
+                Definition.CategoryOrder = MAX_int32;
+                Definition.MinValue = -100.0f;
+                Definition.MaxValue = 100.0f;
+
+                if (Object->IsVariableBool())
+                {
+                    Definition.Type = EInstantRdvCVarUiType::Bool;
+                    Definition.MinValue = 0.0f;
+                    Definition.MaxValue = 1.0f;
+                }
+                else if (Object->IsVariableFloat())
+                {
+                    Definition.Type = EInstantRdvCVarUiType::Float;
+                }
+                else if (!Object->IsVariableInt())
+                {
+                    return;
+                }
+
+                Definitions.Add(MoveTemp(Definition));
+            }),
+        TEXT("r.InstantRdv."));
+
+    // 特にTranslation Unitをまたぐ静的登録順序はUIの契約にできない。
+    // 明示したカテゴリ順と項目順で表示順を安定させる。
+    Definitions.StableSort(
+        [](const FInstantRdvCVarDefinition& A, const FInstantRdvCVarDefinition& B)
+        {
+            if (A.CategoryOrder != B.CategoryOrder)
+            {
+                return A.CategoryOrder < B.CategoryOrder;
+            }
+            if (A.ItemOrder != B.ItemOrder)
+            {
+                return A.ItemOrder < B.ItemOrder;
+            }
+            return A.CVarName < B.CVarName;
+        });
+
+    TSharedRef<SVerticalBox> Content = SNew(SVerticalBox);
+    FString LastCategory;
+
+    for (const FInstantRdvCVarDefinition& Definition : Definitions)
+    {
+        if (LastCategory != Definition.Category)
         {
             LastCategory = Definition.Category;
             Content->AddSlot()
@@ -153,11 +265,19 @@ void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
             [
                 SNew(STextBlock)
                 .Text(FText::FromString(Definition.Category))
+                .ToolTipText_Lambda([Definition]()
+                {
+                    if (const FInstantRdvCVarUiCategory* Category = FInstantRdvCVarUiRegistry::FindCategory(*Definition.CategoryId))
+                    {
+                        return FText::FromString(Category->Help);
+                    }
+                    return FText::FromString(TEXT("Unclassified Instant-RDV settings."));
+                })
                 .Font(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 11))
             ];
         }
 
-        if (Definition.Type == EInstantRdvCVarType::Action)
+        if (Definition.Type == EInstantRdvCVarUiType::Action)
         {
             TSharedPtr<bool> bShowHelp = MakeShared<bool>(false);
             TSharedRef<SHorizontalBox> ActionRow = SNew(SHorizontalBox);
@@ -198,15 +318,32 @@ void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
             .AutoHeight()
             .Padding(4.0f, 2.0f, 0.0f, 0.0f)
             [
-                SNew(STextBlock)
-                .Text_Lambda([Definition]()
-                {
-                    return GetHelpText(Definition);
-                })
+                SNew(SHorizontalBox)
                 .Visibility_Lambda([bShowHelp]()
                 {
                     return *bShowHelp ? EVisibility::Visible : EVisibility::Collapsed;
                 })
+                + SHorizontalBox::Slot()
+                .FillWidth(1.0f)
+                [
+                    SNew(STextBlock)
+                    .Text_Lambda([Definition]()
+                    {
+                        return GetHelpText(Definition);
+                    })
+                ]
+                + SHorizontalBox::Slot()
+                .AutoWidth()
+                .VAlign(VAlign_Top)
+                [
+                    SNew(SButton)
+                    .Text(FText::FromString(TEXT("Copy")))
+                    .ToolTipText(FText::FromString(TEXT("Copy CVar name")))
+                    .OnClicked_Lambda([Definition]()
+                    {
+                        return CopyCVarName(Definition);
+                    })
+                ]
             ];
 
             Content->AddSlot()
@@ -229,7 +366,7 @@ void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
         ];
         Row->SetToolTipText(GetHelpText(Definition));
 
-        if (Definition.Type == EInstantRdvCVarType::Bool)
+        if (Definition.Type == EInstantRdvCVarUiType::Bool)
         {
             Row->AddSlot()
             .FillWidth(0.45f)
@@ -251,6 +388,8 @@ void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
         }
         else
         {
+            // ドラッグ中の即時フィードバックにはPreventThrottlingが必要。
+            // 未指定の場合、Slateがマウスキャプチャ終了まで描画更新を遅延させる場合がある。
             Row->AddSlot()
             .FillWidth(0.4f)
             .VAlign(VAlign_Center)
@@ -316,15 +455,32 @@ void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
         .AutoHeight()
         .Padding(4.0f, 2.0f, 0.0f, 0.0f)
         [
-            SNew(STextBlock)
-            .Text_Lambda([Definition]()
-            {
-                return GetHelpText(Definition);
-            })
+            SNew(SHorizontalBox)
             .Visibility_Lambda([bShowHelp]()
             {
                 return *bShowHelp ? EVisibility::Visible : EVisibility::Collapsed;
             })
+            + SHorizontalBox::Slot()
+            .FillWidth(1.0f)
+            [
+                SNew(STextBlock)
+                .Text_Lambda([Definition]()
+                {
+                    return GetHelpText(Definition);
+                })
+            ]
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .VAlign(VAlign_Top)
+            [
+                SNew(SButton)
+                .Text(FText::FromString(TEXT("Copy")))
+                .ToolTipText(FText::FromString(TEXT("Copy CVar name")))
+                .OnClicked_Lambda([Definition]()
+                {
+                    return CopyCVarName(Definition);
+                })
+            ]
         ];
 
         Content->AddSlot()
@@ -376,11 +532,11 @@ void SInstantRdvDebugPanel::Construct(const FArguments& InArgs)
 
 FReply SInstantRdvDebugPanel::ResetAllSettings()
 {
-    for (const FInstantRdvCVarDefinition& Definition : CVarDefinitions)
+    for (const FInstantRdvCVarUiMetadata& Metadata : FInstantRdvCVarUiRegistry::GetAll())
     {
-        if (Definition.Type != EInstantRdvCVarType::Action)
+        if (Metadata.Type != EInstantRdvCVarUiType::Action)
         {
-            ResetValue(Definition);
+            ResetValue(MakeDefinition(Metadata));
         }
     }
 
