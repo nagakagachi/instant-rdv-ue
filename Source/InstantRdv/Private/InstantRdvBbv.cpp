@@ -92,12 +92,12 @@ INSTANT_RDV_CVAR_INT(
     CVarInstantRdvBbvDepthCullMode,
     TEXT("r.InstantRdv.Bbv.DepthCullMode"),
     1,
-    TEXT("BBV DepthCull frustum candidate mode.\n")
+    TEXT("BBV Removal Cell Culling candidate mode.\n")
     TEXT("0: Legacy Brick-center XY test\n")
     TEXT("1: Conservative world-space Brick AABB vs six frustum planes"),
     ECVF_RenderThreadSafe,
     TEXT("BBV"),
-    TEXT("Depth Cull mode"),
+    TEXT("Removal Cell Culling mode"),
     0.0f,
     1.0f,
     200);
@@ -122,11 +122,11 @@ INSTANT_RDV_CVAR_FLOAT(
     8.0f,
     TEXT("BBV Depth Relation debugの表示範囲（±fine cell数）。"),
     ECVF_RenderThreadSafe,
-    TEXT("BBV"),
-    TEXT("Depth relation range (fine cells)"),
+    TEXT("Debug"),
+    TEXT("BBV depth relation range (fine cells)"),
     0.0f,
     32.0f,
-    230);
+    4);
 // 移植ミス再発防止:
 // - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
 // - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/k_irdv_bbv_brick_reso で換算する。
@@ -639,6 +639,8 @@ public:
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(float, SceneColorPreExposure)
+        SHADER_PARAMETER(float, SceneColorBlendRate)
+        SHADER_PARAMETER(uint32, bDepthTest)
         SHADER_PARAMETER(uint32, DepthSizeX)
         SHADER_PARAMETER(uint32, DepthSizeY)
         SHADER_PARAMETER(uint32, ViewRectMinX)
@@ -1645,6 +1647,8 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
     int32 FspProbeDebugMode,
     int32 FspIvProbeDebugMode,
     bool bProbeDepthTest,
+    float BbvDebugSceneColorBlend,
+    bool bBbvDebugDepthTest,
     bool bUseProbeVisualizationOffset,
     bool bUseProbeTraceOffset)
 {
@@ -1680,6 +1684,8 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
+            Parameters->SceneColorBlendRate = FMath::Clamp(BbvDebugSceneColorBlend, 0.0f, 1.0f);
+            Parameters->bDepthTest = bBbvDebugDepthTest ? 1u : 0u;
             Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
             Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
             Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));

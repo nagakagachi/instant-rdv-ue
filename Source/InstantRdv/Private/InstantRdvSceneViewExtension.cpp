@@ -60,6 +60,32 @@ INSTANT_RDV_CVAR_INT(
     5.0f,
     0);
 
+INSTANT_RDV_CVAR_FLOAT(
+    CVarInstantRdvBbvDebugSceneColorBlend,
+    TEXT("r.InstantRdv.Bbv.DebugSceneColorBlend"),
+    0.5f,
+    TEXT("SceneColor contribution for BBV debug visualization.\n")
+    TEXT("0: Fully overwrite SceneColor where debug output exists\n")
+    TEXT("1: SceneColor only"),
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("BBV debug SceneColor blend"),
+    0.0f,
+    1.0f,
+    2);
+
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvDebugDepthTest,
+    TEXT("r.InstantRdv.Bbv.DebugDepthTest"),
+    0,
+    TEXT("Enable SceneDepth testing for BBV raytrace debug visualization.\n")
+    TEXT("0: Draw BBV hits regardless of SceneDepth\n")
+    TEXT("1: Draw only BBV hits in front of the SceneDepth surface"),
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("BBV debug depth test"),
+    3);
+
 INSTANT_RDV_CVAR_INT(
     CVarInstantRdvFspVisProbe,
     TEXT("r.InstantRdv.Fsp.VisProbe"),
@@ -100,15 +126,15 @@ INSTANT_RDV_CVAR_INT(
     20);
 
 INSTANT_RDV_CVAR_BOOL(
-    CVarInstantRdvFspDebugDepthTest,
-    TEXT("r.InstantRdv.Fsp.DebugDepthTest"),
+    CVarInstantRdvFspProbeDebugDepthTest,
+    TEXT("r.InstantRdv.Fsp.ProbeDebugDepthTest"),
     1,
-    TEXT("Enable SceneDepth testing for ActiveProbe and IrradianceVolume debug spheres.\n")
+    TEXT("Enable SceneDepth testing for FSP probe debug spheres.\n")
     TEXT("0: Draw without depth test\n")
     TEXT("1: Respect SceneDepth occlusion"),
     ECVF_RenderThreadSafe,
     TEXT("Debug"),
-    TEXT("Debug depth test"),
+    TEXT("FSP probe debug depth test"),
     30);
 
 INSTANT_RDV_CVAR_BOOL(
@@ -522,7 +548,9 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
         const int32 BbvDebugMode = CVarInstantRdvBbvVisDebug.GetValueOnRenderThread();
         const int32 FspProbeDebugMode = CVarInstantRdvFspVisProbe.GetValueOnRenderThread();
         const int32 FspIvProbeDebugMode = CVarInstantRdvFspVisIvProbe.GetValueOnRenderThread();
-        const bool bProbeDepthTest = (CVarInstantRdvFspDebugDepthTest.GetValueOnRenderThread() != 0);
+        const bool bProbeDepthTest = (CVarInstantRdvFspProbeDebugDepthTest.GetValueOnRenderThread() != 0);
+        const float BbvDebugSceneColorBlend = CVarInstantRdvBbvDebugSceneColorBlend.GetValueOnRenderThread();
+        const bool bBbvDebugDepthTest = (CVarInstantRdvBbvDebugDepthTest.GetValueOnRenderThread() != 0);
         const bool bUseProbeTraceOffset = (CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
         const bool bUseProbeVisualizationOffset = (CVarInstantRdvFspVisProbeUseOffset.GetValueOnRenderThread() != 0);
         if (CanRunDebugVisualize_RenderThread(View))
@@ -537,6 +565,8 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 FspProbeDebugMode,
                 FspIvProbeDebugMode,
                 bProbeDepthTest,
+                BbvDebugSceneColorBlend,
+                bBbvDebugDepthTest,
                 bUseProbeVisualizationOffset,
                 bUseProbeTraceOffset);
         }

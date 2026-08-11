@@ -122,6 +122,8 @@ public:
         int32 FspProbeDebugMode,
         int32 FspIvProbeDebugMode,
         bool bProbeDepthTest,
+        float BbvDebugSceneColorBlend,
+        bool bBbvDebugDepthTest,
         bool bUseProbeVisualizationOffset,
         bool bUseProbeTraceOffset);
 

@@ -14,6 +14,8 @@ StructuredBuffer<uint> BitmaskBrickVoxelOptionData;
 float4x4 InvViewProjectionMatrix;
 float3 CameraPositionWs;
 float SceneColorPreExposure;
+float SceneColorBlendRate;
+uint bDepthTest;
 uint DepthSizeX;
 uint DepthSizeY;
 uint ViewRectMinX;
@@ -107,6 +109,29 @@ float3 ReconstructWorldPosFromUv(float2 Uv, float DeviceDepth)
     float4 World = mul(float4(Ndc, DeviceDepth, 1.0), InvViewProjectionMatrix);
     World.xyz /= max(abs(World.w), 1e-6);
     return World.xyz;
+}
+
+float3 ComposeDebugColor(float3 DebugColor, float3 SceneColor)
+{
+    return lerp(DebugColor, SceneColor, saturate(SceneColorBlendRate));
+}
+
+bool PassSceneDepthTest(float HitDistanceCm, float2 ViewUv, uint2 ScenePixelCoord, float3 RayDirWs)
+{
+    if (bDepthTest == 0u)
+    {
+        return true;
+    }
+
+    const float SurfaceDepth = SceneDepthTexture.Load(int3(ScenePixelCoord, 0)).r;
+    if (!((0.0 < SurfaceDepth) && (SurfaceDepth < 1.0)))
+    {
+        return true;
+    }
+
+    const float3 SurfacePositionWs = ReconstructWorldPosFromUv(ViewUv, SurfaceDepth);
+    const float SurfaceDistanceCm = dot(SurfacePositionWs - CameraPositionWs, RayDirWs);
+    return HitDistanceCm <= SurfaceDistanceCm;
 }
 
 // デバッグ表示用の薄いアダプタ。
@@ -225,7 +250,7 @@ PsOut MainPS(VsOutput Input)
 
         const float Occupancy = (FineDimZ > 0u) ? (float(OccupiedZCount) / float(FineDimZ)) : 0.0;
         const float3 Heat = lerp(float3(0.0, 0.02, 0.08), float3(1.0, 0.92, 0.2), saturate(Occupancy));
-        Output.Color = float4(lerp(BaseColor.rgb, Heat, 0.9), BaseColor.a);
+        Output.Color = float4(ComposeDebugColor(Heat, BaseColor.rgb), BaseColor.a);
         return Output;
     }
 
@@ -267,7 +292,7 @@ PsOut MainPS(VsOutput Input)
             DummyBitIndex);
         if (!bBbvHit || BbvHitDistanceCm < 0.0)
         {
-            Output.Color = float4(lerp(BaseColor.rgb, float3(0.05, 0.05, 0.05), 0.35), BaseColor.a);
+            Output.Color = float4(ComposeDebugColor(float3(0.05, 0.05, 0.05), BaseColor.rgb), BaseColor.a);
             return Output;
         }
 
@@ -282,7 +307,7 @@ PsOut MainPS(VsOutput Input)
         const float3 RelationColor = (DeltaFineCells < 0.0)
             ? lerp(NeutralColor, FrontColor, FrontAmount)
             : lerp(NeutralColor, BehindColor, SignedAmount);
-        Output.Color = float4(lerp(BaseColor.rgb, RelationColor, 0.9), BaseColor.a);
+        Output.Color = float4(ComposeDebugColor(RelationColor, BaseColor.rgb), BaseColor.a);
         return Output;
     }
 
@@ -328,13 +353,19 @@ PsOut MainPS(VsOutput Input)
         return Output;
     }
 
+    if (!PassSceneDepthTest(HitDistanceCm, ViewUv, ScenePixelCoord, RayDirWs))
+    {
+        Output.Color = BaseColor;
+        return Output;
+    }
+
     float3 HitColor = float3(0.0, 0.0, 0.0);
     if (DebugMode == 4)
     {
         const float3 Radiance = LoadResolvedRadiance(HitBrickIndex);
         HitColor = DisplayRadiance(Radiance);
 		const float DebugRadianceBlendRate = 1.0;
-        Output.Color = float4(lerp(BaseColor.rgb, HitColor, DebugRadianceBlendRate), BaseColor.a);
+        Output.Color = float4(ComposeDebugColor(HitColor, BaseColor.rgb), BaseColor.a);
         return Output;
     }
 
@@ -353,6 +384,6 @@ PsOut MainPS(VsOutput Input)
         const int3 WorldFineCoord = GridOriginFineCoord + HitLogicalFineCoord;
         HitColor = HashColor(HashInt3(WorldFineCoord));
     }
-    Output.Color = float4(lerp(BaseColor.rgb, HitColor, 0.8), BaseColor.a);
+    Output.Color = float4(ComposeDebugColor(HitColor, BaseColor.rgb), BaseColor.a);
     return Output;
 }
