@@ -26,6 +26,8 @@ float DepthtestInjectionWorldOffsetWs;
 float SceneColorPreExposure;
 float3 CameraPositionWs;
 float4x4 InvViewProjectionMatrix;
+uint BrickDataBaseOffset;
+uint bEnableShortRayFallback;
 
 
 static const float kRadianceFixedPointScale = 256.0;
@@ -67,17 +69,9 @@ bool TryCalcBrickIndexFromWorldPos(float3 WorldPos, out uint OutBrickIndex)
     return true;
 }
 
-bool IsBrickOccupied(uint BrickIndex)
+bool IsBrickOccupiedCoarse(uint BrickIndex)
 {
-    [loop]
-	for (uint WordOffset = 0u; WordOffset < k_irdv_bbv_bitmask_u32_count_per_brick; ++WordOffset)
-    {
-		if (BbvBuffer[BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + WordOffset] != 0u)
-        {
-            return true;
-        }
-    }
-    return false;
+    return BbvBuffer[BrickDataBaseOffset + BrickIndex * k_irdv_bbv_brick_data_u32_count] != 0u;
 }
 
 uint3 EncodeRadianceToFixed(float3 AbsoluteRadiance)
@@ -159,6 +153,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float3 ViewRayOriginWs = (Dist0 < Dist1) ? WorldPos0 : WorldPos1;
     const float3 ToSurface = WorldPos - ViewRayOriginWs;
     const float ToSurfaceLenSq = dot(ToSurface, ToSurface);
+    const bool bHasViewDirection = ToSurfaceLenSq > 1e-10;
     const float3 ViewDir = (ToSurfaceLenSq > 1e-10) ? (ToSurface * rsqrt(ToSurfaceLenSq)) : float3(0.0, 0.0, 1.0);
     WorldPos += ViewDir * DepthtestInjectionWorldOffsetWs;
 
@@ -168,8 +163,38 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    // 空Brickへ漏れた場合は蓄積しない。短距離fallbackは後続の厳密移植で追加する。
-    if (!IsBrickOccupied(BrickIndex))
+    // Nativeと同じく、開始Brickの粗い占有情報を基準にする。
+    const bool bStartBrickOccupied = IsBrickOccupiedCoarse(BrickIndex);
+    if (!bStartBrickOccupied && bEnableShortRayFallback != 0u && bHasViewDirection)
+    {
+        // Empty開始Brickだけ、視線奥へ最大1 Brickを4分割して最初のOccupied Brickを探す。
+        const float ShortRayLengthCm = CellSizeCm;
+        const float RayStepCm = ShortRayLengthCm / 4.0;
+        bool bFoundFallbackTarget = false;
+        [loop]
+        for (uint StepIndex = 1u; StepIndex <= 4u; ++StepIndex)
+        {
+            const float3 SamplePositionWs = WorldPos + ViewDir * (RayStepCm * float(StepIndex));
+            uint SampleBrickIndex = 0u;
+            if (!TryCalcBrickIndexFromWorldPos(SamplePositionWs, SampleBrickIndex))
+            {
+                continue;
+            }
+
+            if (IsBrickOccupiedCoarse(SampleBrickIndex))
+            {
+                BrickIndex = SampleBrickIndex;
+                bFoundFallbackTarget = true;
+                break;
+            }
+        }
+
+        if (!bFoundFallbackTarget)
+        {
+            return;
+        }
+    }
+    else if (!bStartBrickOccupied)
     {
         return;
     }

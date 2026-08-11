@@ -76,6 +76,18 @@ INSTANT_RDV_CVAR_ACTION(
     TEXT("Reset BBV state"),
     1000);
 
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvBbvRadianceShortRayFallback,
+    TEXT("r.InstantRdv.Bbv.RadianceShortRayFallback"),
+    1,
+    TEXT("Enable Native-equivalent short-ray fallback for BBV Radiance Injection.\n")
+    TEXT("0: Discard injection when the start Brick is empty\n")
+    TEXT("1: Search up to 1 Brick in 4 steps and inject into the first occupied Brick"),
+    ECVF_RenderThreadSafe,
+    TEXT("Debug"),
+    TEXT("Radiance short-ray fallback"),
+    6);
+
 INSTANT_RDV_CVAR_FLOAT(
     CVarInstantRdvBbvDepthtestInjectionOffsetFineCells,
     TEXT("r.InstantRdv.Bbv.DepthtestInjectionOffsetFineCells"),
@@ -362,6 +374,8 @@ public:
         SHADER_PARAMETER(float, SceneColorPreExposure)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
         SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
+        SHADER_PARAMETER(uint32, BrickDataBaseOffset)
+        SHADER_PARAMETER(uint32, bEnableShortRayFallback)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneColorTexture)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
@@ -1317,6 +1331,8 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+            Parameters->BrickDataBaseOffset = Config.bbv.GetBitmaskElementCount();
+            Parameters->bEnableShortRayFallback = CVarInstantRdvBbvRadianceShortRayFallback.GetValueOnRenderThread() != 0 ? 1u : 0u;
             Parameters->SceneDepthTexture = SceneDepthTexture;
             Parameters->SceneColorTexture = SceneColorTexture;
             Parameters->BbvBuffer = GraphBuilder.CreateSRV(BbvBuffer);
