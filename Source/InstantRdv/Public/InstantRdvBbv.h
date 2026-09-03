@@ -14,6 +14,7 @@ class FRDGBuilder;
 class FRDGTexture;
 class FSceneView;
 class FSceneUniformBuffer;
+class FRDGPooledTexture;
 class FInstantRdvFsp;
 class FInstantRdvSceneUniformBufferParams;
 
@@ -109,7 +110,8 @@ public:
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
         bool bEnableMainViewGeometryInjection,
-        bool bEnableMainViewGeometryRemoval);
+        bool bEnableMainViewGeometryRemoval,
+        bool bUseReducedSurfaceBuffer);
 
     // BBV Debug 可視化。Geometry 更新とは切り離して呼べるようにする。
     void ExecuteDebugVisualize(
@@ -136,7 +138,8 @@ public:
         FRDGTexture* SceneColorTexture,
         float SceneColorPreExposure,
         bool bEnableRadianceInjection,
-        bool bEnableRadianceResolve);
+        bool bEnableRadianceResolve,
+        bool bUseReducedSurfaceBuffer);
 
     // Frustum Space Probe(FSP) 初期更新。
     // 参照実装のScreenSpacePass相当で可視Surface Cellを収集し、BBV resolved radianceをFSP cellへ写す。
@@ -145,7 +148,8 @@ public:
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
         bool bEnableFspUpdate,
-        bool bUseProbeTraceOffset);
+        bool bUseProbeTraceOffset,
+        bool bUseReducedSurfaceBuffer);
 
 private:
 
@@ -154,6 +158,13 @@ private:
         TRefCountPtr<class FRDGPooledBuffer>    PooledBuffer{};// プールに確保したBuffer本体. 最初にExtraction指定して永続化する.
 
         FRDGBufferRef                           Handle{};// フレーム先頭で上記BufferをRDGにRegisterした際のハンドルを保持.
+    };
+
+    struct FPersistentRdgPooledTextureSet
+    {
+        TRefCountPtr<IPooledRenderTarget>      PooledTexture{};
+        FRDGTextureRef                          Handle{};
+        FIntPoint                               Extent = FIntPoint::ZeroValue;
     };
 
     struct FSystemState
@@ -184,6 +195,7 @@ private:
             //   [0]=count, [1..]=depth surfaceから選ばれたowner cell index。
             FPersistentRdgPooledBufferSet FspCellProbeIndexBuffer;
             FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
+            FPersistentRdgPooledBufferSet FspVisibleSurfaceSourceTexelListBuffer;
             // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
             // ActiveProbeListはFSP更新が実行された世代だけを進め、UpdateFrameCount & 1をCurrに使う。
             FPersistentRdgPooledBufferSet FspProbePoolBuffer;
@@ -194,6 +206,7 @@ private:
             FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
             FPersistentRdgPooledBufferSet FspProbeRayResultBuffer;
             FPersistentRdgPooledBufferSet FspPackedSHBuffer;
+            FPersistentRdgPooledTextureSet ReducedSurfaceBuffer;
             uint32 FspUpdateFrameCount = 0;
         };
 

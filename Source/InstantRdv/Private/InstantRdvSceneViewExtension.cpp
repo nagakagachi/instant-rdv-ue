@@ -174,6 +174,18 @@ INSTANT_RDV_CVAR_BOOL(
     0);
 
 INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvUseReducedSurfaceBuffer,
+    TEXT("r.InstantRdv.UseReducedSurfaceBuffer"),
+    1,
+    TEXT("Select the MainView ReducedSurfaceBuffer path for BBV and FSP.\n")
+    TEXT("0: Legacy full-resolution Depth path\n")
+    TEXT("1: ReducedSurfaceBuffer path"),
+    ECVF_RenderThreadSafe,
+    TEXT("Runtime"),
+    TEXT("Use ReducedSurfaceBuffer"),
+    20);
+
+INSTANT_RDV_CVAR_BOOL(
     CVarInstantRdvBbvRadianceUpdate,
     TEXT("r.InstantRdv.Bbv.RadianceUpdate"),
     1,
@@ -443,7 +455,8 @@ void FInstantRdvSceneViewExtension::ExecuteBbvGeometryUpdate_RenderThread(FRDGBu
         View,
         SceneDepthTexture,
         bEnableMainViewGeometryInjection,
-        bEnableMainViewGeometryRemoval);
+        bEnableMainViewGeometryRemoval,
+        CVarInstantRdvUseReducedSurfaceBuffer.GetValueOnRenderThread() != 0);
 }
 
 void FInstantRdvSceneViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& GraphBuilder, bool bDepthBufferIsPopulated)
@@ -526,6 +539,8 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
             const bool bEnableRadianceResolve =
                 bEnableRadianceUpdate &&
                 (CVarInstantRdvBbvRadianceResolve.GetValueOnRenderThread() != 0);
+            const bool bUseReducedSurfaceBuffer =
+                CVarInstantRdvUseReducedSurfaceBuffer.GetValueOnRenderThread() != 0;
             // BBV RadianceとFSPは同じowner ViewのDepth/SceneColorを入力にして、ViewFamily内で1回だけ更新する。
             // FSP ActiveProbeListはここで生成されたCurr世代を、その後のdebug表示が読み取るだけにする。
             BbvSystem->ExecuteRadianceUpdate(
@@ -535,13 +550,15 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 SceneColor.Texture,
                 ViewInfo.PreExposure,
                 bEnableRadianceInjection,
-                bEnableRadianceResolve);
+                bEnableRadianceResolve,
+                bUseReducedSurfaceBuffer);
             BbvSystem->ExecuteFspUpdate(
                 GraphBuilder,
                 View,
                 SceneDepthTexture,
                 CVarInstantRdvFspUpdate.GetValueOnRenderThread() != 0,
-                CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
+                CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
+                bUseReducedSurfaceBuffer);
             bAcceptedFamilyPostProcessUpdated_RenderThread = true;
         }
 

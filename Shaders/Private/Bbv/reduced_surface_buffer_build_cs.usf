@@ -1,0 +1,127 @@
+// ファイル名: reduced_surface_buffer_build_cs.usf
+// MainViewのDepthを4x4タイル単位で時間分散サンプリングし、Surface情報を縮小保存する。
+// x=view Z、yz=world normalのoctahedral encoding、w=法線推定の信頼度。
+
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
+
+Texture2D<float> SceneDepthTexture;
+RWTexture2D<float4> RWReducedSurfaceBuffer;
+
+uint SourceDepthSizeX;
+uint SourceDepthSizeY;
+uint SourceViewRectMinX;
+uint SourceViewRectMinY;
+uint SourceViewRectSizeX;
+uint SourceViewRectSizeY;
+uint FrameCount;
+float4x4 ViewMatrix;
+float4x4 InvViewMatrix;
+float4x4 InvViewProjectionMatrix;
+float4x4 InvProjectionMatrix;
+float4x4 ProjectionMatrix;
+
+bool LoadViewPosition(int2 LocalTexel, out float3 PositionVs)
+{
+    const int2 SourceResolution = int2(SourceViewRectSizeX, SourceViewRectSizeY);
+    const int2 ClampedTexel = clamp(LocalTexel, int2(0, 0), SourceResolution - 1);
+    const uint2 DepthCoord = uint2(
+        SourceViewRectMinX + ClampedTexel.x,
+        SourceViewRectMinY + ClampedTexel.y);
+    const float DeviceDepth = SceneDepthTexture.Load(int3(DepthCoord, 0));
+    if (DeviceDepth <= 0.0 || DeviceDepth >= 1.0)
+    {
+        PositionVs = 0.0.xxx;
+        return false;
+    }
+
+    const float2 Uv =
+        (float2(ClampedTexel) + 0.5.xx) /
+        float2(max(SourceResolution, int2(1, 1)));
+    const float2 Ndc = float2(Uv.x * 2.0 - 1.0, (1.0 - Uv.y) * 2.0 - 1.0);
+    // 生成時はClipToWorldを経由しない。Translated Worldと通常Worldの原点差が
+    // 混ざると、ReducedBufferの位置だけが画面深度から大きくずれる。
+    float4 Position = mul(float4(Ndc, DeviceDepth, 1.0), InvProjectionMatrix);
+    Position.xyz /= max(abs(Position.w), 1.0e-6);
+    PositionVs = Position.xyz;
+    return true;
+}
+
+bool SelectStableTangent(
+    float3 CenterVs,
+    bool bHasNegative,
+    float3 NegativeVs,
+    bool bHasPositive,
+    float3 PositiveVs,
+    out float3 TangentVs)
+{
+    const float NegativeDelta = bHasNegative ? abs(CenterVs.z - NegativeVs.z) : 3.402823e+38;
+    const float PositiveDelta = bHasPositive ? abs(PositiveVs.z - CenterVs.z) : 3.402823e+38;
+    const bool bUsePositive = PositiveDelta <= NegativeDelta;
+    const float SelectedDelta = min(NegativeDelta, PositiveDelta);
+    if (SelectedDelta > max(0.25, abs(CenterVs.z) * 0.02))
+    {
+        TangentVs = 0.0.xxx;
+        return false;
+    }
+
+    TangentVs = bUsePositive ? PositiveVs - CenterVs : CenterVs - NegativeVs;
+    return dot(TangentVs, TangentVs) > 1.0e-10;
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint OutputWidth;
+    uint OutputHeight;
+    RWReducedSurfaceBuffer.GetDimensions(OutputWidth, OutputHeight);
+    if (any(DispatchThreadId.xy >= uint2(OutputWidth, OutputHeight)))
+    {
+        return;
+    }
+
+    const uint2 SourceTexel = ReducedSurfaceBufferSourceTexel(
+        DispatchThreadId.xy,
+        uint2(SourceViewRectSizeX, SourceViewRectSizeY),
+        FrameCount);
+
+    float3 CenterVs;
+    if (!LoadViewPosition(int2(SourceTexel), CenterVs))
+    {
+        RWReducedSurfaceBuffer[DispatchThreadId.xy] = 0.0.xxxx;
+        return;
+    }
+
+    float3 NegativeXVs;
+    float3 PositiveXVs;
+    float3 NegativeYVs;
+    float3 PositiveYVs;
+    const bool bHasNegativeX = LoadViewPosition(int2(SourceTexel) + int2(-1, 0), NegativeXVs);
+    const bool bHasPositiveX = LoadViewPosition(int2(SourceTexel) + int2(1, 0), PositiveXVs);
+    const bool bHasNegativeY = LoadViewPosition(int2(SourceTexel) + int2(0, -1), NegativeYVs);
+    const bool bHasPositiveY = LoadViewPosition(int2(SourceTexel) + int2(0, 1), PositiveYVs);
+
+    float3 TangentXVs;
+    float3 TangentYVs;
+    const bool bHasTangentX = SelectStableTangent(CenterVs, bHasNegativeX, NegativeXVs, bHasPositiveX, PositiveXVs, TangentXVs);
+    const bool bHasTangentY = SelectStableTangent(CenterVs, bHasNegativeY, NegativeYVs, bHasPositiveY, PositiveYVs, TangentYVs);
+
+    const float3 ViewRayVs = normalize(CenterVs);
+    float3 NormalVs = -ViewRayVs;
+    float NormalConfidence = 0.0;
+    if (bHasTangentX && bHasTangentY)
+    {
+        const float3 CandidateNormalVs = normalize(cross(TangentXVs, TangentYVs));
+        if (dot(CandidateNormalVs, CandidateNormalVs) > 0.0)
+        {
+            NormalVs = dot(CandidateNormalVs, -ViewRayVs) < 0.0 ? -CandidateNormalVs : CandidateNormalVs;
+            NormalConfidence = 1.0;
+        }
+    }
+
+    const float3 NormalWs = normalize(mul(float4(NormalVs, 0.0), InvViewMatrix).xyz);
+    RWReducedSurfaceBuffer[DispatchThreadId.xy] = float4(
+        CenterVs.z,
+        ReducedSurfaceOctEncode(NormalWs),
+        NormalConfidence);
+}

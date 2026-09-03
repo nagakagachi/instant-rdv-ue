@@ -6,6 +6,65 @@
 
 #include "instant_rdv_common.ush"
 
+uint2 ReducedSurfaceBufferJitterOffset(uint2 TileCoord, uint FrameIndex)
+{
+    const uint TilePhase =
+        (TileCoord.x * 3u + TileCoord.y * 5u) &
+        (k_irdv_reduced_surface_buffer_downscale * k_irdv_reduced_surface_buffer_downscale - 1u);
+    const uint SampleIndex =
+        (FrameIndex + TilePhase) &
+        (k_irdv_reduced_surface_buffer_downscale * k_irdv_reduced_surface_buffer_downscale - 1u);
+    return uint2(
+        SampleIndex & (k_irdv_reduced_surface_buffer_downscale - 1u),
+        SampleIndex >> 2u);
+}
+
+uint2 ReducedSurfaceBufferSourceTexel(
+    uint2 SampleCoord,
+    uint2 SourceResolution,
+    uint FrameIndex)
+{
+    return min(
+        SampleCoord * k_irdv_reduced_surface_buffer_downscale +
+            ReducedSurfaceBufferJitterOffset(SampleCoord, FrameIndex),
+        SourceResolution - 1u);
+}
+
+float3 ReducedSurfaceReconstructViewPosition(
+    float2 Uv,
+    float ViewZ,
+    float4x4 InvProjectionMatrix)
+{
+    const float2 Ndc = float2(
+        Uv.x * 2.0 - 1.0,
+        (1.0 - Uv.y) * 2.0 - 1.0);
+    float4 ViewRay = mul(float4(Ndc, 1.0, 1.0), InvProjectionMatrix);
+    ViewRay.xyz /= max(abs(ViewRay.w), 1.0e-6);
+    return ViewRay.xyz * (ViewZ / max(abs(ViewRay.z), 1.0e-6));
+}
+
+float2 ReducedSurfaceOctEncode(float3 Normal)
+{
+    Normal /= max(abs(Normal.x) + abs(Normal.y) + abs(Normal.z), 1.0e-6);
+    float2 Encoded = Normal.xy;
+    if (Normal.z < 0.0)
+    {
+        Encoded = (1.0 - abs(Encoded.yx)) * sign(Encoded.xy);
+    }
+    return Encoded * 0.5 + 0.5;
+}
+
+float3 ReducedSurfaceOctDecode(float2 Encoded)
+{
+    float2 Value = Encoded * 2.0 - 1.0;
+    float3 Normal = float3(Value, 1.0 - abs(Value.x) - abs(Value.y));
+    if (Normal.z < 0.0)
+    {
+        Normal.xy = (1.0 - abs(Normal.yx)) * sign(Normal.xy);
+    }
+    return normalize(Normal);
+}
+
 uint FlattenGridCoord(uint3 BrickCoord, uint3 Resolution)
 {
     return BrickCoord.x + BrickCoord.y * Resolution.x + BrickCoord.z * Resolution.x * Resolution.y;

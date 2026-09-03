@@ -1,0 +1,217 @@
+// ファイル名: bbv_reduced_radiance_injection_cs.usf
+// ReducedSurfaceBufferからBBV Radianceを更新する。
+
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
+
+Texture2D<float4> ReducedSurfaceBuffer;
+Texture2D SceneColorTexture;
+StructuredBuffer<uint> BbvBuffer;
+RWStructuredBuffer<uint> RWBbvRadianceAccumBuffer;
+
+uint SourceDepthSizeX;
+uint SourceDepthSizeY;
+uint SourceViewRectMinX;
+uint SourceViewRectMinY;
+uint SourceViewRectSizeX;
+uint SourceViewRectSizeY;
+uint FrameCount;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+float3 BbvToroidalOffsetCells;
+float3 BbvGridMinPositionWs;
+float CellSizeCm;
+float InjectionWorldOffsetWs;
+float SceneColorPreExposure;
+float4x4 ViewMatrix;
+float4x4 InvViewMatrix;
+float4x4 InvViewProjectionMatrix;
+float4x4 InvProjectionMatrix;
+float4x4 ProjectionMatrix;
+uint BrickDataBaseOffset;
+uint bEnableShortRayFallback;
+
+static const float kRadianceFixedPointScale = 256.0;
+static const float kRadianceInputClamp = 4096.0;
+
+uint RadianceAccumAddress(uint BrickIndex, uint Component)
+{
+    return BrickIndex * k_irdv_bbv_radiance_accum_component_count + Component;
+}
+
+bool TryCalcBrickIndexFromWorldPos(float3 WorldPos, out uint OutBrickIndex)
+{
+    OutBrickIndex = 0u;
+    const float3 GridPos = (WorldPos - BbvGridMinPositionWs) / max(CellSizeCm, 0.001);
+    const int3 LogicalBrickCoord = int3(floor(GridPos));
+    if (any(LogicalBrickCoord < 0) ||
+        LogicalBrickCoord.x >= int(GridResolutionX) ||
+        LogicalBrickCoord.y >= int(GridResolutionY) ||
+        LogicalBrickCoord.z >= int(GridResolutionZ))
+    {
+        return false;
+    }
+
+    const uint3 PhysicalBrickCoord = LogicalToPhysicalGridCoord(
+        LogicalBrickCoord,
+        int3(BbvToroidalOffsetCells),
+        uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+    OutBrickIndex = FlattenGridCoord(
+        PhysicalBrickCoord,
+        uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+    return true;
+}
+
+bool IsBrickOccupiedCoarse(uint BrickIndex)
+{
+    return BbvBuffer[
+        BrickDataBaseOffset +
+        BrickIndex * k_irdv_bbv_brick_data_u32_count] != 0u;
+}
+
+uint3 EncodeRadianceToFixed(float3 AbsoluteRadiance)
+{
+    const float3 Clamped = clamp(
+        AbsoluteRadiance,
+        0.0.xxx,
+        kRadianceInputClamp.xxx);
+    return uint3(Clamped * kRadianceFixedPointScale + 0.5.xxx);
+}
+
+bool BallotAny(uint4 BallotMask)
+{
+    return (BallotMask.x | BallotMask.y | BallotMask.z | BallotMask.w) != 0u;
+}
+
+uint FirstLaneFromBallot(uint4 BallotMask)
+{
+    if (BallotMask.x != 0u) { return firstbitlow(BallotMask.x); }
+    if (BallotMask.y != 0u) { return firstbitlow(BallotMask.y) + 32u; }
+    if (BallotMask.z != 0u) { return firstbitlow(BallotMask.z) + 64u; }
+    return firstbitlow(BallotMask.w) + 96u;
+}
+
+void AccumulateRadianceToWave(
+    uint BrickIndex,
+    uint3 FixedRadiance,
+    bool bHasInjection)
+{
+    uint4 PendingLanes = WaveActiveBallot(bHasInjection);
+    while (BallotAny(PendingLanes))
+    {
+        const uint LeaderLane = FirstLaneFromBallot(PendingLanes);
+        const uint LeaderBrickIndex = WaveReadLaneAt(BrickIndex, LeaderLane);
+        const bool bSameTarget =
+            bHasInjection && BrickIndex == LeaderBrickIndex;
+        const uint4 SameTargetLanes = WaveActiveBallot(bSameTarget);
+        const uint MergedR = WaveActiveSum(bSameTarget ? FixedRadiance.r : 0u);
+        const uint MergedG = WaveActiveSum(bSameTarget ? FixedRadiance.g : 0u);
+        const uint MergedB = WaveActiveSum(bSameTarget ? FixedRadiance.b : 0u);
+        const uint MergedCount = WaveActiveCountBits(bSameTarget);
+
+        if (WaveGetLaneIndex() == LeaderLane)
+        {
+            InterlockedAdd(
+                RWBbvRadianceAccumBuffer[ RadianceAccumAddress(LeaderBrickIndex, 0u)],
+                MergedR);
+            InterlockedAdd(
+                RWBbvRadianceAccumBuffer[ RadianceAccumAddress(LeaderBrickIndex, 1u)],
+                MergedG);
+            InterlockedAdd(
+                RWBbvRadianceAccumBuffer[ RadianceAccumAddress(LeaderBrickIndex, 2u)],
+                MergedB);
+            InterlockedAdd(
+                RWBbvRadianceAccumBuffer[ RadianceAccumAddress(LeaderBrickIndex, 3u)],
+                MergedCount);
+        }
+
+        PendingLanes &= ~SameTargetLanes;
+    }
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint SurfaceWidth;
+    uint SurfaceHeight;
+    ReducedSurfaceBuffer.GetDimensions(SurfaceWidth, SurfaceHeight);
+    if (any(DispatchThreadId.xy >= uint2(SurfaceWidth, SurfaceHeight)))
+    {
+        return;
+    }
+
+    const float4 SurfaceSample =
+        ReducedSurfaceBuffer.Load(int3(DispatchThreadId.xy, 0));
+    if (SurfaceSample.x <= 0.0)
+    {
+        return;
+    }
+
+    const uint2 SourceTexelInView = ReducedSurfaceBufferSourceTexel(
+        DispatchThreadId.xy,
+        uint2(SourceViewRectSizeX, SourceViewRectSizeY),
+        FrameCount);
+    const uint2 SourceTexel = SourceTexelInView +
+        uint2(SourceViewRectMinX, SourceViewRectMinY);
+    const float2 SurfaceUv =
+        (float2(SourceTexelInView) + 0.5.xx) /
+        float2(max(SourceViewRectSizeX, 1u), max(SourceViewRectSizeY, 1u));
+    const float3 SurfacePosVs = ReducedSurfaceReconstructViewPosition(
+        SurfaceUv,
+        SurfaceSample.x,
+        InvProjectionMatrix);
+    const float3 SurfacePosWs = mul(
+        float4(SurfacePosVs, 1.0),
+        InvViewMatrix).xyz;
+
+    const float3 ViewRayVs = normalize(SurfacePosVs);
+    const float3 ViewRayWs = normalize(mul(
+        float4(ViewRayVs, 0.0),
+        InvViewMatrix).xyz);
+    const float3 SurfaceNormalWs =
+        ReducedSurfaceOctDecode(SurfaceSample.yz);
+    const float3 InjectionDirWs = normalize(lerp(
+        ViewRayWs,
+        -SurfaceNormalWs,
+        saturate(SurfaceSample.w)));
+    const float3 InjectionPosWs =
+        SurfacePosWs + InjectionDirWs * InjectionWorldOffsetWs;
+
+    uint BrickIndex = 0u;
+    if (!TryCalcBrickIndexFromWorldPos(InjectionPosWs, BrickIndex))
+    {
+        return;
+    }
+
+    bool bHasTarget = true;
+    const bool bStartBrickOccupied = IsBrickOccupiedCoarse(BrickIndex);
+    if (!bStartBrickOccupied)
+    {
+        bHasTarget = false;
+        if (bEnableShortRayFallback != 0u)
+        {
+            const float RayStepCm = CellSizeCm * 0.25;
+            [loop]
+            for (uint StepIndex = 1u; StepIndex <= 4u; ++StepIndex)
+            {
+                uint SampleBrickIndex = 0u;
+                if (TryCalcBrickIndexFromWorldPos(
+                    InjectionPosWs + InjectionDirWs * (RayStepCm * StepIndex),
+                    SampleBrickIndex) &&
+                    IsBrickOccupiedCoarse(SampleBrickIndex))
+                {
+                    BrickIndex = SampleBrickIndex;
+                    bHasTarget = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    const float3 PreExposedRadiance =
+        SceneColorTexture.Load(int3(SourceTexel, 0)).rgb;
+    const uint3 FixedRadiance = EncodeRadianceToFixed(
+        PreExposedRadiance / max(SceneColorPreExposure, 1.0e-6));
+    AccumulateRadianceToWave(BrickIndex, FixedRadiance, bHasTarget);
+}

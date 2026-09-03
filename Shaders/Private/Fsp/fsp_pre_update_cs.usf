@@ -8,6 +8,8 @@
 // 既存probeがあるcellはLastSeenFrameだけ更新し、BeginUpdateのstale判定で消えないようにする。
 
 StructuredBuffer<uint> FspVisibleSurfaceList;
+StructuredBuffer<uint> FspVisibleSurfaceSourceTexelList;
+Texture2D<float4> ReducedSurfaceBuffer;
 RWStructuredBuffer<uint> RWFspActiveProbeListCurr;
 RWStructuredBuffer<uint> RWFspProbeFreeStack;
 RWStructuredBuffer<uint> RWFspCellProbeIndex;
@@ -18,6 +20,13 @@ StructuredBuffer<uint> BbvBuffer;
 uint FspProbePoolElementCount;
 uint FrameCount;
 uint bEnableWarmStart;
+uint bUseReducedSurfaceBuffer;
+uint SourceViewRectSizeX;
+uint SourceViewRectSizeY;
+float4x4 ViewMatrix;
+float4x4 InvViewMatrix;
+float4x4 InvProjectionMatrix;
+float4x4 ProjectionMatrix;
 float3 CameraPositionWs;
 uint BbvGridResolutionX;
 uint BbvGridResolutionY;
@@ -25,6 +34,70 @@ uint BbvGridResolutionZ;
 float3 BbvGridMinPositionWs;
 float BbvCellSizeCm;
 float3 BbvToroidalOffsetCells;
+
+bool FspTryGetReducedSurfaceAnchor(
+    uint UpdateElementIndex,
+    uint GlobalCellIndex,
+    uint CascadeIndex,
+    out float3 SurfacePositionWs,
+    out float3 SurfaceNormalWs)
+{
+    SurfacePositionWs = 0.0.xxx;
+    SurfaceNormalWs = 0.0.xxx;
+
+    uint ReducedWidth = 0u;
+    uint ReducedHeight = 0u;
+    ReducedSurfaceBuffer.GetDimensions(ReducedWidth, ReducedHeight);
+    if (ReducedWidth == 0u || ReducedHeight == 0u)
+    {
+        return false;
+    }
+
+    const uint ReducedSurfaceTexelIndex =
+        FspVisibleSurfaceSourceTexelList[UpdateElementIndex + 1u];
+    if (ReducedSurfaceTexelIndex >= ReducedWidth * ReducedHeight)
+    {
+        return false;
+    }
+
+    const uint2 ReducedTexel = uint2(
+        ReducedSurfaceTexelIndex % ReducedWidth,
+        ReducedSurfaceTexelIndex / ReducedWidth);
+    const float4 SurfaceSample =
+        ReducedSurfaceBuffer.Load(int3(ReducedTexel, 0));
+    if (SurfaceSample.x <= 0.0)
+    {
+        return false;
+    }
+
+    const float2 SurfaceUv =
+        (float2(ReducedSurfaceBufferSourceTexel(
+            ReducedTexel,
+            uint2(SourceViewRectSizeX, SourceViewRectSizeY),
+            FrameCount)) + 0.5.xx) /
+        float2(max(SourceViewRectSizeX, 1u), max(SourceViewRectSizeY, 1u));
+    const float3 SurfacePositionVs =
+        ReducedSurfaceReconstructViewPosition(
+            SurfaceUv,
+            SurfaceSample.x,
+            InvProjectionMatrix);
+    SurfacePositionWs = mul(
+        float4(SurfacePositionVs, 1.0),
+        InvViewMatrix).xyz;
+
+    uint SampleGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
+    if (!FspTryGetGlobalCellIndexFromWorldPos(
+            SurfacePositionWs,
+            CascadeIndex,
+            SampleGlobalCellIndex) ||
+        SampleGlobalCellIndex != GlobalCellIndex)
+    {
+        return false;
+    }
+
+    SurfaceNormalWs = ReducedSurfaceOctDecode(SurfaceSample.yz);
+    return true;
+}
 
 uint FspPopFreeProbeIndex()
 {
@@ -361,12 +434,51 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
     const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
     const float3 PrevProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
-    const float3 ProbeSamplePosWs = FspRelocateProbeNative(
+    float3 ProbeSamplePosWs = FspRelocateProbeNative(
         CellCenterWs,
         PrevProbeOffset,
         MaxProbeOffsetDistanceCm,
         CascadeIndex,
         GlobalCellIndex);
+
+    if (bUseReducedSurfaceBuffer != 0u)
+    {
+        float3 SurfacePositionWs = 0.0.xxx;
+        float3 SurfaceNormalWs = 0.0.xxx;
+        if (FspTryGetReducedSurfaceAnchor(
+                ListIndex,
+                GlobalCellIndex,
+                CascadeIndex,
+                SurfacePositionWs,
+                SurfaceNormalWs))
+        {
+            const float SurfaceClearance = max(
+                BbvCellSizeCm / float(k_irdv_bbv_brick_reso),
+                0.001);
+            const float ClearanceScale[4] = {1.0, 2.0, 3.0, 4.0};
+            [unroll]
+            for (uint CandidateIndex = 0u;
+                 CandidateIndex < 4u;
+                 ++CandidateIndex)
+            {
+                const float3 CandidateWs =
+                    SurfacePositionWs +
+                    SurfaceNormalWs *
+                    (SurfaceClearance * ClearanceScale[CandidateIndex]);
+                const float3 CandidateOffset =
+                    CandidateWs - CellCenterWs;
+                if (any(abs(CandidateOffset) >
+                        MaxProbeOffsetDistanceCm.xxx) ||
+                    FspIsProbePositionOccupied(CandidateWs))
+                {
+                    continue;
+                }
+
+                ProbeSamplePosWs = CandidateWs;
+                break;
+            }
+        }
+    }
 
     if (bNewProbe)
     {

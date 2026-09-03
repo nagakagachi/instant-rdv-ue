@@ -215,6 +215,97 @@ public:
     END_SHADER_PARAMETER_STRUCT()
 };
 
+class FInstantRdvReducedSurfaceBufferBuildCS final : public FGlobalShader
+{
+public:
+    DECLARE_GLOBAL_SHADER(FInstantRdvReducedSurfaceBufferBuildCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvReducedSurfaceBufferBuildCS, FGlobalShader);
+
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER(uint32, SourceDepthSizeX)
+        SHADER_PARAMETER(uint32, SourceDepthSizeY)
+        SHADER_PARAMETER(uint32, SourceViewRectMinX)
+        SHADER_PARAMETER(uint32, SourceViewRectMinY)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeX)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeY)
+        SHADER_PARAMETER(uint32, FrameCount)
+        SHADER_PARAMETER(FMatrix44f, ViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, ProjectionMatrix)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SceneDepthTexture)
+        SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, RWReducedSurfaceBuffer)
+    END_SHADER_PARAMETER_STRUCT()
+};
+
+class FInstantRdvBbvReducedSurfaceInjectionCS final : public FGlobalShader
+{
+public:
+    DECLARE_GLOBAL_SHADER(FInstantRdvBbvReducedSurfaceInjectionCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvBbvReducedSurfaceInjectionCS, FGlobalShader);
+
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER(uint32, SourceDepthSizeX)
+        SHADER_PARAMETER(uint32, SourceDepthSizeY)
+        SHADER_PARAMETER(uint32, SourceViewRectMinX)
+        SHADER_PARAMETER(uint32, SourceViewRectMinY)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeX)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeY)
+        SHADER_PARAMETER(uint32, FrameCount)
+        SHADER_PARAMETER(uint32, GridResolutionX)
+        SHADER_PARAMETER(uint32, GridResolutionY)
+        SHADER_PARAMETER(uint32, GridResolutionZ)
+        SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
+        SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
+        SHADER_PARAMETER(float, CellSizeCm)
+        SHADER_PARAMETER(float, InjectionWorldOffsetWs)
+        SHADER_PARAMETER(FMatrix44f, ViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, ProjectionMatrix)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ReducedSurfaceBuffer)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBbvBuffer)
+    END_SHADER_PARAMETER_STRUCT()
+};
+
+class FInstantRdvBbvReducedRadianceInjectionCS final : public FGlobalShader
+{
+public:
+    DECLARE_GLOBAL_SHADER(FInstantRdvBbvReducedRadianceInjectionCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvBbvReducedRadianceInjectionCS, FGlobalShader);
+
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER(uint32, SourceDepthSizeX)
+        SHADER_PARAMETER(uint32, SourceDepthSizeY)
+        SHADER_PARAMETER(uint32, SourceViewRectMinX)
+        SHADER_PARAMETER(uint32, SourceViewRectMinY)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeX)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeY)
+        SHADER_PARAMETER(uint32, FrameCount)
+        SHADER_PARAMETER(uint32, GridResolutionX)
+        SHADER_PARAMETER(uint32, GridResolutionY)
+        SHADER_PARAMETER(uint32, GridResolutionZ)
+        SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
+        SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
+        SHADER_PARAMETER(float, CellSizeCm)
+        SHADER_PARAMETER(float, InjectionWorldOffsetWs)
+        SHADER_PARAMETER(float, SceneColorPreExposure)
+        SHADER_PARAMETER(FMatrix44f, ViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, ProjectionMatrix)
+        SHADER_PARAMETER(uint32, BrickDataBaseOffset)
+        SHADER_PARAMETER(uint32, bEnableShortRayFallback)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ReducedSurfaceBuffer)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneColorTexture)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWBbvRadianceAccumBuffer)
+    END_SHADER_PARAMETER_STRUCT()
+};
+
 class FInstantRdvBbvDepthFrustumCullCS final : public FGlobalShader
 {
 public:
@@ -435,6 +526,35 @@ public:
     END_SHADER_PARAMETER_STRUCT()
 };
 
+class FInstantRdvFspSurfaceDetectReducedCS final : public FGlobalShader
+{
+public:
+    DECLARE_GLOBAL_SHADER(FInstantRdvFspSurfaceDetectReducedCS);
+    SHADER_USE_PARAMETER_STRUCT(FInstantRdvFspSurfaceDetectReducedCS, FGlobalShader);
+
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER(uint32, SourceDepthSizeX)
+        SHADER_PARAMETER(uint32, SourceDepthSizeY)
+        SHADER_PARAMETER(uint32, FrameCount)
+        SHADER_PARAMETER(uint32, FspGridResolutionX)
+        SHADER_PARAMETER(uint32, FspGridResolutionY)
+        SHADER_PARAMETER(uint32, FspGridResolutionZ)
+        SHADER_PARAMETER(uint32, FspCascadeCount)
+        SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
+        SHADER_PARAMETER(float, FspCellSizeCm)
+        SHADER_PARAMETER(FMatrix44f, ViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, ProjectionMatrix)
+        SHADER_PARAMETER(uint32, VisibleSurfaceListCapacity)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ReducedSurfaceBuffer)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspSurfaceCellMask)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspVisibleSurfaceList)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspVisibleSurfaceSourceTexelList)
+    END_SHADER_PARAMETER_STRUCT()
+};
+
 class FInstantRdvFspInitPoolCS final : public FGlobalShader
 {
 public:
@@ -510,6 +630,13 @@ public:
         SHADER_PARAMETER(float, FspRelocationOffsetScale)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER(FVector3f, CameraPositionWs)
+        SHADER_PARAMETER(uint32, bUseReducedSurfaceBuffer)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeX)
+        SHADER_PARAMETER(uint32, SourceViewRectSizeY)
+        SHADER_PARAMETER(FMatrix44f, ViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvViewMatrix)
+        SHADER_PARAMETER(FMatrix44f, InvProjectionMatrix)
+        SHADER_PARAMETER(FMatrix44f, ProjectionMatrix)
         SHADER_PARAMETER(uint32, BbvGridResolutionX)
         SHADER_PARAMETER(uint32, BbvGridResolutionY)
         SHADER_PARAMETER(uint32, BbvGridResolutionZ)
@@ -517,6 +644,8 @@ public:
         SHADER_PARAMETER(float, BbvCellSizeCm)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceList)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceSourceTexelList)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ReducedSurfaceBuffer)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspActiveProbeListCurr)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeFreeStack)
@@ -775,6 +904,8 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBeginUpdateCS, "/InstantRdvShaders/Private
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBeginViewUpdateCS, "/InstantRdvShaders/Private/Bbv/bbv_begin_view_update_cs.usf", "MainCS", SF_Compute);
 
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthInjectionCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_injection_apply_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvReducedSurfaceBufferBuildCS, "/InstantRdvShaders/Private/Bbv/reduced_surface_buffer_build_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvReducedSurfaceInjectionCS, "/InstantRdvShaders/Private/Bbv/bbv_reduced_surface_injection_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthFrustumCullCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_frustum_cull_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthFrustumCullAabbCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_frustum_cull_aabb_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvDepthCarvingIndirectArgBuildCS, "/InstantRdvShaders/Private/Bbv/bbv_depthtest_carving_indirect_arg_build_cs.usf", "MainCS", SF_Compute);
@@ -783,10 +914,12 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvToroidalClearCS, "/InstantRdvShaders/Priva
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvBrickCountAggregateCS, "/InstantRdvShaders/Private/Bbv/bbv_brick_count_aggregate_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvElementUpdateCS, "/InstantRdvShaders/Private/Bbv/bbv_element_update_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvRadianceInjectionCS, "/InstantRdvShaders/Private/Bbv/bbv_radiance_injection_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvReducedRadianceInjectionCS, "/InstantRdvShaders/Private/Bbv/bbv_reduced_radiance_injection_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvBbvRadianceResolveCS, "/InstantRdvShaders/Private/Bbv/bbv_radiance_resolve_cs.usf", "MainCS", SF_Compute);
 
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspSurfaceMaskInjectCS, "/InstantRdvShaders/Private/Fsp/fsp_surface_mask_inject_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspSurfaceMaskCompactCS, "/InstantRdvShaders/Private/Fsp/fsp_surface_mask_compact_cs.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspSurfaceDetectReducedCS, "/InstantRdvShaders/Private/Fsp/fsp_surface_detect_reduced_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspInitPoolCS, "/InstantRdvShaders/Private/Fsp/fsp_init_pool_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspCounterIndirectArgBuildCS, "/InstantRdvShaders/Private/Fsp/fsp_counter_indirect_arg_build_cs.usf", "MainCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspBeginUpdateCS, "/InstantRdvShaders/Private/Fsp/fsp_begin_update_cs.usf", "MainCS", SF_Compute);
@@ -920,10 +1053,30 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount + 1u), TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount * k_irdv_fsp_ray_result_data_stride + 1u), TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
             SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, FspCellCount * kFspIrradianceVolumeShFloat4Count), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+            SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.fsp.FspVisibleSurfaceSourceTexelListBuffer"));
+
+            const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(InView);
+            const FIntPoint ReducedExtent(
+                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Width(), 4), 1),
+                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Height(), 4), 1));
+            SystemState.fsp.ReducedSurfaceBuffer.Extent = ReducedExtent;
+            SystemState.fsp.ReducedSurfaceBuffer.Handle = GraphBuilder.CreateTexture(
+                FRDGTextureDesc::Create2D(
+                    ReducedExtent,
+                    PF_A32B32G32R32F,
+                    FClearValueBinding::None,
+                    TexCreate_ShaderResource | TexCreate_UAV),
+                TEXT("InstantRdv.fsp.ReducedSurfaceBuffer"));
+            // Legacy経路でも初回フレームの永続化対象になるため、未生成リソースにならないよう明示的に初期化する。
+            AddClearUAVPass(
+                GraphBuilder,
+                GraphBuilder.CreateUAV(SystemState.fsp.ReducedSurfaceBuffer.Handle),
+                FLinearColor::Transparent);
 
 
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
+            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspActiveProbeListBuffers[0].Handle), 0u);
@@ -936,6 +1089,7 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
 
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspCellProbeIndexBuffer.Handle, &SystemState.fsp.FspCellProbeIndexBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle, &SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer);
+            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle, &SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbePoolBuffer.Handle, &SystemState.fsp.FspProbePoolBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeFreeStackBuffer.Handle, &SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListBuffers[0].Handle, &SystemState.fsp.FspActiveProbeListBuffers[0].PooledBuffer);
@@ -944,6 +1098,9 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayRequestBuffer.Handle, &SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayResultBuffer.Handle, &SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspPackedSHBuffer.Handle, &SystemState.fsp.FspPackedSHBuffer.PooledBuffer);
+            GraphBuilder.QueueTextureExtraction(
+                SystemState.fsp.ReducedSurfaceBuffer.Handle,
+                &SystemState.fsp.ReducedSurfaceBuffer.PooledTexture);
         }
     }
     else
@@ -964,6 +1121,7 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
         {
             SystemState.fsp.FspCellProbeIndexBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspCellProbeIndexBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspCellProbeIndexBuffer"));
             SystemState.fsp.FspVisibleSurfaceListBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspVisibleSurfaceListBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspVisibleSurfaceListBuffer"));
+            SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspVisibleSurfaceSourceTexelListBuffer"));
             SystemState.fsp.FspProbePoolBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbePoolBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbePoolBuffer"));
             SystemState.fsp.FspProbeFreeStackBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeFreeStackBuffer"));
             SystemState.fsp.FspActiveProbeListBuffers[0].Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspActiveProbeListBuffers[0].PooledBuffer, TEXT("InstantRdv.FspActiveProbeList0"));
@@ -972,6 +1130,17 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
             SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspPackedSHBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+            const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(InView);
+            const FIntPoint ReducedExtent(
+                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Width(), 4), 1),
+                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Height(), 4), 1));
+            if (SystemState.fsp.ReducedSurfaceBuffer.PooledTexture.IsValid() &&
+                SystemState.fsp.ReducedSurfaceBuffer.Extent == ReducedExtent)
+            {
+                SystemState.fsp.ReducedSurfaceBuffer.Handle = GraphBuilder.RegisterExternalTexture(
+                    SystemState.fsp.ReducedSurfaceBuffer.PooledTexture,
+                    TEXT("InstantRdv.fsp.ReducedSurfaceBuffer"));
+            }
         }
     }
 
@@ -1049,7 +1218,8 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
     const FSceneView& View,
     FRDGTexture* SceneDepthTexture,
     bool bEnableMainViewGeometryInjection,
-    bool bEnableMainViewGeometryRemoval)
+    bool bEnableMainViewGeometryRemoval,
+    bool bUseReducedSurfaceBuffer)
 {
     if (SceneDepthTexture == nullptr)
     {
@@ -1123,40 +1293,147 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvToroidalClear"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
+    const bool bUseReducedPath =
+        bUseReducedSurfaceBuffer &&
+        SystemState.fsp.ReducedSurfaceBuffer.Handle != nullptr;
+    const FIntRect MainViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+    if (bUseReducedPath)
+    {
+        FInstantRdvReducedSurfaceBufferBuildCS::FParameters* Parameters =
+            GraphBuilder.AllocParameters<FInstantRdvReducedSurfaceBufferBuildCS::FParameters>();
+        Parameters->SourceDepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
+        Parameters->SourceDepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+        Parameters->SourceViewRectMinX = static_cast<uint32>(FMath::Max(MainViewRect.Min.X, 0));
+        Parameters->SourceViewRectMinY = static_cast<uint32>(FMath::Max(MainViewRect.Min.Y, 0));
+        Parameters->SourceViewRectSizeX = static_cast<uint32>(FMath::Max(MainViewRect.Width(), 1));
+        Parameters->SourceViewRectSizeY = static_cast<uint32>(FMath::Max(MainViewRect.Height(), 1));
+        Parameters->FrameCount = SystemState.FrameCount;
+        Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetTranslatedViewMatrix());
+        Parameters->InvViewMatrix = FMatrix44f(View.ViewMatrices.GetWorldToView().InverseFast());
+        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
+        Parameters->InvProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
+        Parameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewToClip());
+        Parameters->SceneDepthTexture = SceneDepthTexture;
+        Parameters->RWReducedSurfaceBuffer = GraphBuilder.CreateUAV(SystemState.fsp.ReducedSurfaceBuffer.Handle);
+
+        TShaderMapRef<FInstantRdvReducedSurfaceBufferBuildCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+        const uint32 GroupX = FMath::DivideAndRoundUp(static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X), 8u);
+        const uint32 GroupY = FMath::DivideAndRoundUp(static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y), 8u);
+        FComputeShaderUtils::AddPass(
+            GraphBuilder,
+            RDG_EVENT_NAME("InstantRdv.ReducedSurfaceBufferBuild"),
+            ERDGPassFlags::Compute,
+            ComputeShader,
+            Parameters,
+            FIntVector(GroupX, GroupY, 1));
+    }
+
     if (bEnableMainViewGeometryInjection)
     {
-        FInstantRdvBbvDepthInjectionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvDepthInjectionCS::FParameters>();
+        const FIntRect ViewRect = MainViewRect;
+        const uint32 ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+        const uint32 ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+        if (bUseReducedPath)
         {
-            Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
-            Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
-            const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
-            Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
-            Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
-            Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
-            Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+            FInstantRdvBbvReducedSurfaceInjectionCS::FParameters* Parameters =
+                GraphBuilder.AllocParameters<FInstantRdvBbvReducedSurfaceInjectionCS::FParameters>();
+            Parameters->SourceDepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
+            Parameters->SourceDepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+            Parameters->SourceViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+            Parameters->SourceViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+            Parameters->SourceViewRectSizeX = ViewRectSizeX;
+            Parameters->SourceViewRectSizeY = ViewRectSizeY;
+            Parameters->FrameCount = SystemState.FrameCount;
             Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
             Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
             Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
             Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
-            // 参照実装と同じく「fine cell 数」からワールド距離を算出する。
-            const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f);
-            Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
-            Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
-            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
-            const FMatrix ProjectionMatrix = View.ViewMatrices.GetViewToClip();
-            Parameters->NativeNearPlaneDeviceDepth = (ProjectionMatrix.M[2][3] > 0.0f) ? 1.0f : 0.0f;
-            Parameters->DepthInjectionMethod = static_cast<uint32>(FMath::Clamp(CVarInstantRdvBbvDepthInjectionMethod.GetValueOnRenderThread(), 0, 1));
-            Parameters->SceneDepthTexture = SceneDepthTexture;
-            Parameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-            Parameters->RWBbvBuffer = GraphBuilder.CreateUAV(SystemState.bbv.BbvBuffer.Handle);
+            const float InjectionOffsetFineCells =
+                CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
+            Parameters->InjectionWorldOffsetWs =
+                Config.bbv.BbvBrickSizeCm /
+                FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f) *
+                InjectionOffsetFineCells;
+            Parameters->ViewMatrix =
+                FMatrix44f(View.ViewMatrices.GetTranslatedViewMatrix());
+            Parameters->InvViewMatrix =
+                FMatrix44f(View.ViewMatrices.GetWorldToView().InverseFast());
+            Parameters->InvViewProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetClipToWorld());
+            Parameters->InvProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
+            Parameters->ProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetViewToClip());
+            Parameters->ReducedSurfaceBuffer =
+                SystemState.fsp.ReducedSurfaceBuffer.Handle;
+            Parameters->RWBbvBuffer =
+                GraphBuilder.CreateUAV(SystemState.bbv.BbvBuffer.Handle);
+            TShaderMapRef<FInstantRdvBbvReducedSurfaceInjectionCS> ComputeShader(
+                GetGlobalShaderMap(View.GetFeatureLevel()));
+            const uint32 GroupX = FMath::DivideAndRoundUp(
+                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X),
+                8u);
+            const uint32 GroupY = FMath::DivideAndRoundUp(
+                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y),
+                8u);
+            FComputeShaderUtils::AddPass(
+                GraphBuilder,
+                RDG_EVENT_NAME("InstantRdv.BbvReducedSurfaceInjection"),
+                ERDGPassFlags::Compute,
+                ComputeShader,
+                Parameters,
+                FIntVector(GroupX, GroupY, 1));
         }
-        TShaderMapRef<FInstantRdvBbvDepthInjectionCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
-        const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvDepthInjectionMainView"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
+        else
+        {
+            FInstantRdvBbvDepthInjectionCS::FParameters* Parameters =
+                GraphBuilder.AllocParameters<FInstantRdvBbvDepthInjectionCS::FParameters>();
+            Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
+            Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+            Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+            Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+            Parameters->ViewRectSizeX = ViewRectSizeX;
+            Parameters->ViewRectSizeY = ViewRectSizeY;
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+            Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
+            const float InjectionOffsetFineCells =
+                CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
+            const float FineCellSizeCm =
+                Config.bbv.BbvBrickSizeCm /
+                FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f);
+            Parameters->DepthtestInjectionWorldOffsetWs =
+                FineCellSizeCm * InjectionOffsetFineCells;
+            Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
+            Parameters->InvViewProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetClipToWorld());
+            const FMatrix ProjectionMatrix = View.ViewMatrices.GetViewToClip();
+            Parameters->NativeNearPlaneDeviceDepth =
+                (ProjectionMatrix.M[2][3] > 0.0f) ? 1.0f : 0.0f;
+            Parameters->DepthInjectionMethod = static_cast<uint32>(
+                FMath::Clamp(CVarInstantRdvBbvDepthInjectionMethod.GetValueOnRenderThread(), 0, 1));
+            Parameters->SceneDepthTexture = SceneDepthTexture;
+            Parameters->SceneDepthSampler =
+                TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+            Parameters->RWBbvBuffer =
+                GraphBuilder.CreateUAV(SystemState.bbv.BbvBuffer.Handle);
+            TShaderMapRef<FInstantRdvBbvDepthInjectionCS> ComputeShader(
+                GetGlobalShaderMap(View.GetFeatureLevel()));
+            const uint32 GroupX = FMath::DivideAndRoundUp(ViewRectSizeX, 8u);
+            const uint32 GroupY = FMath::DivideAndRoundUp(ViewRectSizeY, 8u);
+            FComputeShaderUtils::AddPass(
+                GraphBuilder,
+                RDG_EVENT_NAME("InstantRdv.BbvDepthInjectionMainView"),
+                ERDGPassFlags::Compute,
+                ComputeShader,
+                Parameters,
+                FIntVector(GroupX, GroupY, 1));
+        }
     }
 
     if (bEnableMainViewGeometryRemoval)
@@ -1295,7 +1572,8 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
     FRDGTexture* SceneColorTexture,
     float SceneColorPreExposure,
     bool bEnableRadianceInjection,
-    bool bEnableRadianceResolve)
+    bool bEnableRadianceResolve,
+    bool bUseReducedSurfaceBuffer)
 {
     if (SceneDepthTexture == nullptr || SceneColorTexture == nullptr || !SystemState.bRenderInitialized)
     {
@@ -1311,8 +1589,75 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
 
     if (bEnableRadianceInjection)
     {
-        FInstantRdvBbvRadianceInjectionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvBbvRadianceInjectionCS::FParameters>();
+        const bool bUseReducedPath =
+            bUseReducedSurfaceBuffer &&
+            SystemState.fsp.ReducedSurfaceBuffer.Handle != nullptr;
+        if (bUseReducedPath)
         {
+            FInstantRdvBbvReducedRadianceInjectionCS::FParameters* Parameters =
+                GraphBuilder.AllocParameters<FInstantRdvBbvReducedRadianceInjectionCS::FParameters>();
+            Parameters->SourceDepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
+            Parameters->SourceDepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+            Parameters->SourceViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+            Parameters->SourceViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+            Parameters->SourceViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+            Parameters->SourceViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+            Parameters->FrameCount = SystemState.FrameCount;
+            Parameters->GridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
+            Parameters->GridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
+            Parameters->GridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
+            Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
+            Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
+            Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
+            const float InjectionOffsetFineCells =
+                CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
+            Parameters->InjectionWorldOffsetWs =
+                Config.bbv.BbvBrickSizeCm /
+                FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f) *
+                InjectionOffsetFineCells;
+            Parameters->SceneColorPreExposure =
+                FMath::Max(SceneColorPreExposure, 1.0e-6f);
+            Parameters->ViewMatrix =
+                FMatrix44f(View.ViewMatrices.GetTranslatedViewMatrix());
+            Parameters->InvViewMatrix =
+                FMatrix44f(View.ViewMatrices.GetWorldToView().InverseFast());
+            Parameters->InvViewProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetClipToWorld());
+            Parameters->InvProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
+            Parameters->ProjectionMatrix =
+                FMatrix44f(View.ViewMatrices.GetViewToClip());
+            Parameters->BrickDataBaseOffset = Config.bbv.GetBitmaskElementCount();
+            Parameters->bEnableShortRayFallback =
+                CVarInstantRdvBbvRadianceShortRayFallback.GetValueOnRenderThread() != 0
+                    ? 1u
+                    : 0u;
+            Parameters->ReducedSurfaceBuffer =
+                SystemState.fsp.ReducedSurfaceBuffer.Handle;
+            Parameters->SceneColorTexture = SceneColorTexture;
+            Parameters->BbvBuffer = GraphBuilder.CreateSRV(BbvBuffer);
+            Parameters->RWBbvRadianceAccumBuffer =
+                GraphBuilder.CreateUAV(RadianceAccumBuffer);
+            TShaderMapRef<FInstantRdvBbvReducedRadianceInjectionCS> ComputeShader(
+                GetGlobalShaderMap(View.GetFeatureLevel()));
+            const uint32 GroupX = FMath::DivideAndRoundUp(
+                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X),
+                8u);
+            const uint32 GroupY = FMath::DivideAndRoundUp(
+                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y),
+                8u);
+            FComputeShaderUtils::AddPass(
+                GraphBuilder,
+                RDG_EVENT_NAME("InstantRdv.BbvReducedRadianceInjection"),
+                ERDGPassFlags::Compute,
+                ComputeShader,
+                Parameters,
+                FIntVector(GroupX, GroupY, 1));
+        }
+        else
+        {
+            FInstantRdvBbvRadianceInjectionCS::FParameters* Parameters =
+                GraphBuilder.AllocParameters<FInstantRdvBbvRadianceInjectionCS::FParameters>();
             Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
             Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
             Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
@@ -1330,18 +1675,18 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
-            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld()); //Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvViewProjectionMatrix());
+            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
             Parameters->BrickDataBaseOffset = Config.bbv.GetBitmaskElementCount();
             Parameters->bEnableShortRayFallback = CVarInstantRdvBbvRadianceShortRayFallback.GetValueOnRenderThread() != 0 ? 1u : 0u;
             Parameters->SceneDepthTexture = SceneDepthTexture;
             Parameters->SceneColorTexture = SceneColorTexture;
             Parameters->BbvBuffer = GraphBuilder.CreateSRV(BbvBuffer);
             Parameters->RWBbvRadianceAccumBuffer = GraphBuilder.CreateUAV(RadianceAccumBuffer);
+            TShaderMapRef<FInstantRdvBbvRadianceInjectionCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+            const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
+            const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
+            FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvRadianceInjection"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
         }
-        TShaderMapRef<FInstantRdvBbvRadianceInjectionCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
-        const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvRadianceInjection"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
     }
 
     if (bEnableRadianceResolve)
@@ -1363,7 +1708,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     const FSceneView& View,
     FRDGTexture* SceneDepthTexture,
     bool bEnableFspUpdate,
-    bool bUseProbeTraceOffset)
+    bool bUseProbeTraceOffset,
+    bool bUseReducedSurfaceBuffer)
 {
     if (!bEnableFspUpdate || SceneDepthTexture == nullptr || !SystemState.bRenderInitialized)
     {
@@ -1461,39 +1807,94 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         TEXT("InstantRdv.FspSurfaceCellMask"));
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer), 0u);
 
+    const bool bUseReducedPath =
+        bUseReducedSurfaceBuffer &&
+        SystemState.fsp.ReducedSurfaceBuffer.Handle != nullptr;
+    if (bUseReducedPath)
     {
-        // Nativeと同じくDepth pixelを直接appendせず、Wave集約した1bit/cell maskへ注入する。
-        FInstantRdvFspSurfaceMaskInjectCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspSurfaceMaskInjectCS::FParameters>();
-        Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
-        Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
-        Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
-        Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
-        Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
-        Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+        FInstantRdvFspSurfaceDetectReducedCS::FParameters* Parameters =
+            GraphBuilder.AllocParameters<FInstantRdvFspSurfaceDetectReducedCS::FParameters>();
+        Parameters->SourceDepthSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+        Parameters->SourceDepthSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+        Parameters->FrameCount = SystemState.FrameCount;
         Parameters->FspGridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
         Parameters->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
-        Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
-        Parameters->SceneDepthTexture = SceneDepthTexture;
-        Parameters->RWFspSurfaceCellMask = GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer);
-        TShaderMapRef<FInstantRdvFspSurfaceMaskInjectCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
-        const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspSurfaceMaskInject"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
+        Parameters->ViewMatrix =
+            FMatrix44f(View.ViewMatrices.GetTranslatedViewMatrix());
+        Parameters->InvViewMatrix =
+            FMatrix44f(View.ViewMatrices.GetWorldToView().InverseFast());
+        Parameters->InvViewProjectionMatrix =
+            FMatrix44f(View.ViewMatrices.GetClipToWorld());
+        Parameters->InvProjectionMatrix =
+            FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
+        Parameters->ProjectionMatrix =
+            FMatrix44f(View.ViewMatrices.GetViewToClip());
+        Parameters->VisibleSurfaceListCapacity = FspCellCount;
+        Parameters->ReducedSurfaceBuffer =
+            SystemState.fsp.ReducedSurfaceBuffer.Handle;
+        Parameters->RWFspSurfaceCellMask =
+            GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer);
+        Parameters->RWFspVisibleSurfaceList =
+            GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
+        Parameters->RWFspVisibleSurfaceSourceTexelList =
+            GraphBuilder.CreateUAV(
+                SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle);
+        TShaderMapRef<FInstantRdvFspSurfaceDetectReducedCS> ComputeShader(
+            GetGlobalShaderMap(View.GetFeatureLevel()));
+        const uint32 GroupX = FMath::DivideAndRoundUp(
+            static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X),
+            8u);
+        const uint32 GroupY = FMath::DivideAndRoundUp(
+            static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y),
+            8u);
+        FComputeShaderUtils::AddPass(
+            GraphBuilder,
+            RDG_EVENT_NAME("InstantRdv.FspSurfaceDetectReduced"),
+            ERDGPassFlags::Compute,
+            ComputeShader,
+            Parameters,
+            FIntVector(GroupX, GroupY, 1));
     }
-
+    else
     {
-        FInstantRdvFspSurfaceMaskCompactCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspSurfaceMaskCompactCS::FParameters>();
-        Parameters->FspTotalCellCount = FspCellCount;
-        Parameters->FspVisibleSurfaceListCapacity = FspCellCount;
-        Parameters->FspSurfaceCellMask = GraphBuilder.CreateSRV(FspSurfaceCellMaskBuffer);
-        Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
-        TShaderMapRef<FInstantRdvFspSurfaceMaskCompactCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(FspSurfaceMaskWordCount, 128u);
-        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspSurfaceMaskCompact"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
+        {
+            // Nativeと同じくDepth pixelを直接appendせず、Wave集約した1bit/cell maskへ注入する。
+            FInstantRdvFspSurfaceMaskInjectCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspSurfaceMaskInjectCS::FParameters>();
+            Parameters->DepthSizeX = static_cast<uint32>(SceneDepthTexture->Desc.Extent.X);
+            Parameters->DepthSizeY = static_cast<uint32>(SceneDepthTexture->Desc.Extent.Y);
+            Parameters->ViewRectMinX = static_cast<uint32>(FMath::Max(ViewRect.Min.X, 0));
+            Parameters->ViewRectMinY = static_cast<uint32>(FMath::Max(ViewRect.Min.Y, 0));
+            Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+            Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+            Parameters->FspGridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
+            Parameters->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
+            Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
+            Parameters->FspCascadeCount = FspCascadeCount;
+            Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
+            Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+            Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
+            Parameters->SceneDepthTexture = SceneDepthTexture;
+            Parameters->RWFspSurfaceCellMask = GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer);
+            TShaderMapRef<FInstantRdvFspSurfaceMaskInjectCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+            const uint32 GroupX = FMath::DivideAndRoundUp(Parameters->ViewRectSizeX, 8u);
+            const uint32 GroupY = FMath::DivideAndRoundUp(Parameters->ViewRectSizeY, 8u);
+            FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspSurfaceMaskInject"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, GroupY, 1));
+        }
+
+        {
+            FInstantRdvFspSurfaceMaskCompactCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspSurfaceMaskCompactCS::FParameters>();
+            Parameters->FspTotalCellCount = FspCellCount;
+            Parameters->FspVisibleSurfaceListCapacity = FspCellCount;
+            Parameters->FspSurfaceCellMask = GraphBuilder.CreateSRV(FspSurfaceCellMaskBuffer);
+            Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
+            TShaderMapRef<FInstantRdvFspSurfaceMaskCompactCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+            const uint32 GroupX = FMath::DivideAndRoundUp(FspSurfaceMaskWordCount, 128u);
+            FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspSurfaceMaskCompact"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
+        }
     }
 
     FRDGBufferRef FspPreUpdateIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
@@ -1516,6 +1917,13 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspRelocationOffsetScale = FMath::Max(CVarInstantRdvFspRelocationOffsetScale.GetValueOnRenderThread(), 0.01f);
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
+        Parameters->bUseReducedSurfaceBuffer = bUseReducedPath ? 1u : 0u;
+        Parameters->SourceViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
+        Parameters->SourceViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
+        Parameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetTranslatedViewMatrix());
+        Parameters->InvViewMatrix = FMatrix44f(View.ViewMatrices.GetWorldToView().InverseFast());
+        Parameters->InvProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
+        Parameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewToClip());
         Parameters->BbvGridResolutionX = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.X);
         Parameters->BbvGridResolutionY = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Y);
         Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
@@ -1523,6 +1931,11 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->BbvCellSizeCm = Config.bbv.BbvBrickSizeCm;
         Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
         Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
+        Parameters->FspVisibleSurfaceSourceTexelList =
+            GraphBuilder.CreateSRV(
+                SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle);
+        Parameters->ReducedSurfaceBuffer =
+            SystemState.fsp.ReducedSurfaceBuffer.Handle;
         Parameters->BbvBuffer = GraphBuilder.CreateSRV(SystemState.bbv.BbvBuffer.Handle);
         Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);

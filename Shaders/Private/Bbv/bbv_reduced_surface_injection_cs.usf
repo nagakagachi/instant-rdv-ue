@@ -1,0 +1,112 @@
+// ファイル名: bbv_reduced_surface_injection_cs.usf
+// ReducedSurfaceBufferを入力にしてBBV Occupancyを更新する。
+
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/instant_rdv_util.ush"
+
+Texture2D<float4> ReducedSurfaceBuffer;
+RWStructuredBuffer<uint> RWBbvBuffer;
+
+uint SourceDepthSizeX;
+uint SourceDepthSizeY;
+uint SourceViewRectMinX;
+uint SourceViewRectMinY;
+uint SourceViewRectSizeX;
+uint SourceViewRectSizeY;
+uint FrameCount;
+uint GridResolutionX;
+uint GridResolutionY;
+uint GridResolutionZ;
+float3 BbvToroidalOffsetCells;
+float3 BbvGridMinPositionWs;
+float CellSizeCm;
+float InjectionWorldOffsetWs;
+float4x4 ViewMatrix;
+float4x4 InvViewMatrix;
+float4x4 InvViewProjectionMatrix;
+float4x4 InvProjectionMatrix;
+float4x4 ProjectionMatrix;
+
+bool BallotAny(uint4 BallotMask)
+{
+    return (BallotMask.x | BallotMask.y | BallotMask.z | BallotMask.w) != 0u;
+}
+
+uint FirstLaneFromBallot(uint4 BallotMask)
+{
+    if (BallotMask.x != 0u) { return firstbitlow(BallotMask.x); }
+    if (BallotMask.y != 0u) { return firstbitlow(BallotMask.y) + 32u; }
+    if (BallotMask.z != 0u) { return firstbitlow(BallotMask.z) + 64u; }
+    return firstbitlow(BallotMask.w) + 96u;
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint SurfaceWidth;
+    uint SurfaceHeight;
+    ReducedSurfaceBuffer.GetDimensions(SurfaceWidth, SurfaceHeight);
+    if (any(DispatchThreadId.xy >= uint2(SurfaceWidth, SurfaceHeight)))
+    {
+        return;
+    }
+
+    const float4 SurfaceSample = ReducedSurfaceBuffer.Load(int3(DispatchThreadId.xy, 0));
+    bool bHasInjection = SurfaceSample.x > 0.0;
+    uint TargetAddress = 0u;
+    uint TargetMask = 0u;
+    if (bHasInjection)
+    {
+        const uint2 SourceTexelInView = ReducedSurfaceBufferSourceTexel(
+            DispatchThreadId.xy,
+            uint2(SourceViewRectSizeX, SourceViewRectSizeY),
+            FrameCount);
+        const uint2 SourceTexel = SourceTexelInView +
+            uint2(SourceViewRectMinX, SourceViewRectMinY);
+        const float2 Uv = (float2(SourceTexelInView) + 0.5.xx) /
+            float2(max(SourceViewRectSizeX, 1u), max(SourceViewRectSizeY, 1u));
+        const float3 SurfacePosVs = ReducedSurfaceReconstructViewPosition(
+            Uv,
+            SurfaceSample.x,
+            InvProjectionMatrix);
+        const float3 SurfacePosWs = mul(
+            float4(SurfacePosVs, 1.0),
+            InvViewMatrix).xyz;
+        const float3 ViewRayWs = normalize(mul(
+            float4(normalize(SurfacePosVs), 0.0),
+            InvViewMatrix).xyz);
+        const float3 NormalWs = ReducedSurfaceOctDecode(SurfaceSample.yz);
+        const float3 InjectionDirWs = normalize(lerp(ViewRayWs, -NormalWs, saturate(SurfaceSample.w)));
+        const float3 InjectionPosWs = SurfacePosWs + InjectionDirWs * InjectionWorldOffsetWs;
+        const float3 GridCoord = (InjectionPosWs - BbvGridMinPositionWs) / max(CellSizeCm, 0.001);
+        const int3 LogicalCoord = int3(floor(GridCoord));
+        if (all(LogicalCoord >= 0) && LogicalCoord.x < int(GridResolutionX) && LogicalCoord.y < int(GridResolutionY) && LogicalCoord.z < int(GridResolutionZ))
+        {
+            const uint3 PhysicalCoord = LogicalToPhysicalGridCoord(LogicalCoord, int3(BbvToroidalOffsetCells), uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+            const uint BrickIndex = FlattenGridCoord(PhysicalCoord, uint3(GridResolutionX, GridResolutionY, GridResolutionZ));
+            const uint3 FineCoord = min(uint3(frac(GridCoord) * k_irdv_bbv_brick_reso), k_irdv_bbv_brick_reso - 1u);
+            const uint BitIndex = CalcFineBitIndex(FineCoord);
+            TargetAddress = BrickIndex * k_irdv_bbv_bitmask_u32_count_per_brick + BitIndex / 32u;
+            TargetMask = 1u << (BitIndex & 31u);
+        }
+        else
+        {
+            bHasInjection = false;
+        }
+    }
+
+    uint4 PendingLanes = WaveActiveBallot(bHasInjection);
+    while (BallotAny(PendingLanes))
+    {
+        const uint LeaderLane = FirstLaneFromBallot(PendingLanes);
+        const uint LeaderAddress = WaveReadLaneAt(TargetAddress, LeaderLane);
+        const bool bSameTarget = bHasInjection && TargetAddress == LeaderAddress;
+        const uint4 SameTargetLanes = WaveActiveBallot(bSameTarget);
+        const uint MergedMask = WaveActiveBitOr(bSameTarget ? TargetMask : 0u);
+        if (WaveGetLaneIndex() == LeaderLane)
+        {
+            InterlockedOr(RWBbvBuffer[LeaderAddress], MergedMask);
+        }
+        PendingLanes &= ~SameTargetLanes;
+    }
+}

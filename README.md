@@ -15,6 +15,7 @@ SceneViewExtension を基盤に、GI 機能を積み上げるための最小構�
 - `r.InstantRdv.GI` / `r.InstantRdv.Bbv.Enable` で機能有効化を切り替え可能
 - `r.InstantRdv.Bbv.MainViewInjection` / `r.InstantRdv.Bbv.MainViewRemoval` で各BBV更新フェーズを個別に切り替え可能
 - `r.InstantRdv.Bbv.MainViewUpdate` で Injection + Removal を同時にON/OFF可能（更新停止確認用）
+- `r.InstantRdv.UseReducedSurfaceBuffer`（既定値1）でReducedSurfaceBuffer経路とLegacy full-resolution Depth経路を切り替え可能
 - Main View の DepthBuffer を入力に BBV更新（Begin / BeginView / Injection / FrustumCull / Carving / BrickCountAggregate）を実行
 - `r.InstantRdv.Bbv.VisDebug` で BBVボクセル系デバッグ可視化（0:OFF, 1:レントゲン, 2:Brickレイトレ, 3:Voxelレイトレ, 4:Voxel radiance）
 - `r.InstantRdv.Fsp.VisProbe` で ActiveProbe デバッグ可視化（0:OFF, 1:生存状態, 2:インデックスhash, 3:age, 4:cascade, 5:OctMap radiance, 6:OctMap sky visibility, 7:SH radiance, 8:SH sky visibility, 9:BBV埋まり判定）

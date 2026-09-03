@@ -33,6 +33,9 @@
 // FSP IrradianceVolume SH payload. 1 cell = float4 * 4.
 #define k_irdv_fsp_irradiance_volume_sh_float4_count 4u
 
+// MainView ReducedSurfaceBufferの空間縮小率。4x4のJitter sampleを巡回する。
+#define k_irdv_reduced_surface_buffer_downscale 4u
+
 // FSP CellのVisibleMark用一時バッファの1Cellあたりのu32数.
 
 
