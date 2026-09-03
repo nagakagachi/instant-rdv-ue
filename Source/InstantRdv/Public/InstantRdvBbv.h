@@ -162,9 +162,10 @@ private:
 
     struct FPersistentRdgPooledTextureSet
     {
-        TRefCountPtr<IPooledRenderTarget>      PooledTexture{};
-        FRDGTextureRef                          Handle{};
-        FIntPoint                               Extent = FIntPoint::ZeroValue;
+        // フレームをまたいで保持できるのはpooled texture本体だけ。
+        // FRDGTextureRefは生成元FRDGBuilder専用の一時ハンドルなので、永続状態には保存しない。
+        TRefCountPtr<IPooledRenderTarget> PooledTexture{};
+        FIntPoint Extent = FIntPoint::ZeroValue;
     };
 
     struct FSystemState

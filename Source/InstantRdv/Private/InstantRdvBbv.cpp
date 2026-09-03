@@ -23,6 +23,7 @@
 #include "ShaderParameterUtils.h"
 #include "PipelineStateCache.h"
 #include "RHICommandList.h"
+#include "SystemTextures.h"
 
 namespace
 {
@@ -30,6 +31,36 @@ static constexpr uint32 kBbvElementUpdateSkipCount = 3;
 
 static constexpr uint32 kFspIrradianceVolumeShFloat4Count = 4;
 static constexpr uint32 kFspTraceDistanceCm = 5000;
+static constexpr int32 kReducedSurfaceBufferDownscale = 4;
+
+static FIntPoint CalcReducedSurfaceBufferExtent(const FIntRect& ViewRect)
+{
+    return FIntPoint(
+        FMath::Max(
+            FMath::DivideAndRoundUp(ViewRect.Width(), kReducedSurfaceBufferDownscale),
+            1),
+        FMath::Max(
+            FMath::DivideAndRoundUp(ViewRect.Height(), kReducedSurfaceBufferDownscale),
+            1));
+}
+
+static FRDGTextureRef RegisterReducedSurfaceBuffer(
+    FRDGBuilder& GraphBuilder,
+    const TRefCountPtr<IPooledRenderTarget>& PooledTexture,
+    const FIntPoint& StoredExtent,
+    const FIntPoint& RequiredExtent)
+{
+    // FRDGTextureRefはGraphBuilderローカルであり、別callback/別graphへ持ち越せない。
+    // 永続pooled textureのサイズが現在のViewと一致するときだけ、このgraphへ再登録する。
+    if (!PooledTexture.IsValid() || StoredExtent != RequiredExtent)
+    {
+        return nullptr;
+    }
+
+    return GraphBuilder.RegisterExternalTexture(
+        PooledTexture,
+        TEXT("InstantRdv.fsp.ReducedSurfaceBuffer"));
+}
 
 INSTANT_RDV_CVAR_BOOL(
     CVarInstantRdvFspWarmStart,
@@ -1055,25 +1086,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, FspCellCount * kFspIrradianceVolumeShFloat4Count), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
             SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.fsp.FspVisibleSurfaceSourceTexelListBuffer"));
 
-            const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(InView);
-            const FIntPoint ReducedExtent(
-                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Width(), 4), 1),
-                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Height(), 4), 1));
-            SystemState.fsp.ReducedSurfaceBuffer.Extent = ReducedExtent;
-            SystemState.fsp.ReducedSurfaceBuffer.Handle = GraphBuilder.CreateTexture(
-                FRDGTextureDesc::Create2D(
-                    ReducedExtent,
-                    PF_A32B32G32R32F,
-                    FClearValueBinding::None,
-                    TexCreate_ShaderResource | TexCreate_UAV),
-                TEXT("InstantRdv.fsp.ReducedSurfaceBuffer"));
-            // Legacy経路でも初回フレームの永続化対象になるため、未生成リソースにならないよう明示的に初期化する。
-            AddClearUAVPass(
-                GraphBuilder,
-                GraphBuilder.CreateUAV(SystemState.fsp.ReducedSurfaceBuffer.Handle),
-                FLinearColor::Transparent);
-
-
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle), 0u);
@@ -1098,9 +1110,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayRequestBuffer.Handle, &SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayResultBuffer.Handle, &SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspPackedSHBuffer.Handle, &SystemState.fsp.FspPackedSHBuffer.PooledBuffer);
-            GraphBuilder.QueueTextureExtraction(
-                SystemState.fsp.ReducedSurfaceBuffer.Handle,
-                &SystemState.fsp.ReducedSurfaceBuffer.PooledTexture);
         }
     }
     else
@@ -1130,17 +1139,6 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
             SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspPackedSHBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
-            const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(InView);
-            const FIntPoint ReducedExtent(
-                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Width(), 4), 1),
-                FMath::Max(FMath::DivideAndRoundUp(ViewRect.Height(), 4), 1));
-            if (SystemState.fsp.ReducedSurfaceBuffer.PooledTexture.IsValid() &&
-                SystemState.fsp.ReducedSurfaceBuffer.Extent == ReducedExtent)
-            {
-                SystemState.fsp.ReducedSurfaceBuffer.Handle = GraphBuilder.RegisterExternalTexture(
-                    SystemState.fsp.ReducedSurfaceBuffer.PooledTexture,
-                    TEXT("InstantRdv.fsp.ReducedSurfaceBuffer"));
-            }
         }
     }
 
@@ -1293,10 +1291,34 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvToroidalClear"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
 
-    const bool bUseReducedPath =
-        bUseReducedSurfaceBuffer &&
-        SystemState.fsp.ReducedSurfaceBuffer.Handle != nullptr;
     const FIntRect MainViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+    const FIntPoint ReducedExtent = CalcReducedSurfaceBufferExtent(MainViewRect);
+    const bool bUseReducedPath = bUseReducedSurfaceBuffer;
+    FRDGTextureRef ReducedSurfaceTexture = nullptr;
+    bool bCreatedReducedSurfaceTexture = false;
+    if (bUseReducedPath)
+    {
+        ReducedSurfaceTexture = RegisterReducedSurfaceBuffer(
+            GraphBuilder,
+            SystemState.fsp.ReducedSurfaceBuffer.PooledTexture,
+            SystemState.fsp.ReducedSurfaceBuffer.Extent,
+            ReducedExtent);
+        if (ReducedSurfaceTexture == nullptr)
+        {
+            // View解像度が変わった場合、旧pooled textureを後段が新サイズと誤認しないよう先に切り離す。
+            // 新textureはこのGeometry graphで生成・使用し、graph実行後にExtraction結果が永続状態へ入る。
+            SystemState.fsp.ReducedSurfaceBuffer.PooledTexture.SafeRelease();
+            SystemState.fsp.ReducedSurfaceBuffer.Extent = ReducedExtent;
+            ReducedSurfaceTexture = GraphBuilder.CreateTexture(
+                FRDGTextureDesc::Create2D(
+                    ReducedExtent,
+                    PF_A32B32G32R32F,
+                    FClearValueBinding::None,
+                    TexCreate_ShaderResource | TexCreate_UAV),
+                TEXT("InstantRdv.fsp.ReducedSurfaceBuffer"));
+            bCreatedReducedSurfaceTexture = true;
+        }
+    }
     if (bUseReducedPath)
     {
         FInstantRdvReducedSurfaceBufferBuildCS::FParameters* Parameters =
@@ -1314,11 +1336,11 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         Parameters->InvProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
         Parameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetViewToClip());
         Parameters->SceneDepthTexture = SceneDepthTexture;
-        Parameters->RWReducedSurfaceBuffer = GraphBuilder.CreateUAV(SystemState.fsp.ReducedSurfaceBuffer.Handle);
+        Parameters->RWReducedSurfaceBuffer = GraphBuilder.CreateUAV(ReducedSurfaceTexture);
 
         TShaderMapRef<FInstantRdvReducedSurfaceBufferBuildCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-        const uint32 GroupX = FMath::DivideAndRoundUp(static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X), 8u);
-        const uint32 GroupY = FMath::DivideAndRoundUp(static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y), 8u);
+        const uint32 GroupX = FMath::DivideAndRoundUp(static_cast<uint32>(ReducedExtent.X), 8u);
+        const uint32 GroupY = FMath::DivideAndRoundUp(static_cast<uint32>(ReducedExtent.Y), 8u);
         FComputeShaderUtils::AddPass(
             GraphBuilder,
             RDG_EVENT_NAME("InstantRdv.ReducedSurfaceBufferBuild"),
@@ -1326,6 +1348,14 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             ComputeShader,
             Parameters,
             FIntVector(GroupX, GroupY, 1));
+        if (bCreatedReducedSurfaceTexture)
+        {
+            // 新規RDG textureだけをExtractionして次フレーム以降へ永続化する。
+            // 既存pooled textureを再登録した場合は本体へ直接書き込まれるため、再Extractionは不要。
+            GraphBuilder.QueueTextureExtraction(
+                ReducedSurfaceTexture,
+                &SystemState.fsp.ReducedSurfaceBuffer.PooledTexture);
+        }
     }
 
     if (bEnableMainViewGeometryInjection)
@@ -1366,17 +1396,16 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
                 FMatrix44f(View.ViewMatrices.GetViewToClip().InverseFast());
             Parameters->ProjectionMatrix =
                 FMatrix44f(View.ViewMatrices.GetViewToClip());
-            Parameters->ReducedSurfaceBuffer =
-                SystemState.fsp.ReducedSurfaceBuffer.Handle;
+            Parameters->ReducedSurfaceBuffer = ReducedSurfaceTexture;
             Parameters->RWBbvBuffer =
                 GraphBuilder.CreateUAV(SystemState.bbv.BbvBuffer.Handle);
             TShaderMapRef<FInstantRdvBbvReducedSurfaceInjectionCS> ComputeShader(
                 GetGlobalShaderMap(View.GetFeatureLevel()));
             const uint32 GroupX = FMath::DivideAndRoundUp(
-                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X),
+                static_cast<uint32>(ReducedExtent.X),
                 8u);
             const uint32 GroupY = FMath::DivideAndRoundUp(
-                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y),
+                static_cast<uint32>(ReducedExtent.Y),
                 8u);
             FComputeShaderUtils::AddPass(
                 GraphBuilder,
@@ -1586,12 +1615,21 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
 
     const uint32 BrickCount = SystemState.bbv.TrGrid.GetCellCount();
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+    const FIntPoint ReducedExtent = CalcReducedSurfaceBufferExtent(ViewRect);
 
     if (bEnableRadianceInjection)
     {
-        const bool bUseReducedPath =
-            bUseReducedSurfaceBuffer &&
-            SystemState.fsp.ReducedSurfaceBuffer.Handle != nullptr;
+        // ReducedSurfaceBufferはBasePass前のGeometry graphで生成され、pooled textureとして
+        // BeforeDOFまで受け渡される。ここでは現行GraphBuilderへ登録したローカルハンドルだけを使う。
+        // 未生成またはView解像度不一致なら、古いtextureを読むよりLegacy injectionへ安全にfallbackする。
+        FRDGTextureRef ReducedSurfaceTexture = bUseReducedSurfaceBuffer
+            ? RegisterReducedSurfaceBuffer(
+                GraphBuilder,
+                SystemState.fsp.ReducedSurfaceBuffer.PooledTexture,
+                SystemState.fsp.ReducedSurfaceBuffer.Extent,
+                ReducedExtent)
+            : nullptr;
+        const bool bUseReducedPath = ReducedSurfaceTexture != nullptr;
         if (bUseReducedPath)
         {
             FInstantRdvBbvReducedRadianceInjectionCS::FParameters* Parameters =
@@ -1632,8 +1670,7 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
                 CVarInstantRdvBbvRadianceShortRayFallback.GetValueOnRenderThread() != 0
                     ? 1u
                     : 0u;
-            Parameters->ReducedSurfaceBuffer =
-                SystemState.fsp.ReducedSurfaceBuffer.Handle;
+            Parameters->ReducedSurfaceBuffer = ReducedSurfaceTexture;
             Parameters->SceneColorTexture = SceneColorTexture;
             Parameters->BbvBuffer = GraphBuilder.CreateSRV(BbvBuffer);
             Parameters->RWBbvRadianceAccumBuffer =
@@ -1641,10 +1678,10 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             TShaderMapRef<FInstantRdvBbvReducedRadianceInjectionCS> ComputeShader(
                 GetGlobalShaderMap(View.GetFeatureLevel()));
             const uint32 GroupX = FMath::DivideAndRoundUp(
-                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X),
+                static_cast<uint32>(ReducedExtent.X),
                 8u);
             const uint32 GroupY = FMath::DivideAndRoundUp(
-                static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y),
+                static_cast<uint32>(ReducedExtent.Y),
                 8u);
             FComputeShaderUtils::AddPass(
                 GraphBuilder,
@@ -1801,15 +1838,24 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     }
 
     const FIntRect ViewRect = UE::FXRenderingUtils::GetRawViewRectUnsafe(View);
+    const FIntPoint ReducedExtent = CalcReducedSurfaceBufferExtent(ViewRect);
     const uint32 FspSurfaceMaskWordCount = FMath::DivideAndRoundUp(FspCellCount, 32u);
     FRDGBufferRef FspSurfaceCellMaskBuffer = GraphBuilder.CreateBuffer(
         FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspSurfaceMaskWordCount),
         TEXT("InstantRdv.FspSurfaceCellMask"));
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer), 0u);
 
-    const bool bUseReducedPath =
-        bUseReducedSurfaceBuffer &&
-        SystemState.fsp.ReducedSurfaceBuffer.Handle != nullptr;
+    // FSP detectionとPreUpdateは必ず同じローカルRDG textureを共有する。
+    // CVarがReducedを要求していても、Geometry graphからのExtractionが未完了またはサイズ不一致なら
+    // この更新世代全体をLegacy検出へfallbackし、Reduced検出とLegacy relocationの混在を防ぐ。
+    FRDGTextureRef ReducedSurfaceTexture = bUseReducedSurfaceBuffer
+        ? RegisterReducedSurfaceBuffer(
+            GraphBuilder,
+            SystemState.fsp.ReducedSurfaceBuffer.PooledTexture,
+            SystemState.fsp.ReducedSurfaceBuffer.Extent,
+            ReducedExtent)
+        : nullptr;
+    const bool bUseReducedPath = ReducedSurfaceTexture != nullptr;
     if (bUseReducedPath)
     {
         FInstantRdvFspSurfaceDetectReducedCS::FParameters* Parameters =
@@ -1834,8 +1880,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->ProjectionMatrix =
             FMatrix44f(View.ViewMatrices.GetViewToClip());
         Parameters->VisibleSurfaceListCapacity = FspCellCount;
-        Parameters->ReducedSurfaceBuffer =
-            SystemState.fsp.ReducedSurfaceBuffer.Handle;
+        Parameters->ReducedSurfaceBuffer = ReducedSurfaceTexture;
         Parameters->RWFspSurfaceCellMask =
             GraphBuilder.CreateUAV(FspSurfaceCellMaskBuffer);
         Parameters->RWFspVisibleSurfaceList =
@@ -1846,10 +1891,10 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         TShaderMapRef<FInstantRdvFspSurfaceDetectReducedCS> ComputeShader(
             GetGlobalShaderMap(View.GetFeatureLevel()));
         const uint32 GroupX = FMath::DivideAndRoundUp(
-            static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.X),
+            static_cast<uint32>(ReducedExtent.X),
             8u);
         const uint32 GroupY = FMath::DivideAndRoundUp(
-            static_cast<uint32>(SystemState.fsp.ReducedSurfaceBuffer.Extent.Y),
+            static_cast<uint32>(ReducedExtent.Y),
             8u);
         FComputeShaderUtils::AddPass(
             GraphBuilder,
@@ -1934,8 +1979,11 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspVisibleSurfaceSourceTexelList =
             GraphBuilder.CreateSRV(
                 SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle);
-        Parameters->ReducedSurfaceBuffer =
-            SystemState.fsp.ReducedSurfaceBuffer.Handle;
+        // RDG texture parameterはshader分岐で未使用でも必須。
+        // Legacy時は現在のgraphに属するdummyを渡し、別graph由来のhandleやnullptrを登録しない。
+        Parameters->ReducedSurfaceBuffer = bUseReducedPath
+            ? ReducedSurfaceTexture
+            : GSystemTextures.GetBlackDummy(GraphBuilder);
         Parameters->BbvBuffer = GraphBuilder.CreateSRV(SystemState.bbv.BbvBuffer.Handle);
         Parameters->RWFspActiveProbeListCurr = GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);

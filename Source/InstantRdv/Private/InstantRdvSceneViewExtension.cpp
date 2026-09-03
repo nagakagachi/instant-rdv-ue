@@ -325,6 +325,7 @@ void FInstantRdvSceneViewExtension::ResetAcceptedViewFamilyState_RenderThread()
     FrameViews_RenderThread.Reset();
     AcceptedViewFamily_RenderThread = nullptr;
     UpdateOwnerView_RenderThread = nullptr;
+    bUseReducedSurfaceBufferForAcceptedFamily_RenderThread = true;
     bAcceptedFamilyPostProcessUpdated_RenderThread = false;
 }
 
@@ -339,6 +340,12 @@ bool FInstantRdvSceneViewExtension::TryAcceptViewFamilyForRdv_RenderThread(FRDGB
     // ここがRDV lifecycleの唯一の入口。
     // BeginFrameはFrameCountを進め、ActiveProbeListのCurr/Prev世代を決めるため、
     // View単位callbackやsecondary ViewFamilyから呼ぶと参照InstantRDVのdouble bufferingが壊れる。
+    //
+    // Reduced/Legacyの選択もこの時点でViewFamily単位に固定する。
+    // BasePass前とBeforeDOFの間でRenderThreadSafe CVarが変更されても、同じ更新世代の
+    // BBV Geometry、Radiance、FSPが異なる入力方式を使わないことが重要。
+    bUseReducedSurfaceBufferForAcceptedFamily_RenderThread =
+        CVarInstantRdvUseReducedSurfaceBuffer.GetValueOnRenderThread() != 0;
     BbvSystem->BeginFrame_RenderThread(GraphBuilder, *OwnerView);
     AcceptedViewFamily_RenderThread = &ViewFamily;
     UpdateOwnerView_RenderThread = OwnerView;
@@ -456,7 +463,7 @@ void FInstantRdvSceneViewExtension::ExecuteBbvGeometryUpdate_RenderThread(FRDGBu
         SceneDepthTexture,
         bEnableMainViewGeometryInjection,
         bEnableMainViewGeometryRemoval,
-        CVarInstantRdvUseReducedSurfaceBuffer.GetValueOnRenderThread() != 0);
+        bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
 }
 
 void FInstantRdvSceneViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& GraphBuilder, bool bDepthBufferIsPopulated)
@@ -539,8 +546,6 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
             const bool bEnableRadianceResolve =
                 bEnableRadianceUpdate &&
                 (CVarInstantRdvBbvRadianceResolve.GetValueOnRenderThread() != 0);
-            const bool bUseReducedSurfaceBuffer =
-                CVarInstantRdvUseReducedSurfaceBuffer.GetValueOnRenderThread() != 0;
             // BBV RadianceとFSPは同じowner ViewのDepth/SceneColorを入力にして、ViewFamily内で1回だけ更新する。
             // FSP ActiveProbeListはここで生成されたCurr世代を、その後のdebug表示が読み取るだけにする。
             BbvSystem->ExecuteRadianceUpdate(
@@ -551,14 +556,14 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 ViewInfo.PreExposure,
                 bEnableRadianceInjection,
                 bEnableRadianceResolve,
-                bUseReducedSurfaceBuffer);
+                bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
             BbvSystem->ExecuteFspUpdate(
                 GraphBuilder,
                 View,
                 SceneDepthTexture,
                 CVarInstantRdvFspUpdate.GetValueOnRenderThread() != 0,
                 CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
-                bUseReducedSurfaceBuffer);
+                bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
             bAcceptedFamilyPostProcessUpdated_RenderThread = true;
         }
 

@@ -5,7 +5,8 @@
 
 // 参照InstantRDVのfsp_pre_update_cs相当。
 // SurfaceMask Compactで得たvisible surface cellを処理し、未所有cellにはprobe poolからActiveProbeを割り当てる。
-// 既存probeがあるcellはLastSeenFrameだけ更新し、BeginUpdateのstale判定で消えないようにする。
+// 新規・既存を問わず、可視cellのprobe位置は選択中の入力方式で毎フレーム再評価する。
+// そのためLegacy/ReducedSurfaceBufferを実行時に切り替えても、既存probeを破棄せず次の可視更新から再配置できる。
 
 StructuredBuffer<uint> FspVisibleSurfaceList;
 StructuredBuffer<uint> FspVisibleSurfaceSourceTexelList;
@@ -434,6 +435,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
     const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
     const float3 PrevProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
+    // Legacy relocationを共通fallbackとして先に求める。
+    // Reduced modeでも、深度不連続・範囲外・owner cell不一致でsurface anchorを信頼できない場合は、
+    // BBV occupancyを使うこの位置を維持し、無効なReduced sampleでprobeを飛ばさない。
     float3 ProbeSamplePosWs = FspRelocateProbeNative(
         CellCenterWs,
         PrevProbeOffset,
@@ -443,6 +447,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     if (bUseReducedSurfaceBuffer != 0u)
     {
+        // Reduced detectionがVisibleSurfaceListと同じindexへ保存したsource texelを使う。
+        // cell indexとsource texelの対応を崩すと別surfaceの法線で再配置されるため、必ずpaired listとして読む。
         float3 SurfacePositionWs = 0.0.xxx;
         float3 SurfaceNormalWs = 0.0.xxx;
         if (FspTryGetReducedSurfaceAnchor(

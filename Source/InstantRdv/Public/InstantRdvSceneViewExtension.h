@@ -48,5 +48,8 @@ private:
     const FSceneView* UpdateOwnerView_RenderThread = nullptr;
     uint64 LastRdvUpdateFrameCounter_RenderThread = MAX_uint64;
     uint32 LastRdvUpdateFrameNumber_RenderThread = MAX_uint32;
+    // Geometry(BasePass前)とRadiance/FSP(BeforeDOF)は別callbackで実行される。
+    // callback途中のCVar変更で経路が混在しないよう、owner ViewFamily受理時の値を固定して使う。
+    bool bUseReducedSurfaceBufferForAcceptedFamily_RenderThread = true;
     bool bAcceptedFamilyPostProcessUpdated_RenderThread = false;
 };
