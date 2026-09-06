@@ -198,7 +198,10 @@ private:
             FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
             FPersistentRdgPooledBufferSet FspVisibleSurfaceSourceTexelListBuffer;
             // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
-            // ActiveProbeListはFSP更新が実行された世代だけを進め、UpdateFrameCount & 1をCurrに使う。
+            // ActiveProbeList固有のレイアウト。各物理Bufferのword 0/1を世代交代counter、
+            // word 2以降をProbe index listとして使用する。他のcounter bufferはword 0のみを
+            // counterとして使用するため、ActiveProbeListを単一counter前提で扱わないこと。
+            // これによりGPUフレーム重複時もreset中のcounterを別世代のappendが上書きしない。
             FPersistentRdgPooledBufferSet FspProbePoolBuffer;
             FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
             FPersistentRdgPooledBufferSet FspActiveProbeListBuffers[2];

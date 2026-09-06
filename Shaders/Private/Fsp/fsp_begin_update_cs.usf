@@ -36,10 +36,14 @@ void FspPushFreeProbeIndex(uint ProbeIndex)
 void FspPushCurrActiveProbeIndex(uint ProbeIndex)
 {
     uint ActiveListIndex = 0u;
-    InterlockedAdd(RWFspActiveProbeListCurr[0], 1u, ActiveListIndex);
+    InterlockedAdd(
+        RWFspActiveProbeListCurr[
+            FspActiveProbeCurrentCounterSlot(FrameCount)],
+        1u,
+        ActiveListIndex);
     if (ActiveListIndex < FspProbePoolElementCount)
     {
-        RWFspActiveProbeListCurr[ActiveListIndex + 1u] = ProbeIndex;
+        RWFspActiveProbeListCurr[FspActiveProbeListAddress(ActiveListIndex)] = ProbeIndex;
     }
 }
 
@@ -56,13 +60,24 @@ void FspClearIrradianceVolumeCell(uint CellIndex)
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint Index = DispatchThreadId.x;
-    const uint PrevActiveProbeCount = min(FspActiveProbeListPrev[0], FspProbePoolElementCount);
+    if (Index == 0u)
+    {
+        // 使用中のCurrent counterはPreUpdateがappendするため触らない。
+        // 反対側の未使用slotだけを先行clearし、同一counterへのreset/append Raceを避ける。
+        RWFspActiveProbeListCurr[
+            FspActiveProbeCurrentCounterSlot(FrameCount) ^ 1u] = 0u;
+    }
+
+    const uint PrevActiveProbeCount = min(
+        FspActiveProbeListPrev[
+            FspActiveProbePreviousCounterSlot(FrameCount)],
+        FspProbePoolElementCount);
     if (Index >= PrevActiveProbeCount)
     {
         return;
     }
 
-    const uint ProbeIndex = FspActiveProbeListPrev[Index + 1u];
+    const uint ProbeIndex = FspActiveProbeListPrev[FspActiveProbeListAddress(Index)];
     if (ProbeIndex >= FspProbePoolElementCount)
     {
         return;

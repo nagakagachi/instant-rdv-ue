@@ -1,19 +1,23 @@
 // ファイル名: fsp_counter_indirect_arg_build_cs.usf
 #include "/Engine/Public/Platform.ush"
 
-// FSP各リストの [0] counter から DispatchIndirect 用のgroup countを作る。
+// FSP各リストの指定counter slotから DispatchIndirect 用のgroup countを作る。
 // 参照InstantRDV同様、ActiveProbe数やRayRequest数に比例したdispatchにして全cell全ray実行を避ける。
+// ActiveProbeListだけはCounterSlot=0/1を切り替え、VisibleSurface/RayRequest/RayResultなどはCounterSlot=0固定。
 
 StructuredBuffer<uint> CounterBuffer;
 RWBuffer<uint> RWIndirectArg;
 
 uint ThreadGroupSizeX;
+uint CounterSlot;
 
 [numthreads(1, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    const uint WorkCount = CounterBuffer[0];
-    RWIndirectArg[0] = (WorkCount + ThreadGroupSizeX - 1u) / ThreadGroupSizeX;
+    const uint WorkCount = CounterBuffer[CounterSlot];
+    // 0件でもBeginUpdateのthread 0で未使用counterを初期化する必要がある。
+    // 各compute shader側はcounterを再確認して範囲外threadを即returnする。
+    RWIndirectArg[0] = max((WorkCount + ThreadGroupSizeX - 1u) / ThreadGroupSizeX, 1u);
     RWIndirectArg[1] = 1u;
     RWIndirectArg[2] = 1u;
 }

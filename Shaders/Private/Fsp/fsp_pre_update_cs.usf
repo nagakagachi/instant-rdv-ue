@@ -124,10 +124,14 @@ uint FspPopFreeProbeIndex()
 void FspPushCurrActiveProbeIndex(uint ProbeIndex)
 {
     uint ActiveListIndex = 0u;
-    InterlockedAdd(RWFspActiveProbeListCurr[0], 1u, ActiveListIndex);
+    InterlockedAdd(
+        RWFspActiveProbeListCurr[
+            FspActiveProbeCurrentCounterSlot(FrameCount)],
+        1u,
+        ActiveListIndex);
     if (ActiveListIndex < FspProbePoolElementCount)
     {
-        RWFspActiveProbeListCurr[ActiveListIndex + 1u] = ProbeIndex;
+        RWFspActiveProbeListCurr[FspActiveProbeListAddress(ActiveListIndex)] = ProbeIndex;
     }
 }
 

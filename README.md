@@ -22,6 +22,7 @@ SceneViewExtension を基盤に、GI 機能を積み上げるための最小構�
 - `r.InstantRdv.Fsp.VisIvProbe` で IrradianceVolume プローブ可視化（0:OFF, 1:SH radiance, 2:SH sky visibility）
 - `r.InstantRdv.Fsp.TraceUseProbeOffset` で FSP ray trace の始点に Probe offset を適用するか切り替え可能
 - `r.InstantRdv.Fsp.VisProbeUseOffset` で ActiveProbe デバッグ球の表示位置に Probe offset を適用するか切り替え可能
+- ActiveProbeListは他のFSP counter bufferと異なり、word 0/1を世代交代counter、word 2以降をProbe indexとして使用する。これはGPUフレーム重複時のreset/append競合を避けるための専用レイアウトである
 - FSP は InstantRDV 参照実装の ActiveProbe lifecycle（visible surface収集、probe pool/free stack、ray request/trace/resolve、OctMap、SH更新、IrradianceVolume伝播）をUE RDG passへ移植中
 - 既存パイプラインへの影響を最小化した初期実装
 

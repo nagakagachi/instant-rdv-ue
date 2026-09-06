@@ -31,6 +31,10 @@ static constexpr uint32 kBbvElementUpdateSkipCount = 3;
 
 static constexpr uint32 kFspIrradianceVolumeShFloat4Count = 4;
 static constexpr uint32 kFspTraceDistanceCm = 5000;
+// ActiveProbeListだけはGPU世代をまたぐreset/append Raceを避けるため、
+// 先頭2ワードを交互利用counterとして予約する。他のFSP counter bufferは従来通り[0]のみを使う。
+static constexpr uint32 kFspActiveProbeCounterSlotCount = 2;
+static constexpr uint32 kFspActiveProbeListDataOffset = 2;
 static constexpr int32 kReducedSurfaceBufferDownscale = 4;
 
 static FIntPoint CalcReducedSurfaceBufferExtent(const FIntRect& ViewRect)
@@ -609,6 +613,7 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, ThreadGroupSizeX)
+        SHADER_PARAMETER(uint32, CounterSlot)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CounterBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RWIndirectArg)
     END_SHADER_PARAMETER_STRUCT()
@@ -695,6 +700,7 @@ public:
 
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
+        SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspActiveProbeListCurr)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayRequestBuffer)
         RDG_BUFFER_ACCESS(FspActiveProbeIndirectArgBuffer, ERHIAccess::IndirectArgs)
@@ -769,6 +775,7 @@ public:
         SHADER_PARAMETER(uint32, FspGridResolutionZ)
         SHADER_PARAMETER(uint32, FspCascadeCount)
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
+        SHADER_PARAMETER(uint32, FrameCount)
         SHADER_PARAMETER(float, FspCellSizeCm)
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspActiveProbeListCurr)
@@ -914,6 +921,7 @@ public:
         SHADER_PARAMETER(uint32, ViewRectSizeX)
         SHADER_PARAMETER(uint32, ViewRectSizeY)
         SHADER_PARAMETER(uint32, FspProbePoolElementCount)
+        SHADER_PARAMETER(uint32, ActiveProbeFrameCount)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceList)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspActiveProbeListCurr)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbeRayRequestBuffer)
@@ -1078,8 +1086,13 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspProbeFreeStackBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.fsp.FspProbeFreeStackBuffer"));
             // 参照InstantRDVと同じくActiveProbeListは2本だけ確保し、毎フレームcurr/prev indexを入れ替える。
             // 固定Prev/Currへ末尾コピーすると不要な全ActiveProbeコピーpassが発生するため避ける。
-            SystemState.fsp.FspActiveProbeListBuffers[0].Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeList0"));
-            SystemState.fsp.FspActiveProbeListBuffers[1].Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + 1u), TEXT("InstantRdv.FspActiveProbeList1"));
+            // ActiveProbeList固有のレイアウト:
+            //   word 0..1: 交互利用する世代別counter
+            //   word 2.. : ActiveProbe index payload
+            // VisibleSurface/RayRequest/RayResult/FreeStackなど、他のcounter bufferは
+            // 先頭word 0だけがcounterであり、この+2レイアウトを共有しない。
+            SystemState.fsp.FspActiveProbeListBuffers[0].Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + kFspActiveProbeListDataOffset), TEXT("InstantRdv.FspActiveProbeList0"));
+            SystemState.fsp.FspActiveProbeListBuffers[1].Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspCellCount + kFspActiveProbeListDataOffset), TEXT("InstantRdv.FspActiveProbeList1"));
             SystemState.fsp.FspProbeAtlasBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32) * 4, FspRayWorkCount), TEXT("InstantRdv.fsp.FspProbeAtlasBuffer"));
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount + 1u), TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount * k_irdv_fsp_ray_result_data_stride + 1u), TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
@@ -1106,7 +1119,13 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeFreeStackBuffer.Handle, &SystemState.fsp.FspProbeFreeStackBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListBuffers[0].Handle, &SystemState.fsp.FspActiveProbeListBuffers[0].PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspActiveProbeListBuffers[1].Handle, &SystemState.fsp.FspActiveProbeListBuffers[1].PooledBuffer);
-            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeAtlasBuffer.Handle, &SystemState.fsp.FspProbeAtlasBuffer.PooledBuffer);
+            // Atlasはこのgraph内ではUAV書込み後にSRV読出しへ遷移する。
+            // 外部Bufferへ戻す状態もSRVとして明示し、次のgraphの先頭で
+            // 前frameのUAV状態を引き継がないようにする。
+            GraphBuilder.QueueBufferExtraction(
+                SystemState.fsp.FspProbeAtlasBuffer.Handle,
+                &SystemState.fsp.FspProbeAtlasBuffer.PooledBuffer,
+                ERHIAccess::SRVMask);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayRequestBuffer.Handle, &SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayResultBuffer.Handle, &SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspPackedSHBuffer.Handle, &SystemState.fsp.FspPackedSHBuffer.PooledBuffer);
@@ -1763,10 +1782,11 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     const uint32 FspActiveProbePrevListIndex = 1u - FspActiveProbeCurrListIndex;
     FRDGBufferRef FspActiveProbeListCurrBuffer = SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbeCurrListIndex].Handle;
     FRDGBufferRef FspActiveProbeListPrevBuffer = SystemState.fsp.FspActiveProbeListBuffers[FspActiveProbePrevListIndex].Handle;
-    // FSPの主要passは [0]=count のlist bufferを入力にする。
-    // countからDispatchIndirect引数を毎回GPU上で作り、全cell/全rayをdispatchしない参照設計を保つ。
+    // FSPのActiveProbeListは先頭2ワードが世代別counter、ワード2以降がprobe index list。
+    // VisibleSurface/RayRequest/RayResultなどの単一counter bufferとはレイアウトが異なるため、
+    // ActiveProbeListを入力にする呼び出しだけslotを渡し、それ以外はslot 0を指定する。
     auto AddFspCounterIndirectArgBuildPass =
-        [&](const TCHAR* PassName, FRDGBufferRef CounterBuffer, uint32 ThreadGroupSizeX) -> FRDGBufferRef
+        [&](const TCHAR* PassName, FRDGBufferRef CounterBuffer, uint32 ThreadGroupSizeX, uint32 CounterSlot) -> FRDGBufferRef
         {
             FRDGBufferRef IndirectArgBuffer = GraphBuilder.CreateBuffer(
                 FRDGBufferDesc::CreateIndirectDesc<FRHIDispatchIndirectParameters>(1),
@@ -1774,6 +1794,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
 
             FInstantRdvFspCounterIndirectArgBuildCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspCounterIndirectArgBuildCS::FParameters>();
             Parameters->ThreadGroupSizeX = ThreadGroupSizeX;
+            Parameters->CounterSlot = CounterSlot;
             Parameters->CounterBuffer = GraphBuilder.CreateSRV(CounterBuffer);
             Parameters->RWIndirectArg = GraphBuilder.CreateUAV(FRDGBufferUAVDesc(IndirectArgBuffer, PF_R32_UINT));
             TShaderMapRef<FInstantRdvFspCounterIndirectArgBuildCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
@@ -1801,14 +1822,21 @@ void FInstantRdvBbv::ExecuteFspUpdate(
 
     // フレーム一時counter類を初期化する。
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle), 0u);
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FspActiveProbeListCurrBuffer), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle), 0u);
+
+    const uint32 FspActiveProbeCurrentCounterSlot =
+        (SystemState.fsp.FspUpdateFrameCount >> 1u) & (kFspActiveProbeCounterSlotCount - 1u);
+    const uint32 FspActiveProbePreviousCounterSlot =
+        SystemState.fsp.FspUpdateFrameCount == 0u
+            ? 0u
+            : ((SystemState.fsp.FspUpdateFrameCount - 1u) >> 1u) & (kFspActiveProbeCounterSlotCount - 1u);
 
     FRDGBufferRef FspPrevActiveProbeIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
         TEXT("InstantRdv.FspPrevActiveProbeIndirectArg"),
         FspActiveProbeListPrevBuffer,
-        k_irdv_fsp_probe_update_thread_group_size);
+        k_irdv_fsp_probe_update_thread_group_size,
+        FspActiveProbePreviousCounterSlot);
 
     {
         // Prev ActiveProbe listを検査し、生存probeだけCurrへ引き継ぐ。
@@ -1945,7 +1973,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     FRDGBufferRef FspPreUpdateIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
         TEXT("InstantRdv.FspPreUpdateIndirectArg"),
         SystemState.fsp.FspVisibleSurfaceListBuffer.Handle,
-        k_irdv_fsp_probe_update_thread_group_size);
+        k_irdv_fsp_probe_update_thread_group_size,
+        0u);
 
     {
         // Visible surface cellへprobeを割り当て、既存probeはLastSeenFrameを更新する。
@@ -1998,13 +2027,15 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     FRDGBufferRef FspActiveProbeIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
         TEXT("InstantRdv.FspActiveProbeIndirectArg"),
         FspActiveProbeListCurrBuffer,
-        k_irdv_fsp_probe_update_thread_group_size);
+        k_irdv_fsp_probe_update_thread_group_size,
+        FspActiveProbeCurrentCounterSlot);
 
     {
         // ActiveProbeごとに6x6 OctMap方向のray requestを生成する。
         // 以降のtrace/resolveはrequest/result counterで間接dispatchする。
         FInstantRdvFspProbeRayRequestCS::FParameters* Parameters = GraphBuilder.AllocParameters<FInstantRdvFspProbeRayRequestCS::FParameters>();
         Parameters->FspProbePoolElementCount = FspCellCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(FspActiveProbeListCurrBuffer);
         Parameters->RWFspProbeRayRequestBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle);
         Parameters->FspActiveProbeIndirectArgBuffer = FspActiveProbeIndirectArgBuffer;
@@ -2015,7 +2046,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     FRDGBufferRef FspTraceIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
         TEXT("InstantRdv.FspTraceIndirectArg"),
         SystemState.fsp.FspProbeRayRequestBuffer.Handle,
-        k_irdv_fsp_ray_linear_thread_group_size);
+        k_irdv_fsp_ray_linear_thread_group_size,
+        0u);
 
     {
         // Probe rayをBBVへtraceする。ここで走るthread数はactive probe数 * 36方向に限定される。
@@ -2050,7 +2082,8 @@ void FInstantRdvBbv::ExecuteFspUpdate(
     FRDGBufferRef FspResolveIndirectArgBuffer = AddFspCounterIndirectArgBuildPass(
         TEXT("InstantRdv.FspResolveIndirectArg"),
         SystemState.fsp.FspProbeRayResultBuffer.Handle,
-        k_irdv_fsp_ray_linear_thread_group_size);
+        k_irdv_fsp_ray_linear_thread_group_size,
+        0u);
 
     {
         // Trace結果をOctMap atlasへresolveし、BBV radianceまたはsky visibilityを履歴blendする。
@@ -2080,6 +2113,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
         Parameters->FspCascadeCount = FspCascadeCount;
         Parameters->FspProbePoolElementCount = FspCellCount;
+        Parameters->FrameCount = SystemState.fsp.FspUpdateFrameCount;
         Parameters->FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspActiveProbeListCurr = GraphBuilder.CreateSRV(FspActiveProbeListCurrBuffer);
@@ -2311,6 +2345,10 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->ViewRectSizeX = static_cast<uint32>(FMath::Max(ViewRect.Width(), 1));
             Parameters->ViewRectSizeY = static_cast<uint32>(FMath::Max(ViewRect.Height(), 1));
             Parameters->FspProbePoolElementCount = ProbeCount;
+            Parameters->ActiveProbeFrameCount =
+                SystemState.fsp.FspUpdateFrameCount == 0u
+                    ? 0u
+                    : SystemState.fsp.FspUpdateFrameCount - 1u;
             const uint32 FspActiveProbeCurrListIndex = (SystemState.fsp.FspUpdateFrameCount == 0u)
                 ? 0u
                 : (1u - (SystemState.fsp.FspUpdateFrameCount & 1u));

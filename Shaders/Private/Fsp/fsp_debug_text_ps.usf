@@ -1,5 +1,6 @@
 // ファイル名: fsp_debug_text_ps.usf
 #include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
 
 // FSPデバッグ用カウンタ表示。
 // GPU counterをCPU readbackせず画面に出すため、数値部分だけ簡易7セグメントで描く。
@@ -14,6 +15,7 @@ StructuredBuffer<uint> FspProbeFreeStack;
 uint ViewRectSizeX;
 uint ViewRectSizeY;
 uint FspProbePoolElementCount;
+uint ActiveProbeFrameCount;
 
 struct VsOutput
 {
@@ -92,7 +94,10 @@ uint GetCounterValue(uint Row)
     }
     if (Row == 1u)
     {
-        return min(FspActiveProbeListCurr[0], FspProbePoolElementCount);
+        return min(
+            FspActiveProbeListCurr[
+                FspActiveProbeCurrentCounterSlot(ActiveProbeFrameCount)],
+            FspProbePoolElementCount);
     }
     if (Row == 2u)
     {

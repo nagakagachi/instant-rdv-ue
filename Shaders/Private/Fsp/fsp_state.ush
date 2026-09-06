@@ -10,6 +10,31 @@
 static const uint kFspRayCountPerProbe = k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width;
 static const uint kFspRayRequestOctCellBits = 8u;
 static const uint kFspRayRequestOctCellMask = (1u << kFspRayRequestOctCellBits) - 1u;
+// ActiveProbeList専用のレイアウト。他のFSP counter bufferは[0]がcounterでpayloadは[1]から始まる。
+// ActiveProbeListだけはGPU世代をまたぐreset/append Raceを避けるため、word 0/1を交互利用する。
+static const uint kFspActiveProbeCounterSlotCount = 2u;
+static const uint kFspActiveProbeListDataOffset = 2u;
+
+uint FspActiveProbeCurrentCounterSlot(uint UpdateFrameCount)
+{
+    // UE側のFspUpdateFrameCountは0始まり。物理BufferがCurrentになるたびにcounter slotを交互利用する。
+    return (UpdateFrameCount >> 1u) & (kFspActiveProbeCounterSlotCount - 1u);
+}
+
+uint FspActiveProbePreviousCounterSlot(uint UpdateFrameCount)
+{
+    // 初回フレームはPrevious listが未使用なので、初期clear済みslot 0を読む。
+    if (UpdateFrameCount == 0u)
+    {
+        return 0u;
+    }
+    return ((UpdateFrameCount - 1u) >> 1u) & (kFspActiveProbeCounterSlotCount - 1u);
+}
+
+uint FspActiveProbeListAddress(uint ActiveProbeIndex)
+{
+    return ActiveProbeIndex + kFspActiveProbeListDataOffset;
+}
 
 uint FspGridResolutionX;
 uint FspGridResolutionY;

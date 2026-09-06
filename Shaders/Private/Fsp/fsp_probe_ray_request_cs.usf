@@ -9,18 +9,22 @@ StructuredBuffer<uint> FspActiveProbeListCurr;
 RWStructuredBuffer<uint> RWFspProbeRayRequestBuffer;
 
 uint FspProbePoolElementCount;
+uint FrameCount;
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint ActiveIndex = DispatchThreadId.x;
-    const uint ActiveProbeCount = min(FspActiveProbeListCurr[0], FspProbePoolElementCount);
+    const uint ActiveProbeCount = min(
+        FspActiveProbeListCurr[
+            FspActiveProbeCurrentCounterSlot(FrameCount)],
+        FspProbePoolElementCount);
     if (ActiveIndex >= ActiveProbeCount)
     {
         return;
     }
 
-    const uint ProbeIndex = FspActiveProbeListCurr[ActiveIndex + 1u];
+    const uint ProbeIndex = FspActiveProbeListCurr[FspActiveProbeListAddress(ActiveIndex)];
     if (ProbeIndex >= FspProbePoolElementCount)
     {
         return;
