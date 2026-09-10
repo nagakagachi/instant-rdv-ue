@@ -93,6 +93,18 @@ INSTANT_RDV_CVAR_FLOAT(
 
 
 
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspCascadeDitherInterpolation,
+    TEXT("r.InstantRdv.Fsp.CascadeDitherInterpolation"),
+    1,
+    TEXT("マテリアルからのIrradiance / SkyVisibility取得時のカスケード間ディザ補間。\n")
+    TEXT("0: Disabled (finest cascade only)\n")
+    TEXT("1: Enabled (uses material dither range)"),
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("Cascade dither interpolation"),
+    50);
+
 TGlobalResource<FEmptyVertexDeclaration, FRenderResource::EInitPhase::Pre> GInstantRdvNullVertexDeclaration;
 
 // 移植時の重要注意（RDG/RHI）:
@@ -1204,6 +1216,7 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     OutParams.FspIrradianceVolumeCellCount = CellCount;
     OutParams.FspIrradianceVolumeSHFloat4Count = kFspIrradianceVolumeShFloat4Count;
     OutParams.FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
+    OutParams.FspCascadeDitherInterpolation = CVarInstantRdvFspCascadeDitherInterpolation.GetValueOnRenderThread() != 0 ? 1u : 0u;
     OutParams.FspGridCenterPositionWs = FVector3f(SystemState.fsp.CurrentGridCenterPositionWs);
     OutParams.FspIrradianceVolumeSH = bUseLiveResources && SystemState.fsp.FspPackedSHBuffer.Handle != nullptr
         ? GraphBuilder.CreateSRV(SystemState.fsp.FspPackedSHBuffer.Handle)

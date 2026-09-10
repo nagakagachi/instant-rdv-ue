@@ -249,7 +249,24 @@ bool FspUtilTryGetTrilinearCellCoordinates(
     return true;
 }
 
-// ワールド位置を含む最細Cascadeと、そのCascadeのトリリニア座標を一度に求める。
+// 連続したカメラ位置を中心に、量子化のずれを吸収する1セルの余白を確保する。
+// 軸ごとの解像度を保持し、立方体以外のグリッドにも対応する。
+float3 FspUtilCascadeSelectionHalfExtentWs(FInstantRdvFspGridParams Params, uint CascadeIndex)
+{
+    return max(
+        float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * 0.5 - 1.0,
+        0.0.xxx) * FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+}
+
+float FspUtilCascadeSelectionBoundaryDistanceWs(
+    FInstantRdvFspGridParams Params, float3 WorldPositionWs, uint CascadeIndex)
+{
+    const float3 DistanceToBoundary = FspUtilCascadeSelectionHalfExtentWs(Params, CascadeIndex)
+        - abs(WorldPositionWs - Params.GridCenterPositionWs);
+    return min(DistanceToBoundary.x, min(DistanceToBoundary.y, DistanceToBoundary.z));
+}
+
+// 連続位置の選択境界から最細Cascadeとトリリニア座標を求める。
 bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
     FInstantRdvFspGridParams Params,
     float3 WorldPositionWs,
@@ -270,6 +287,13 @@ bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
         if (CascadeIndex >= CascadeCount)
         {
             break;
+        }
+
+        // 親のない最終Cascadeは、余白で縮めず実グリッド全域を利用する。
+        if (CascadeIndex + 1u < CascadeCount &&
+            FspUtilCascadeSelectionBoundaryDistanceWs(Params, WorldPositionWs, CascadeIndex) < 0.0)
+        {
+            continue;
         }
 
         if (FspUtilTryGetTrilinearCellCoordinates(
@@ -475,7 +499,8 @@ float FspUtilCascadeDitherNoise(float3 WorldPositionWs)
 }
 
 // 最細Cascadeの境界付近で、最細Cascadeまたは一つ上のCascadeを確率的に選択する。
-// Dither範囲は最細Cascadeのセル数で指定し、境界から範囲内に入るほど上位Cascadeの選択確率を増やす。
+// 選択と同じ連続位置の境界を使い、グリッドのスナップによるディザ率の跳躍を防ぐ。
+// Dither範囲は最細Cascadeのセル数で指定し、小さいグリッドでは補間帯の重なりを防ぐ。
 // 両Cascadeを同時にロードせず、選択された方だけをサンプリングする。
 bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
     StructuredBuffer<float4> IrradianceVolumeSH,
@@ -494,20 +519,19 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
 {
     const uint CoarseCascadeIndex = FineCascadeIndex + 1u;
     const float FineCellSize = FspUtilCascadeCellSizeCm(GridParams, FineCascadeIndex);
-    const float3 FineGridMin = FspUtilCascadeGridMinPositionWs(GridParams, FineCascadeIndex);
-    const float3 FineGridCoord = (WorldPositionWs - FineGridMin) / max(FineCellSize, 0.001);
-    const float3 FineGridResolution = float3(
-        GridParams.GridResolutionX,
-        GridParams.GridResolutionY,
-        GridParams.GridResolutionZ);
-    const float3 DistanceToBoundary = min(FineGridCoord, FineGridResolution - FineGridCoord);
-    const float DistanceToNearestBoundary = min(
-        DistanceToBoundary.x,
-        min(DistanceToBoundary.y, DistanceToBoundary.z));
+    const float3 HalfExtent = FspUtilCascadeSelectionHalfExtentWs(GridParams, FineCascadeIndex);
+    const float MinHalfExtent = min(HalfExtent.x, min(HalfExtent.y, HalfExtent.z));
+    const float DitherWidthWs = min(max(DitherRangeCells, 0.0) * FineCellSize, MinHalfExtent * 0.5);
+    const float DistanceToNearestBoundary = FspUtilCascadeSelectionBoundaryDistanceWs(
+        GridParams, WorldPositionWs, FineCascadeIndex);
     const float CoarseBlendWeight = 1.0 - saturate(
-        DistanceToNearestBoundary / max(DitherRangeCells, 0.001));
+        DistanceToNearestBoundary / max(DitherWidthWs, 0.001));
 
     const bool bUseCoarseCascade =
+#if IS_MATERIAL_SHADER
+        // Scene UB経由で切り替え、既存CustomNodeの引数や補間幅を維持する。
+        Scene.InstantRdvParam.FspCascadeDitherInterpolation != 0u &&
+#endif
         CoarseCascadeIndex < FspUtilEffectiveCascadeCount(GridParams) &&
         DitherRangeCells > 0.0 &&
         FspUtilCascadeDitherNoise(WorldPositionWs) < CoarseBlendWeight;
