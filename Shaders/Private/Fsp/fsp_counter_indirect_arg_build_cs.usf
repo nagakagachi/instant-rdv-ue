@@ -10,11 +10,12 @@ RWBuffer<uint> RWIndirectArg;
 
 uint ThreadGroupSizeX;
 uint CounterSlot;
+uint WorkCapacity;
 
 [numthreads(1, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    const uint WorkCount = CounterBuffer[CounterSlot];
+    const uint WorkCount = min(CounterBuffer[CounterSlot], WorkCapacity);
     // 0件でもBeginUpdateのthread 0で未使用counterを初期化する必要がある。
     // 各compute shader側はcounterを再確認して範囲外threadを即returnする。
     RWIndirectArg[0] = max((WorkCount + ThreadGroupSizeX - 1u) / ThreadGroupSizeX, 1u);

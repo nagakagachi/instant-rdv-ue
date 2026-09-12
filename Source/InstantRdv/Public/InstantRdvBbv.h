@@ -1,4 +1,4 @@
-﻿/*
+/*
     InstantRdvBbv.h
 */
 
@@ -35,6 +35,11 @@ struct FInstantRdvFspConfig
     FIntVector ProbeGridResolution = FIntVector(32, 32, 32);
     float ProbeCellSizeCm = 200.0f;
     uint32 ProbeCascadeCount = 5;
+    // Denseセル数とは独立した全カスケード共通のSparse容量。
+    uint32 ProbeCapacity = 8192;
+    uint32 VisibleSurfaceCapacity = 4096;
+    uint32 GetRayCapacity() const { return ProbeCapacity * k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width; }
+    uint32 GetAtlasTileWidth() const { return FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::CeilToInt(FMath::Sqrt(static_cast<float>(ProbeCapacity))))); }
 
     uint32 GetFspCellCount() const;
     uint32 GetFspTotalCellCount() const;
@@ -163,8 +168,9 @@ private:
     struct FPersistentRdgPooledTextureSet
     {
         // フレームをまたいで保持できるのはpooled texture本体だけ。
-        // FRDGTextureRefは生成元FRDGBuilder専用の一時ハンドルなので、永続状態には保存しない。
+        // Handleは現在のFRDGBuilder内だけで使用し、BeginFrameごとに生成または再登録する。
         TRefCountPtr<IPooledRenderTarget> PooledTexture{};
+        FRDGTextureRef Handle{};
         FIntPoint Extent = FIntPoint::ZeroValue;
     };
 
@@ -206,7 +212,7 @@ private:
             FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
             FPersistentRdgPooledBufferSet FspActiveProbeListBuffers[2];
             // ProbeAtlasはActiveProbeごとの6x6 OctMap、PackedSHはdense IrradianceVolume cellごとのL1 SH。
-            FPersistentRdgPooledBufferSet FspProbeAtlasBuffer;
+            FPersistentRdgPooledTextureSet FspProbeAtlas;
             FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
             FPersistentRdgPooledBufferSet FspProbeRayResultBuffer;
             FPersistentRdgPooledBufferSet FspPackedSHBuffer;

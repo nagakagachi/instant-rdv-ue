@@ -1,6 +1,6 @@
 // ファイル名: fsp_init_pool_cs.usf
 // FSP probe pool / free stack 初期化シェーダ。
-// 参照InstantRDVと同じく、probeはcell数分のpoolからfree stack経由で割り当てる。
+// Probe容量とDenseセル数を分離し、有限poolからfree stack経由で割り当てる。
 // CellProbeIndexはcell -> probe ownership、ProbePoolはprobe -> owner/offset/frame情報を保持する。
 #include "/Engine/Public/Platform.ush"
 
@@ -11,11 +11,21 @@ RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
 RWStructuredBuffer<float4> RWFspIrradianceVolumeSH;
 uint ProbePoolElementCount;
+uint TotalCellCount;
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     uint idx = DispatchThreadId.x;
+    if (idx < TotalCellCount)
+    {
+        RWFspCellProbeIndex[idx] = k_irdv_fsp_invalid_probe_index;
+        [unroll]
+        for (uint CoeffIndex = 0u; CoeffIndex < k_irdv_fsp_irradiance_volume_sh_float4_count; ++CoeffIndex)
+        {
+            RWFspIrradianceVolumeSH[FspIrradianceVolumeSHAddress(idx, CoeffIndex)] = 0.0.xxxx;
+        }
+    }
     if (idx >= ProbePoolElementCount)
     {
         return;
@@ -23,8 +33,6 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     // LIFO になるように逆順で格納する。初回popが0番probeになり、debug時の対応を追いやすい。
     RWFspProbeFreeStack[1 + idx] = ProbePoolElementCount - 1u - idx;
-    RWFspCellProbeIndex[idx] = k_irdv_fsp_invalid_probe_index;
-
     FInstantRdvFspProbePoolData Data;
     Data.OwnerCellIndex = k_irdv_fsp_invalid_probe_index;
     Data.ProbeOffsetV3 = 0u;
@@ -36,13 +44,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     Data.Reserved3 = 0u;
     FspStoreProbePoolData(RWFspProbePool, idx, Data);
 
-    [unroll]
-    for (uint CoeffIndex = 0u; CoeffIndex < k_irdv_fsp_irradiance_volume_sh_float4_count; ++CoeffIndex)
-    {
-        RWFspIrradianceVolumeSH[FspIrradianceVolumeSHAddress(idx, CoeffIndex)] = 0.0.xxxx;
-    }
-
-    // stack payloadを書き終えた後、スレッド0 がcountをセットする。
+    // thread 0がcountを設定する。次passからの参照はRDGの依存で保証する。
     if (idx == 0u)
     {
         RWFspProbeFreeStack[0] = ProbePoolElementCount;

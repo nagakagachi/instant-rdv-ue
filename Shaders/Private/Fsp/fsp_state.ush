@@ -344,9 +344,11 @@ uint FspEncodeProbeOffset(float3 Offset)
         (Fixed.z & 0x1ffu);
 }
 
-uint FspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)
+uint FspProbeAtlasTileWidth;
+
+uint2 FspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)
 {
-    return ProbeIndex * kFspRayCountPerProbe + OctCellId.x + OctCellId.y * k_irdv_fsp_probe_octmap_width;
+    return uint2(ProbeIndex % FspProbeAtlasTileWidth, ProbeIndex / FspProbeAtlasTileWidth) * k_irdv_fsp_probe_octmap_width + OctCellId;
 }
 
 uint FspIrradianceVolumeSHAddress(uint CellIndex, uint CoeffIndex)

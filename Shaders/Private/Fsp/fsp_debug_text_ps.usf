@@ -15,6 +15,7 @@ StructuredBuffer<uint> FspProbeFreeStack;
 uint ViewRectSizeX;
 uint ViewRectSizeY;
 uint FspProbePoolElementCount;
+uint VisibleSurfaceListCapacity;
 uint ActiveProbeFrameCount;
 
 struct VsOutput
@@ -90,7 +91,7 @@ uint GetCounterValue(uint Row)
 {
     if (Row == 0u)
     {
-        return min(FspVisibleSurfaceList[0], FspProbePoolElementCount);
+        return min(FspVisibleSurfaceList[0], VisibleSurfaceListCapacity);
     }
     if (Row == 1u)
     {

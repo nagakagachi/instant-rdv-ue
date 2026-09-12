@@ -8,7 +8,7 @@
 StructuredBuffer<uint> FspProbeRayResultBuffer;
 StructuredBuffer<uint> BbvOptionalData;
 RWStructuredBuffer<uint> RWFspProbePool;
-RWStructuredBuffer<uint4> RWFspProbeAtlas;
+RWTexture2D<float4> RWFspProbeAtlas;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -55,11 +55,11 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);
-    const uint AtlasAddress = FspProbeAtlasAddress(ProbeIndex, OctCellId);
-    const float4 Prev = asfloat(RWFspProbeAtlas[AtlasAddress]);
+    const uint2 AtlasAddress = FspProbeAtlasAddress(ProbeIndex, OctCellId);
+    const float4 Prev = RWFspProbeAtlas[AtlasAddress];
     const float4 Curr = float4(HitRadiance, SkyVisibility);
     // 参照実装のOctaMap履歴更新に合わせ、急なradiance変化を抑える。
-    RWFspProbeAtlas[AtlasAddress] = asuint(lerp(Curr, Prev, kFspOctaUpdateTemporalRate));
+    RWFspProbeAtlas[AtlasAddress] = lerp(Curr, Prev, kFspOctaUpdateTemporalRate);
 
     if (OctCellIndex == 0u)
     {

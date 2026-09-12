@@ -9,7 +9,7 @@
 
 StructuredBuffer<uint> FspActiveProbeListCurr;
 StructuredBuffer<uint> FspProbePool;
-StructuredBuffer<uint4> FspProbeAtlas;
+Texture2D<float4> FspProbeAtlas;
 RWStructuredBuffer<float4> RWFspPackedSH;
 
 uint FspProbePoolElementCount;
@@ -51,7 +51,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         [unroll]
         for (uint Ox = 0u; Ox < k_irdv_fsp_probe_octmap_width; ++Ox)
         {
-            const float4 ProbeValue = asfloat(FspProbeAtlas[FspProbeAtlasAddress(ProbeIndex, uint2(Ox, Oy))]);
+            const float4 ProbeValue = FspProbeAtlas.Load(int3(FspProbeAtlasAddress(ProbeIndex, uint2(Ox, Oy)), 0));
             // Atlasは resolve passで float4(radiance.rgb, sky visibility) として保存しているため、
             // SH側では参照実装のpayload順に合わせて sky を先頭componentへ移す。
             const float4 PackedSample = float4(ProbeValue.a, ProbeValue.rgb);

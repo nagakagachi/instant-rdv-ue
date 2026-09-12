@@ -15,12 +15,13 @@ RWStructuredBuffer<uint> RWFspActiveProbeListCurr;
 RWStructuredBuffer<uint> RWFspProbeFreeStack;
 RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
-RWStructuredBuffer<uint4> RWFspProbeAtlas;
+RWTexture2D<float4> RWFspProbeAtlas;
 StructuredBuffer<uint> BbvBuffer;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
 uint bEnableWarmStart;
+uint VisibleSurfaceListCapacity;
 uint bUseReducedSurfaceBuffer;
 uint SourceViewRectSizeX;
 uint SourceViewRectSizeY;
@@ -140,8 +141,8 @@ void FspCopyProbeAtlas(uint DstProbeIndex, uint SrcProbeIndex)
     [unroll]
     for (uint OctIndex = 0u; OctIndex < kFspRayCountPerProbe; ++OctIndex)
     {
-        RWFspProbeAtlas[DstProbeIndex * kFspRayCountPerProbe + OctIndex] =
-            RWFspProbeAtlas[SrcProbeIndex * kFspRayCountPerProbe + OctIndex];
+        RWFspProbeAtlas[FspProbeAtlasAddress(DstProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))] =
+            RWFspProbeAtlas[FspProbeAtlasAddress(SrcProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))];
     }
 }
 
@@ -244,7 +245,7 @@ void FspClearProbeAtlas(uint ProbeIndex)
     [unroll]
     for (uint OctIndex = 0u; OctIndex < kFspRayCountPerProbe; ++OctIndex)
     {
-        RWFspProbeAtlas[ProbeIndex * kFspRayCountPerProbe + OctIndex] = asuint(0.0.xxxx);
+        RWFspProbeAtlas[FspProbeAtlasAddress(ProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))] = 0.0.xxxx;
     }
 }
 
@@ -389,7 +390,7 @@ float3 FspRelocateProbeNative(
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint ListIndex = DispatchThreadId.x;
-    const uint VisibleCellCount = min(FspVisibleSurfaceList[0], FspProbePoolElementCount);
+    const uint VisibleCellCount = min(FspVisibleSurfaceList[0], VisibleSurfaceListCapacity);
     if (ListIndex >= VisibleCellCount)
     {
         return;

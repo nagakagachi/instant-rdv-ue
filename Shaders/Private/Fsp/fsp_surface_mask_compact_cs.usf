@@ -34,11 +34,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     {
         WritableCount = min(BitCount, FspVisibleSurfaceListCapacity - AppendBaseIndex);
     }
-    const uint OverflowCount = BitCount - WritableCount;
-    if (OverflowCount > 0u)
-    {
-        InterlockedAdd(RWFspVisibleSurfaceList[0], -int(OverflowCount));
-    }
+    // 予約countは単調増加。消費側は容量で制限し、予約領域を再利用しない。
 
     uint RemainingBits = MaskBits;
     uint LocalRank = 0u;

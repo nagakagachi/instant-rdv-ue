@@ -31,7 +31,7 @@ float3 BbvGridMinPositionWs;
 
 StructuredBuffer<uint> FspCellProbeIndex;
 StructuredBuffer<uint> FspProbePool;
-StructuredBuffer<uint4> FspProbeAtlas;
+Texture2D<float4> FspProbeAtlas;
 StructuredBuffer<float4> FspPackedSH;
 StructuredBuffer<uint> BbvBuffer;
 uint BrickDataBaseOffset;
@@ -195,7 +195,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         // OctMap表示は球面normalをoct encodeしてatlas texelを参照する。
         // DebugModeは4がRadiance、5がSkyVisibility。
         const uint2 OctCellId = min(uint2(FspOctEncode(NormalWs) * float(k_irdv_fsp_probe_octmap_width)), uint2(k_irdv_fsp_probe_octmap_width - 1u, k_irdv_fsp_probe_octmap_width - 1u));
-        const float4 Atlas = asfloat(FspProbeAtlas[FspProbeAtlasAddress(Input.ProbeIndex, OctCellId)]);
+        const float4 Atlas = FspProbeAtlas.Load(int3(FspProbeAtlasAddress(Input.ProbeIndex, OctCellId), 0));
         if (DebugMode == 4u)
         {
             const float3 Mapped = Atlas.rgb / (1.0.xxx + Atlas.rgb);

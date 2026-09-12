@@ -45,10 +45,7 @@ void AppendSurfaceCell(uint GlobalCellIndex, uint ReducedSurfaceTexelIndex)
         RWFspVisibleSurfaceSourceTexelList[ListIndex + 1u] =
             ReducedSurfaceTexelIndex;
     }
-    else
-    {
-        InterlockedAdd(RWFspVisibleSurfaceList[0], -1);
-    }
+    // 超過予約は書かず、消費側で容量に制限する。
 }
 
 [numthreads(8, 8, 1)]
