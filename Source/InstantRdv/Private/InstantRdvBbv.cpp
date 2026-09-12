@@ -48,6 +48,15 @@ static FIntPoint CalcReducedSurfaceBufferExtent(const FIntRect& ViewRect)
             1));
 }
 
+static float CalcBbvInjectionWorldOffsetCm(
+    float BbvCellSizeCm,
+    float InjectionOffsetFineCells)
+{
+    return BbvCellSizeCm /
+        FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f) *
+        InjectionOffsetFineCells;
+}
+
 static FRDGTextureRef RegisterReducedSurfaceBuffer(
     FRDGBuilder& GraphBuilder,
     const TRefCountPtr<IPooledRenderTarget>& PooledTexture,
@@ -693,6 +702,7 @@ public:
         SHADER_PARAMETER(uint32, BbvGridResolutionZ)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, BbvCellSizeCm)
+        SHADER_PARAMETER(float, BbvOccupancyInjectionWorldOffsetCm)
         SHADER_PARAMETER(FVector3f, BbvToroidalOffsetCells)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceList)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspVisibleSurfaceSourceTexelList)
@@ -1433,10 +1443,9 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             const float InjectionOffsetFineCells =
                 CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            Parameters->InjectionWorldOffsetWs =
-                Config.bbv.BbvBrickSizeCm /
-                FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f) *
-                InjectionOffsetFineCells;
+            Parameters->InjectionWorldOffsetWs = CalcBbvInjectionWorldOffsetCm(
+                Config.bbv.BbvBrickSizeCm,
+                InjectionOffsetFineCells);
             Parameters->ViewMatrix =
                 FMatrix44f(View.ViewMatrices.GetTranslatedViewMatrix());
             Parameters->InvViewMatrix =
@@ -1484,11 +1493,9 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             const float InjectionOffsetFineCells =
                 CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm =
-                Config.bbv.BbvBrickSizeCm /
-                FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f);
-            Parameters->DepthtestInjectionWorldOffsetWs =
-                FineCellSizeCm * InjectionOffsetFineCells;
+            Parameters->DepthtestInjectionWorldOffsetWs = CalcBbvInjectionWorldOffsetCm(
+                Config.bbv.BbvBrickSizeCm,
+                InjectionOffsetFineCells);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->InvViewProjectionMatrix =
                 FMatrix44f(View.ViewMatrices.GetClipToWorld());
@@ -1700,10 +1707,9 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             const float InjectionOffsetFineCells =
                 CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            Parameters->InjectionWorldOffsetWs =
-                Config.bbv.BbvBrickSizeCm /
-                FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f) *
-                InjectionOffsetFineCells;
+            Parameters->InjectionWorldOffsetWs = CalcBbvInjectionWorldOffsetCm(
+                Config.bbv.BbvBrickSizeCm,
+                InjectionOffsetFineCells);
             Parameters->SceneColorPreExposure =
                 FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->ViewMatrix =
@@ -1759,8 +1765,9 @@ void FInstantRdvBbv::ExecuteRadianceUpdate(
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             const float InjectionOffsetFineCells = CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread();
-            const float FineCellSizeCm = Config.bbv.BbvBrickSizeCm / FMath::Max(static_cast<float>(k_irdv_bbv_brick_reso), 1.0f);
-            Parameters->DepthtestInjectionWorldOffsetWs = FineCellSizeCm * InjectionOffsetFineCells;
+            Parameters->DepthtestInjectionWorldOffsetWs = CalcBbvInjectionWorldOffsetCm(
+                Config.bbv.BbvBrickSizeCm,
+                InjectionOffsetFineCells);
             Parameters->SceneColorPreExposure = FMath::Max(SceneColorPreExposure, 1.0e-6f);
             Parameters->CameraPositionWs = FVector3f(View.ViewLocation);
             Parameters->InvViewProjectionMatrix = FMatrix44f(View.ViewMatrices.GetClipToWorld());
@@ -2040,6 +2047,9 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->BbvGridResolutionZ = static_cast<uint32>(SystemState.bbv.TrGrid.GridReso.Z);
         Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
         Parameters->BbvCellSizeCm = Config.bbv.BbvBrickSizeCm;
+        Parameters->BbvOccupancyInjectionWorldOffsetCm = CalcBbvInjectionWorldOffsetCm(
+            Config.bbv.BbvBrickSizeCm,
+            CVarInstantRdvBbvDepthtestInjectionOffsetFineCells.GetValueOnRenderThread());
         Parameters->BbvToroidalOffsetCells = FVector3f(SystemState.bbv.TrGrid.ToroidalOffsetCells);
         Parameters->FspVisibleSurfaceList = GraphBuilder.CreateSRV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
         Parameters->FspVisibleSurfaceSourceTexelList =

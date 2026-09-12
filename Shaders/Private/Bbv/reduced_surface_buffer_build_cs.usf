@@ -106,15 +106,23 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     const bool bHasTangentX = SelectStableTangent(CenterVs, bHasNegativeX, NegativeXVs, bHasPositiveX, PositiveXVs, TangentXVs);
     const bool bHasTangentY = SelectStableTangent(CenterVs, bHasNegativeY, NegativeYVs, bHasPositiveY, PositiveYVs, TangentYVs);
 
-    const float3 ViewRayVs = normalize(CenterVs);
+    const float CenterLenSq = dot(CenterVs, CenterVs);
+    const float3 ViewRayVs = CenterLenSq > 1.0e-10
+        ? CenterVs * rsqrt(CenterLenSq)
+        : float3(0.0, 0.0, 1.0);
     float3 NormalVs = -ViewRayVs;
     float NormalConfidence = 0.0;
     if (bHasTangentX && bHasTangentY)
     {
-        const float3 CandidateNormalVs = normalize(cross(TangentXVs, TangentYVs));
-        if (dot(CandidateNormalVs, CandidateNormalVs) > 0.0)
+        const float3 CandidateNormalVs = cross(TangentXVs, TangentYVs);
+        const float CandidateLenSq = dot(CandidateNormalVs, CandidateNormalVs);
+        if (CandidateLenSq > 1.0e-10)
         {
-            NormalVs = dot(CandidateNormalVs, -ViewRayVs) < 0.0 ? -CandidateNormalVs : CandidateNormalVs;
+            NormalVs = CandidateNormalVs * rsqrt(CandidateLenSq);
+            if (dot(NormalVs, -ViewRayVs) < 0.0)
+            {
+                NormalVs = -NormalVs;
+            }
             NormalConfidence = 1.0;
         }
     }

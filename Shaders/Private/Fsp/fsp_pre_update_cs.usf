@@ -35,6 +35,7 @@ uint BbvGridResolutionY;
 uint BbvGridResolutionZ;
 float3 BbvGridMinPositionWs;
 float BbvCellSizeCm;
+float BbvOccupancyInjectionWorldOffsetCm;
 float3 BbvToroidalOffsetCells;
 
 bool FspTryGetReducedSurfaceAnchor(
@@ -402,6 +403,64 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
+    uint CascadeIndex = 0u;
+    uint LocalCellIndex = 0u;
+    if (!FspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
+    {
+        return;
+    }
+
+    const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+    const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
+    float3 ProbeSamplePosWs = CellCenterWs;
+    if (bUseReducedSurfaceBuffer != 0u)
+    {
+        // Reduced detectionがVisibleSurfaceListと同じindexへ保存したsource texelを使う。
+        // cell indexとsource texelの対応を崩すと別surfaceの法線で再配置されるため、必ずpaired listとして読む。
+        float3 SurfacePositionWs = 0.0.xxx;
+        float3 SurfaceNormalWs = 0.0.xxx;
+        if (!FspTryGetReducedSurfaceAnchor(
+            ListIndex,
+            GlobalCellIndex,
+            CascadeIndex,
+            SurfacePositionWs,
+            SurfaceNormalWs))
+        {
+            return;
+        }
+
+        const float SurfaceClearance = max(
+            BbvOccupancyInjectionWorldOffsetCm,
+            BbvCellSizeCm / float(k_irdv_bbv_brick_reso));
+        const float ClearanceScale[4] = {1.0, 2.0, 3.0, 4.0};
+        bool bFoundRelocation = false;
+        [unroll]
+        for (uint CandidateIndex = 0u;
+             CandidateIndex < 4u;
+             ++CandidateIndex)
+        {
+            const float3 CandidateWs =
+                SurfacePositionWs +
+                SurfaceNormalWs *
+                (SurfaceClearance * ClearanceScale[CandidateIndex]);
+            const float3 CandidateOffset = CandidateWs - CellCenterWs;
+            if (any(abs(CandidateOffset) > MaxProbeOffsetDistanceCm.xxx) ||
+                FspIsProbePositionOccupied(CandidateWs))
+            {
+                continue;
+            }
+
+            ProbeSamplePosWs = CandidateWs;
+            bFoundRelocation = true;
+            break;
+        }
+        if (!bFoundRelocation)
+        {
+            return;
+        }
+    }
+
+    // ReducedSurfaceのprovenanceと法線側候補を検証してからpoolを消費する。
     uint ProbeIndex = RWFspCellProbeIndex[GlobalCellIndex];
     bool bNewProbe = false;
     if (ProbeIndex == k_irdv_fsp_invalid_probe_index)
@@ -412,7 +471,6 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             return;
         }
 
-        // SurfaceMaskがセル単位でdedup済みのため、参照実装と同じく直接所有権を確定する。
         RWFspCellProbeIndex[GlobalCellIndex] = ProbeIndex;
         FspPushCurrActiveProbeIndex(ProbeIndex);
         bNewProbe = true;
@@ -422,73 +480,23 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    uint CascadeIndex = 0u;
-    uint LocalCellIndex = 0u;
-    if (!FspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
-    {
-        return;
-    }
-
     FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(RWFspProbePool, ProbeIndex);
     if (bNewProbe)
     {
-        // 新規probeはoffsetと更新時刻を初期化する。
         Data.ProbeOffsetV3 = 0u;
         Data.LastUpdateFrame = 0u;
     }
 
-    const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
-    const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
-    const float3 PrevProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
-    // Legacy relocationを共通fallbackとして先に求める。
-    // Reduced modeでも、深度不連続・範囲外・owner cell不一致でsurface anchorを信頼できない場合は、
-    // BBV occupancyを使うこの位置を維持し、無効なReduced sampleでprobeを飛ばさない。
-    float3 ProbeSamplePosWs = FspRelocateProbeNative(
-        CellCenterWs,
-        PrevProbeOffset,
-        MaxProbeOffsetDistanceCm,
-        CascadeIndex,
-        GlobalCellIndex);
-
-    if (bUseReducedSurfaceBuffer != 0u)
+    if (bUseReducedSurfaceBuffer == 0u)
     {
-        // Reduced detectionがVisibleSurfaceListと同じindexへ保存したsource texelを使う。
-        // cell indexとsource texelの対応を崩すと別surfaceの法線で再配置されるため、必ずpaired listとして読む。
-        float3 SurfacePositionWs = 0.0.xxx;
-        float3 SurfaceNormalWs = 0.0.xxx;
-        if (FspTryGetReducedSurfaceAnchor(
-                ListIndex,
-                GlobalCellIndex,
-                CascadeIndex,
-                SurfacePositionWs,
-                SurfaceNormalWs))
-        {
-            const float SurfaceClearance = max(
-                BbvCellSizeCm / float(k_irdv_bbv_brick_reso),
-                0.001);
-            const float ClearanceScale[4] = {1.0, 2.0, 3.0, 4.0};
-            [unroll]
-            for (uint CandidateIndex = 0u;
-                 CandidateIndex < 4u;
-                 ++CandidateIndex)
-            {
-                const float3 CandidateWs =
-                    SurfacePositionWs +
-                    SurfaceNormalWs *
-                    (SurfaceClearance * ClearanceScale[CandidateIndex]);
-                const float3 CandidateOffset =
-                    CandidateWs - CellCenterWs;
-                if (any(abs(CandidateOffset) >
-                        MaxProbeOffsetDistanceCm.xxx) ||
-                    FspIsProbePositionOccupied(CandidateWs))
-                {
-                    continue;
-                }
-
-                ProbeSamplePosWs = CandidateWs;
-                break;
-            }
-        }
+        const float3 PrevProbeOffset =
+            FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
+        ProbeSamplePosWs = FspRelocateProbeNative(
+            CellCenterWs,
+            PrevProbeOffset,
+            MaxProbeOffsetDistanceCm,
+            CascadeIndex,
+            GlobalCellIndex);
     }
 
     if (bNewProbe)
