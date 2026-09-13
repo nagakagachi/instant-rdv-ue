@@ -48,10 +48,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         // HitInfoはtrace passでbrick index + 1として保存している。0はmiss/sky。
         const uint BrickIndex = HitInfo - 1u;
         const uint OptionalStart = BrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
-        HitRadiance = max(float3(
-            asfloat(BbvOptionalData[OptionalStart + 1u]),
-            asfloat(BbvOptionalData[OptionalStart + 2u]),
-            asfloat(BbvOptionalData[OptionalStart + 3u])), 0.0.xxx);
+        HitRadiance = max(InstantRdvUnpackHalf3(uint2(
+            BbvOptionalData[OptionalStart + 1u],
+            BbvOptionalData[OptionalStart + 2u])), 0.0.xxx);
     }
 
     const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);

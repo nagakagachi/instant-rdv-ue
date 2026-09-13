@@ -623,7 +623,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeFreeStack)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspCellProbeIndex)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbePool)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspIrradianceVolumeSH)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint2>, RWFspIrradianceVolumeSH)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -666,7 +666,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspVisibleSurfaceList)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayRequestBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayResultBuffer)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspIrradianceVolumeSH)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint2>, RWFspIrradianceVolumeSH)
         RDG_BUFFER_ACCESS(FspPrevActiveProbeIndirectArgBuffer, ERHIAccess::IndirectArgs)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -809,7 +809,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, FspProbeAtlas)
         SHADER_PARAMETER(uint32, FspProbeAtlasTileWidth)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspPackedSH)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint2>, RWFspPackedSH)
         RDG_BUFFER_ACCESS(FspActiveProbeIndirectArgBuffer, ERHIAccess::IndirectArgs)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -831,7 +831,7 @@ public:
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspCellProbeIndex)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspPackedSH)
+        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint2>, RWFspPackedSH)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -901,7 +901,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, FspProbeAtlas)
         SHADER_PARAMETER(uint32, FspProbeAtlasTileWidth)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FspPackedSH)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint2>, FspPackedSH)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -935,7 +935,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, FspProbeAtlas)
         SHADER_PARAMETER(uint32, FspProbeAtlasTileWidth)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FspPackedSH)
+        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint2>, FspPackedSH)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
         SHADER_PARAMETER(uint32, BrickDataBaseOffset)
     END_SHADER_PARAMETER_STRUCT()
@@ -1137,7 +1137,7 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             FRDGTextureRef ProbeAtlas = SystemState.fsp.FspProbeAtlas.Handle;
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount + 1u), TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount * k_irdv_fsp_ray_result_data_stride + 1u), TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
-            SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, FspCellCount * kFspIrradianceVolumeShFloat4Count), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+            SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32) * 2, FspCellCount * kFspIrradianceVolumeShFloat4Count), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
             SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), Config.fsp.VisibleSurfaceCapacity + 1u), TEXT("InstantRdv.fsp.FspVisibleSurfaceSourceTexelListBuffer"));
 
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle), 0u);
@@ -1220,16 +1220,16 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     FInstantRdvSceneUniformBufferParams& OutParams,
     bool bUseLiveResources)
 {
-    const FRDGBufferRef DummyFloat4Buffer = GraphBuilder.CreateBuffer(
-        FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4u, 1u),
-        TEXT("InstantRdv.SceneUniformBuffer.DummyFloat4"));
+    const FRDGBufferRef DummyPackedHalf4Buffer = GraphBuilder.CreateBuffer(
+        FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32) * 2u, 1u),
+        TEXT("InstantRdv.SceneUniformBuffer.DummyPackedHalf4"));
     const FRDGBufferRef DummyUintBuffer = GraphBuilder.CreateBuffer(
         FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1u),
         TEXT("InstantRdv.SceneUniformBuffer.DummyUint"));
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Buffer), 0u);
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyPackedHalf4Buffer), 0u);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyUintBuffer), 0u);
 
-    OutParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Buffer);
+    OutParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyPackedHalf4Buffer);
     OutParams.BbvBuffer = GraphBuilder.CreateSRV(DummyUintBuffer);
     OutParams.BbvBrickDataBaseOffset = 0u;
     OutParams.BbvRadianceAccum = GraphBuilder.CreateSRV(DummyUintBuffer);

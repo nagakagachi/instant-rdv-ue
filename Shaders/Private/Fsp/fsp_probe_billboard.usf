@@ -32,7 +32,7 @@ float3 BbvGridMinPositionWs;
 StructuredBuffer<uint> FspCellProbeIndex;
 StructuredBuffer<uint> FspProbePool;
 Texture2D<float4> FspProbeAtlas;
-StructuredBuffer<float4> FspPackedSH;
+StructuredBuffer<uint2> FspPackedSH;
 StructuredBuffer<uint> BbvBuffer;
 uint BrickDataBaseOffset;
 

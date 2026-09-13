@@ -11,8 +11,9 @@
 // BbvのBrickの1辺のセル数. 4固定.
 #define k_irdv_bbv_brick_data_u32_count 4u
 
-// Bbv Brickあたりの追加属性データのU32数. 4固定.
-#define k_irdv_bbv_brick_optional_data_u32_count 4u
+// Bbv Brickあたりの追加属性データのU32数。
+// word0 = occupancy metadata, word1..2 = packed FP16 material radiance RGB.
+#define k_irdv_bbv_brick_optional_data_u32_count 3u
 
 // Bbv BrickのBitmask表現で必要なu32数.
 #define k_irdv_bbv_bitmask_u32_count_per_brick ((k_irdv_bbv_brick_reso * k_irdv_bbv_brick_reso * k_irdv_bbv_brick_reso) / 32u)
@@ -30,7 +31,7 @@
 // FSP レイトレース結果格納バッファのエレメント単位のu32数.
 #define k_irdv_fsp_ray_result_data_stride 2u
 
-// FSP IrradianceVolume SH payload. 1 cell = float4 * 4.
+// FSP IrradianceVolume SH payload. 1 cell = packed half4 (uint2) * 4.
 #define k_irdv_fsp_irradiance_volume_sh_float4_count 4u
 
 // MainView ReducedSurfaceBufferの空間縮小率。4x4のJitter sampleを巡回する。
@@ -48,6 +49,21 @@
 // ProbePool Elementのu32換算個数 == (sizeof(FInstantRdvFspProbePoolData)/sizeof(uint)).
 #define k_irdv_fsp_probe_pool_data_u32_count 8u
 #if !defined(__cplusplus)
+uint2 InstantRdvPackHalf3(float3 Value)
+{
+    return uint2(
+        f32tof16(Value.x) | (f32tof16(Value.y) << 16u),
+        f32tof16(Value.z));
+}
+
+float3 InstantRdvUnpackHalf3(uint2 Value)
+{
+    return float3(
+        f16tof32(Value.x & 0xffffu),
+        f16tof32(Value.x >> 16u),
+        f16tof32(Value.y & 0xffffu));
+}
+
 // FSP ActiveProbe lifecycle用のprobe poolエントリ.
 // C++側のStructuredBufferはByteAddressBufferとしてk_irdv_fsp_probe_pool_data_u32_countエントリで確保されるため,
 // k_irdv_fsp_probe_pool_data_u32_countとメンバ数==構造体サイズが一致するようにします.

@@ -7,7 +7,7 @@
 
 StructuredBuffer<uint> FspCellProbeIndex;
 StructuredBuffer<uint> FspProbePool;
-RWStructuredBuffer<float4> RWFspPackedSH;
+RWStructuredBuffer<uint2> RWFspPackedSH;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -58,10 +58,10 @@ bool FspTryLoadNeighborSH(
         GridResolution);
     const uint LocalCellIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
     const uint CellIndex = CascadeCellBase + LocalCellIndex;
-    C0 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)];
-    C1 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)];
-    C2 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)];
-    C3 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)];
+    C0 = FspUtilUnpackHalf4(RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)]);
+    C1 = FspUtilUnpackHalf4(RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)]);
+    C2 = FspUtilUnpackHalf4(RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)]);
+    C3 = FspUtilUnpackHalf4(RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)]);
     return any(abs(C0) > 0.0.xxxx) || any(abs(C1) > 0.0.xxxx) || any(abs(C2) > 0.0.xxxx) || any(abs(C3) > 0.0.xxxx);
 }
 
@@ -138,8 +138,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     const float InvCount = rcp(float(Count));
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)] = Accum0 * InvCount;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)] = Accum1 * InvCount;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)] = Accum2 * InvCount;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)] = Accum3 * InvCount;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)] = FspUtilPackHalf4(Accum0 * InvCount);
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)] = FspUtilPackHalf4(Accum1 * InvCount);
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)] = FspUtilPackHalf4(Accum2 * InvCount);
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)] = FspUtilPackHalf4(Accum3 * InvCount);
 }

@@ -45,11 +45,10 @@ float3 HashColor(uint Value)
 
 float3 LoadResolvedRadiance(uint BrickIndex)
 {
-    const uint OptionalStart = BrickIndex * 4u;
-    return max(float3(
-        asfloat(BitmaskBrickVoxelOptionData[OptionalStart + 1u]),
-        asfloat(BitmaskBrickVoxelOptionData[OptionalStart + 2u]),
-        asfloat(BitmaskBrickVoxelOptionData[OptionalStart + 3u])), 0.0.xxx);
+    const uint OptionalStart = BrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
+    return max(InstantRdvUnpackHalf3(uint2(
+        BitmaskBrickVoxelOptionData[OptionalStart + 1u],
+        BitmaskBrickVoxelOptionData[OptionalStart + 2u])), 0.0.xxx);
 }
 
 float3 DisplayRadiance(float3 AbsoluteRadiance)

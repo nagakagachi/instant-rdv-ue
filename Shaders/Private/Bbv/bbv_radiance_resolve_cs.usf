@@ -1,4 +1,4 @@
-// ファイル説明: BBV Radiance 蓄積を平均化し、OptionalData word1-3へ絶対輝度RGBを書き戻す。
+// ファイル説明: BBV Radiance 蓄積を平均化し、OptionalData word1-2へFP16絶対輝度RGBを書き戻す。
 // word0 は既存の占有/カウント情報が利用するため保持する。
 
 #include "/Engine/Public/Platform.ush"
@@ -21,7 +21,7 @@ uint RadianceAccumAddress(uint BrickIndex, uint Component)
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint BrickIndex = DispatchThreadId.x;
-	if (BrickIndex >= BrickCount || k_irdv_bbv_brick_optional_data_u32_count < 4u)
+	if (BrickIndex >= BrickCount || k_irdv_bbv_brick_optional_data_u32_count < 3u)
     {
         return;
     }
@@ -36,14 +36,13 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
             RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 2u)]) * InvDenominator;
 
 		const uint OptionalStart = BrickIndex * k_irdv_bbv_brick_optional_data_u32_count;
-        const float3 PrevRadiance = float3(
-            asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 1u]),
-            asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 2u]),
-            asfloat(RWBitmaskBrickVoxelOptionData[OptionalStart + 3u]));
+        const float3 PrevRadiance = InstantRdvUnpackHalf3(uint2(
+            RWBitmaskBrickVoxelOptionData[OptionalStart + 1u],
+            RWBitmaskBrickVoxelOptionData[OptionalStart + 2u]));
         const float3 ResolvedRadiance = lerp(PrevRadiance, CurrentRadiance, 0.5);
-        RWBitmaskBrickVoxelOptionData[OptionalStart + 1u] = asuint(ResolvedRadiance.r);
-        RWBitmaskBrickVoxelOptionData[OptionalStart + 2u] = asuint(ResolvedRadiance.g);
-        RWBitmaskBrickVoxelOptionData[OptionalStart + 3u] = asuint(ResolvedRadiance.b);
+        const uint2 PackedRadiance = InstantRdvPackHalf3(ResolvedRadiance);
+        RWBitmaskBrickVoxelOptionData[OptionalStart + 1u] = PackedRadiance.x;
+        RWBitmaskBrickVoxelOptionData[OptionalStart + 2u] = PackedRadiance.y;
     }
 
     RWBbvRadianceAccumBuffer[RadianceAccumAddress(BrickIndex, 0u)] = 0u;

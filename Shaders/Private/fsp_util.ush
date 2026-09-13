@@ -317,9 +317,25 @@ uint FspUtilIrradianceVolumeSHAddress(uint CellIndex, uint CoeffIndex)
     return CellIndex * k_irdv_fsp_irradiance_volume_sh_float4_count + CoeffIndex;
 }
 
-// IVセルの4個のfloat4係数を、格納形式のままロードする。
+uint2 FspUtilPackHalf4(float4 Value)
+{
+    return uint2(
+        f32tof16(Value.x) | (f32tof16(Value.y) << 16u),
+        f32tof16(Value.z) | (f32tof16(Value.w) << 16u));
+}
+
+float4 FspUtilUnpackHalf4(uint2 Value)
+{
+    return float4(
+        f16tof32(Value.x & 0xffffu),
+        f16tof32(Value.x >> 16u),
+        f16tof32(Value.y & 0xffffu),
+        f16tof32(Value.y >> 16u));
+}
+
+// IVセルの4個のpacked half4係数をFP32へ展開してロードする。
 void FspUtilLoadIrradianceVolumeL1SHCoefficients(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     out float4 OutC0,
     out float4 OutC1,
@@ -327,15 +343,15 @@ void FspUtilLoadIrradianceVolumeL1SHCoefficients(
     out float4 OutC3)
 {
     const uint BaseAddress = FspUtilIrradianceVolumeSHAddress(CellIndex, 0u);
-    OutC0 = IrradianceVolumeSH[BaseAddress + 0u];
-    OutC1 = IrradianceVolumeSH[BaseAddress + 1u];
-    OutC2 = IrradianceVolumeSH[BaseAddress + 2u];
-    OutC3 = IrradianceVolumeSH[BaseAddress + 3u];
+    OutC0 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 0u]);
+    OutC1 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 1u]);
+    OutC2 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 2u]);
+    OutC3 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 3u]);
 }
 
 // IVセルの係数をSkyVisibilityとRadiance RGBのSHへ展開する。
 void FspUtilLoadIrradianceVolumeL1SH(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     out float4 OutSkyVisibility,
     out float4 OutRadianceR,
@@ -378,7 +394,7 @@ void FspUtilLoadIrradianceVolumeL1SH(
 
 // IVセルのSHをロードし、全係数ゼロでない場合だけ有効を返す。
 bool FspUtilTryLoadIrradianceVolumeL1SH(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     out float4 OutSkyVisibility,
     out float4 OutRadianceR,
@@ -411,7 +427,7 @@ bool FspUtilTryLoadIrradianceVolumeL1SH(
 // 不要な成分の加算を避けるため、SkyVisibilityとRadianceのどちらを出力するかを
 // 呼び出し側が定数フラグで指定する。
 void FspUtilLoadIrradianceVolumeL1SHTrilinear(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     uint CascadeIndex,
     int3 BaseCellCoord,
@@ -472,10 +488,10 @@ void FspUtilLoadIrradianceVolumeL1SHTrilinear(
                 const uint BaseAddress = FspUtilIrradianceVolumeSHAddress(
                     CascadeCellBase + LocalCellIndex,
                     0u);
-                const float4 C0 = IrradianceVolumeSH[BaseAddress + 0u];
-                const float4 C1 = IrradianceVolumeSH[BaseAddress + 1u];
-                const float4 C2 = IrradianceVolumeSH[BaseAddress + 2u];
-                const float4 C3 = IrradianceVolumeSH[BaseAddress + 3u];
+                const float4 C0 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 0u]);
+                const float4 C1 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 1u]);
+                const float4 C2 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 2u]);
+                const float4 C3 = FspUtilUnpackHalf4(IrradianceVolumeSH[BaseAddress + 3u]);
 
                 if (bNeedSkyVisibility)
                 {
@@ -503,7 +519,7 @@ float FspUtilCascadeDitherNoise(float3 WorldPositionWs)
 // Dither範囲は最細Cascadeのセル数で指定し、小さいグリッドでは補間帯の重なりを防ぐ。
 // 両Cascadeを同時にロードせず、選択された方だけをサンプリングする。
 bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     uint FineCascadeIndex,
@@ -638,7 +654,7 @@ float4 FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(float3 DirectionWs)
 
 // IVセルのSH係数が未初期化状態ではないかを判定する。
 bool FspUtilIrradianceVolumeHasValidSH(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex)
 {
     float4 C0;
@@ -715,7 +731,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
 
 // 指定セルのRadiance SHを直接評価する。
 float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -745,7 +761,7 @@ float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
 // Lambert BRDFへの入力ではBRDF側の1/PIを使い、最終Diffuse反射値では利用側でPI除算する。
 // 指定セルのRadiance SHからDiffuse Irradianceを評価する。
 float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -770,7 +786,7 @@ float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
 
 // 指定セルのSkyVisibility SHを指定方向へ評価する。
 float FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -796,7 +812,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
 // 戻り値は無次元の可視性係数であり、PI除算やRadianceの色補正は行わない。
 // 指定セルのSkyVisibility SHからIBL可視性を評価する。
 float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblAtCell(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -819,7 +835,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblAtCell(
 
 // ワールド位置からセルを検索し、最近傍セルのRadianceを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeRadiance(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -863,7 +879,7 @@ bool FspUtilTryEvaluateIrradianceVolumeRadiance(
 
 // ワールド位置からセルを検索し、最近傍セルのSkyVisibilityを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -907,7 +923,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
 // 戻り値はCos畳み込み済みのDiffuse Irradianceで、Lambert BRDF側の入力に使用する。
 // ワールド位置からセルを検索し、最近傍セルのDiffuse Irradianceを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -953,7 +969,7 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
 // 戻り値は正規化Cos畳み込み済みの無次元可視性係数で、PI除算は不要。
 // ワールド位置からセルを検索し、最近傍セルのIBL可視性を評価する。
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -995,7 +1011,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
 
 // ワールド位置周辺8セルを補間し、Radianceを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -1050,7 +1066,7 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
 // 8セルのRadiance SHを先に補間してからCos畳み込みと法線評価を1回だけ行う。
 // ワールド位置周辺8セルを補間し、Diffuse Irradianceを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -1104,7 +1120,7 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
 
 // ワールド位置周辺8セルを補間し、指定方向のSkyVisibilityを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
@@ -1155,7 +1171,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
 // 8セルのSH係数を先に補間してから正規化Cos畳み込みと法線評価を1回だけ行う。
 // ワールド位置周辺8セルを補間し、IBL用SkyVisibilityを評価する。
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
-    StructuredBuffer<float4> IrradianceVolumeSH,
+    StructuredBuffer<uint2> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,

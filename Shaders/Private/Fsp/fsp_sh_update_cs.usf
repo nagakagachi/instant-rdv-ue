@@ -10,7 +10,7 @@
 StructuredBuffer<uint> FspActiveProbeListCurr;
 StructuredBuffer<uint> FspProbePool;
 Texture2D<float4> FspProbeAtlas;
-RWStructuredBuffer<float4> RWFspPackedSH;
+RWStructuredBuffer<uint2> RWFspPackedSH;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -66,8 +66,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     const float SolidAngle = (4.0 * 3.14159265359) / float(kFspRayCountPerProbe);
     // Dense IrradianceVolumeはcell indexで直接引ける。ActiveProbeが存在するcellはここで最新SHを上書きする。
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 0u)] = Coeff0 * SolidAngle;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 1u)] = Coeff1 * SolidAngle;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 2u)] = Coeff2 * SolidAngle;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 3u)] = Coeff3 * SolidAngle;
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 0u)] = FspUtilPackHalf4(Coeff0 * SolidAngle);
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 1u)] = FspUtilPackHalf4(Coeff1 * SolidAngle);
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 2u)] = FspUtilPackHalf4(Coeff2 * SolidAngle);
+    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 3u)] = FspUtilPackHalf4(Coeff3 * SolidAngle);
 }

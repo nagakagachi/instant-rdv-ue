@@ -396,7 +396,7 @@ float4 FspEvaluateL1ShBasis(float3 Dir)
     return FspUtilEvaluateL1ShBasis(Dir);
 }
 
-bool FspIrradianceVolumeHasValidSH(StructuredBuffer<float4> SHBuffer, uint CellIndex)
+bool FspIrradianceVolumeHasValidSH(StructuredBuffer<uint2> SHBuffer, uint CellIndex)
 {
     return FspUtilIrradianceVolumeHasValidSH(SHBuffer, CellIndex);
 }
