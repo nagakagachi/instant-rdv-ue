@@ -10,7 +10,7 @@
 StructuredBuffer<uint> FspActiveProbeListCurr;
 StructuredBuffer<uint> FspProbePool;
 Texture2D<float4> FspProbeAtlas;
-RWStructuredBuffer<float4> RWFspPackedSH;
+RWTexture3D<float4> RWFspIrradianceVolumeSHTexture;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -65,9 +65,20 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     const float SolidAngle = (4.0 * 3.14159265359) / float(kFspRayCountPerProbe);
-    // Dense IrradianceVolumeはcell indexで直接引ける。ActiveProbeが存在するcellはここで最新SHを上書きする。
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 0u)] = Coeff0 * SolidAngle;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 1u)] = Coeff1 * SolidAngle;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 2u)] = Coeff2 * SolidAngle;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(Data.OwnerCellIndex, 3u)] = Coeff3 * SolidAngle;
+    Coeff0 *= SolidAngle;
+    Coeff1 *= SolidAngle;
+    Coeff2 *= SolidAngle;
+    Coeff3 *= SolidAngle;
+    // RGBは書き込み時にLambertのclamped-cosineを畳み込み、マテリアル評価を軽くする。
+    const float4 SkyVisibility = float4(Coeff0.r, Coeff1.r, Coeff2.r, Coeff3.r);
+    const float4 IrradianceR = FspUtilConvolveL1SHByClampedCosine(float4(Coeff0.g, Coeff1.g, Coeff2.g, Coeff3.g));
+    const float4 IrradianceG = FspUtilConvolveL1SHByClampedCosine(float4(Coeff0.b, Coeff1.b, Coeff2.b, Coeff3.b));
+    const float4 IrradianceB = FspUtilConvolveL1SHByClampedCosine(float4(Coeff0.a, Coeff1.a, Coeff2.a, Coeff3.a));
+    FspStoreIrradianceVolumeSignals(
+        RWFspIrradianceVolumeSHTexture,
+        Data.OwnerCellIndex,
+        SkyVisibility,
+        IrradianceR,
+        IrradianceG,
+        IrradianceB);
 }

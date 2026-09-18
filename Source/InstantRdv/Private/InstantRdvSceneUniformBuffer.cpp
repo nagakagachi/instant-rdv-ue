@@ -5,18 +5,23 @@
 */
 
 #include "InstantRdvSceneUniformBuffer.h"
+#include "RHIStaticStates.h"
 #include "RenderGraphUtils.h"
 
 // SceneUniformBufferの拡張部のデフォルト値定義用関数.
 static void GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams(FInstantRdvSceneUniformBufferParams& ShaderParams, FRDGBuilder& GraphBuilder)
 {
-    const FRDGBufferRef DummyFloat4Buffer = GraphBuilder.CreateBuffer(
-        FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4u, 1u),
-        TEXT("InstantRdv.SceneUniformBuffer.DummyFloat4"));
+    const FRDGTextureRef DummyFloat4Texture = GraphBuilder.CreateTexture(
+        FRDGTextureDesc::Create3D(
+            FIntVector(1, 1, 1),
+            PF_FloatRGBA,
+            FClearValueBinding::Black,
+            TexCreate_ShaderResource | TexCreate_UAV),
+        TEXT("InstantRdv.SceneUniformBuffer.DummyFloat4Texture"));
     const FRDGBufferRef DummyUintBuffer = GraphBuilder.CreateBuffer(
         FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1u),
         TEXT("InstantRdv.SceneUniformBuffer.DummyUint"));
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Buffer), 0u);
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Texture), FLinearColor::Transparent);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyUintBuffer), 0u);
 
     ShaderParams.FspEnabled = 0u;
@@ -25,11 +30,12 @@ static void GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams(FIn
     ShaderParams.FspGridResolutionZ = 0u;
     ShaderParams.FspCascadeCount = 0u;
     ShaderParams.FspIrradianceVolumeCellCount = 0u;
-    ShaderParams.FspIrradianceVolumeSHFloat4Count = 0u;
     ShaderParams.FspCellSizeCm = 0.0f;
     ShaderParams.FspCascadeDitherInterpolation = 1u;
     ShaderParams.FspGridCenterPositionWs = FVector3f::ZeroVector;
-    ShaderParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Buffer);
+    ShaderParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Texture);
+    ShaderParams.FspIrradianceVolumeSampler =
+        TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
     ShaderParams.BbvEnabled = 0u;
     ShaderParams.BbvGridResolutionX = 0u;
     ShaderParams.BbvGridResolutionY = 0u;

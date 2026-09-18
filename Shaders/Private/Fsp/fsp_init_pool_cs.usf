@@ -9,7 +9,7 @@
 RWStructuredBuffer<uint> RWFspProbeFreeStack; // [0] = count, [1..N] = free indices
 RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
-RWStructuredBuffer<float4> RWFspIrradianceVolumeSH;
+RWTexture3D<float4> RWFspIrradianceVolumeSHTexture;
 uint ProbePoolElementCount;
 uint TotalCellCount;
 
@@ -20,11 +20,13 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     if (idx < TotalCellCount)
     {
         RWFspCellProbeIndex[idx] = k_irdv_fsp_invalid_probe_index;
-        [unroll]
-        for (uint CoeffIndex = 0u; CoeffIndex < k_irdv_fsp_irradiance_volume_sh_float4_count; ++CoeffIndex)
-        {
-            RWFspIrradianceVolumeSH[FspIrradianceVolumeSHAddress(idx, CoeffIndex)] = 0.0.xxxx;
-        }
+        FspStoreIrradianceVolumePackedCoefficients(
+            RWFspIrradianceVolumeSHTexture,
+            idx,
+            0.0.xxxx,
+            0.0.xxxx,
+            0.0.xxxx,
+            0.0.xxxx);
     }
     if (idx >= ProbePoolElementCount)
     {

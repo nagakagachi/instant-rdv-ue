@@ -29,7 +29,8 @@ namespace
 {
 static constexpr uint32 kBbvElementUpdateSkipCount = 3;
 
-static constexpr uint32 kFspIrradianceVolumeShFloat4Count = 4;
+static constexpr uint32 kFspIrradianceVolumeShTextureCount = 4;
+static constexpr int32 kFspIrradianceVolumeGuardTexelCount = 1;
 static constexpr uint32 kFspTraceDistanceCm = 5000;
 // ActiveProbeListだけはGPU世代をまたぐreset/append Raceを避けるため、
 // 先頭2ワードを交互利用counterとして予約する。他のFSP counter bufferは従来通り[0]のみを使う。
@@ -620,10 +621,13 @@ public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER(uint32, ProbePoolElementCount)
         SHADER_PARAMETER(uint32, TotalCellCount)
+        SHADER_PARAMETER(uint32, FspGridResolutionX)
+        SHADER_PARAMETER(uint32, FspGridResolutionY)
+        SHADER_PARAMETER(uint32, FspGridResolutionZ)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeFreeStack)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspCellProbeIndex)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbePool)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspIrradianceVolumeSH)
+        SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float4>, RWFspIrradianceVolumeSHTexture)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -666,7 +670,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspVisibleSurfaceList)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayRequestBuffer)
         SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, RWFspProbeRayResultBuffer)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspIrradianceVolumeSH)
+        SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float4>, RWFspIrradianceVolumeSHTexture)
         RDG_BUFFER_ACCESS(FspPrevActiveProbeIndirectArgBuffer, ERHIAccess::IndirectArgs)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -809,7 +813,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, FspProbeAtlas)
         SHADER_PARAMETER(uint32, FspProbeAtlasTileWidth)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspPackedSH)
+        SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float4>, RWFspIrradianceVolumeSHTexture)
         RDG_BUFFER_ACCESS(FspActiveProbeIndirectArgBuffer, ERHIAccess::IndirectArgs)
     END_SHADER_PARAMETER_STRUCT()
 };
@@ -831,7 +835,7 @@ public:
         SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspCellProbeIndex)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
-        SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, RWFspPackedSH)
+        SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float4>, RWFspIrradianceVolumeSHTexture)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -901,7 +905,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, FspProbeAtlas)
         SHADER_PARAMETER(uint32, FspProbeAtlasTileWidth)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FspPackedSH)
+        SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, FspIrradianceVolumeSHTexture)
     END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -935,7 +939,7 @@ public:
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FspProbePool)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, FspProbeAtlas)
         SHADER_PARAMETER(uint32, FspProbeAtlasTileWidth)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FspPackedSH)
+        SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, FspIrradianceVolumeSHTexture)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
         SHADER_PARAMETER(uint32, BrickDataBaseOffset)
     END_SHADER_PARAMETER_STRUCT()
@@ -1137,7 +1141,19 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             FRDGTextureRef ProbeAtlas = SystemState.fsp.FspProbeAtlas.Handle;
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount + 1u), TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), FspRayWorkCount * k_irdv_fsp_ray_result_data_stride + 1u), TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
-            SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4, FspCellCount * kFspIrradianceVolumeShFloat4Count), TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+            const FIntVector IrradianceVolumeExtent(
+                Config.fsp.ProbeGridResolution.X + kFspIrradianceVolumeGuardTexelCount,
+                Config.fsp.ProbeGridResolution.Y + kFspIrradianceVolumeGuardTexelCount,
+                (Config.fsp.ProbeGridResolution.Z + kFspIrradianceVolumeGuardTexelCount) *
+                    static_cast<int32>(Config.fsp.ProbeCascadeCount) *
+                    static_cast<int32>(kFspIrradianceVolumeShTextureCount));
+            SystemState.fsp.FspIrradianceVolumeSHTexture.Handle = GraphBuilder.CreateTexture(
+                FRDGTextureDesc::Create3D(
+                    IrradianceVolumeExtent,
+                    PF_FloatRGBA,
+                    FClearValueBinding::Black,
+                    TexCreate_ShaderResource | TexCreate_UAV),
+                TEXT("InstantRdv.fsp.FspIrradianceVolumeSHTexture"));
             SystemState.fsp.FspVisibleSurfaceSourceTexelListBuffer.Handle = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), Config.fsp.VisibleSurfaceCapacity + 1u), TEXT("InstantRdv.fsp.FspVisibleSurfaceSourceTexelListBuffer"));
 
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle), 0u);
@@ -1150,7 +1166,10 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(ProbeAtlas), FLinearColor::Transparent);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle), 0u);
             AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle), 0u);
-            AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle), 0u);
+            AddClearUAVPass(
+                GraphBuilder,
+                GraphBuilder.CreateUAV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle),
+                FLinearColor::Transparent);
 
 
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspCellProbeIndexBuffer.Handle, &SystemState.fsp.FspCellProbeIndexBuffer.PooledBuffer);
@@ -1169,7 +1188,10 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
                 ERHIAccess::SRVMask);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayRequestBuffer.Handle, &SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer);
             GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspProbeRayResultBuffer.Handle, &SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer);
-            GraphBuilder.QueueBufferExtraction(SystemState.fsp.FspPackedSHBuffer.Handle, &SystemState.fsp.FspPackedSHBuffer.PooledBuffer);
+            GraphBuilder.QueueTextureExtraction(
+                SystemState.fsp.FspIrradianceVolumeSHTexture.Handle,
+                &SystemState.fsp.FspIrradianceVolumeSHTexture.PooledTexture,
+                ERHIAccess::SRVMask);
         }
     }
     else
@@ -1198,7 +1220,9 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
             SystemState.fsp.FspProbeAtlas.Handle = GraphBuilder.RegisterExternalTexture(SystemState.fsp.FspProbeAtlas.PooledTexture, TEXT("InstantRdv.FspProbeAtlas"));
             SystemState.fsp.FspProbeRayRequestBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayRequestBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayRequestBuffer"));
             SystemState.fsp.FspProbeRayResultBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspProbeRayResultBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspProbeRayResultBuffer"));
-            SystemState.fsp.FspPackedSHBuffer.Handle = GraphBuilder.RegisterExternalBuffer(SystemState.fsp.FspPackedSHBuffer.PooledBuffer, TEXT("InstantRdv.fsp.FspPackedSHBuffer"));
+            SystemState.fsp.FspIrradianceVolumeSHTexture.Handle = GraphBuilder.RegisterExternalTexture(
+                SystemState.fsp.FspIrradianceVolumeSHTexture.PooledTexture,
+                TEXT("InstantRdv.fsp.FspIrradianceVolumeSHTexture"));
         }
     }
 
@@ -1220,16 +1244,22 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     FInstantRdvSceneUniformBufferParams& OutParams,
     bool bUseLiveResources)
 {
-    const FRDGBufferRef DummyFloat4Buffer = GraphBuilder.CreateBuffer(
-        FRDGBufferDesc::CreateStructuredDesc(sizeof(float) * 4u, 1u),
-        TEXT("InstantRdv.SceneUniformBuffer.DummyFloat4"));
+    const FRDGTextureRef DummyFloat4Texture = GraphBuilder.CreateTexture(
+        FRDGTextureDesc::Create3D(
+            FIntVector(1, 1, 1),
+            PF_FloatRGBA,
+            FClearValueBinding::Black,
+            TexCreate_ShaderResource | TexCreate_UAV),
+        TEXT("InstantRdv.SceneUniformBuffer.DummyFloat4Texture"));
     const FRDGBufferRef DummyUintBuffer = GraphBuilder.CreateBuffer(
         FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1u),
         TEXT("InstantRdv.SceneUniformBuffer.DummyUint"));
-    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Buffer), 0u);
+    AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Texture), FLinearColor::Transparent);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyUintBuffer), 0u);
 
-    OutParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Buffer);
+    OutParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Texture);
+    OutParams.FspIrradianceVolumeSampler =
+        TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
     OutParams.BbvBuffer = GraphBuilder.CreateSRV(DummyUintBuffer);
     OutParams.BbvBrickDataBaseOffset = 0u;
     OutParams.BbvRadianceAccum = GraphBuilder.CreateSRV(DummyUintBuffer);
@@ -1243,13 +1273,13 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     OutParams.FspGridResolutionZ = static_cast<uint32>(FMath::Max(Resolution.Z, 0));
     OutParams.FspCascadeCount = Config.fsp.ProbeCascadeCount;
     OutParams.FspIrradianceVolumeCellCount = CellCount;
-    OutParams.FspIrradianceVolumeSHFloat4Count = kFspIrradianceVolumeShFloat4Count;
     OutParams.FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
     OutParams.FspCascadeDitherInterpolation = CVarInstantRdvFspCascadeDitherInterpolation.GetValueOnRenderThread() != 0 ? 1u : 0u;
     OutParams.FspGridCenterPositionWs = FVector3f(SystemState.fsp.CurrentGridCenterPositionWs);
-    OutParams.FspIrradianceVolumeSH = bUseLiveResources && SystemState.fsp.FspPackedSHBuffer.Handle != nullptr
-        ? GraphBuilder.CreateSRV(SystemState.fsp.FspPackedSHBuffer.Handle)
-        : OutParams.FspIrradianceVolumeSH;
+    OutParams.FspIrradianceVolumeSH =
+        bUseLiveResources && SystemState.fsp.FspIrradianceVolumeSHTexture.Handle != nullptr
+            ? GraphBuilder.CreateSRV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle)
+            : OutParams.FspIrradianceVolumeSH;
 
     const FIntVector& BbvResolution = SystemState.bbv.TrGrid.GridReso;
     OutParams.BbvEnabled = bUseLiveResources && SystemState.bRenderInitialized ? 1u : 0u;
@@ -1853,10 +1883,13 @@ void FInstantRdvBbv::ExecuteFspUpdate(
             FInstantRdvFspInitPoolCS::FParameters* InitParams = GraphBuilder.AllocParameters<FInstantRdvFspInitPoolCS::FParameters>();
             InitParams->ProbePoolElementCount = Config.fsp.ProbeCapacity;
             InitParams->TotalCellCount = FspCellCount;
+            InitParams->FspGridResolutionX = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.X);
+            InitParams->FspGridResolutionY = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Y);
+            InitParams->FspGridResolutionZ = static_cast<uint32>(SystemState.fsp.TrGrid.GridReso.Z);
             InitParams->RWFspProbeFreeStack = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeFreeStackBuffer.Handle);
             InitParams->RWFspCellProbeIndex = GraphBuilder.CreateUAV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
             InitParams->RWFspProbePool = GraphBuilder.CreateUAV(SystemState.fsp.FspProbePoolBuffer.Handle);
-            InitParams->RWFspIrradianceVolumeSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
+            InitParams->RWFspIrradianceVolumeSHTexture = GraphBuilder.CreateUAV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle);
             TShaderMapRef<FInstantRdvFspInitPoolCS> InitShader(GetGlobalShaderMap(View.GetFeatureLevel()));
             const uint32 InitGroupX = FMath::DivideAndRoundUp(FMath::Max(FspCellCount, Config.fsp.ProbeCapacity), 64u);
             FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspInitPool"), ERDGPassFlags::Compute, InitShader, InitParams, FIntVector(InitGroupX, 1, 1));
@@ -1902,7 +1935,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->RWFspVisibleSurfaceList = GraphBuilder.CreateUAV(SystemState.fsp.FspVisibleSurfaceListBuffer.Handle);
         Parameters->RWFspProbeRayRequestBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayRequestBuffer.Handle);
         Parameters->RWFspProbeRayResultBuffer = GraphBuilder.CreateUAV(SystemState.fsp.FspProbeRayResultBuffer.Handle);
-        Parameters->RWFspIrradianceVolumeSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
+        Parameters->RWFspIrradianceVolumeSHTexture = GraphBuilder.CreateUAV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle);
         Parameters->FspPrevActiveProbeIndirectArgBuffer = FspPrevActiveProbeIndirectArgBuffer;
         TShaderMapRef<FInstantRdvFspBeginUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspBeginUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FspPrevActiveProbeIndirectArgBuffer, 0);
@@ -2169,7 +2202,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
         Parameters->FspProbeAtlas = ProbeAtlas;
         Parameters->FspProbeAtlasTileWidth = Config.fsp.GetAtlasTileWidth();
-        Parameters->RWFspPackedSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
+        Parameters->RWFspIrradianceVolumeSHTexture = GraphBuilder.CreateUAV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle);
         Parameters->FspActiveProbeIndirectArgBuffer = FspActiveProbeIndirectArgBuffer;
         TShaderMapRef<FInstantRdvFspShUpdateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspProbeShUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FspActiveProbeIndirectArgBuffer, 0);
@@ -2188,7 +2221,7 @@ void FInstantRdvBbv::ExecuteFspUpdate(
         Parameters->FspGridCenterPositionWs = FspGridCenterPositionWs;
         Parameters->FspCellProbeIndex = GraphBuilder.CreateSRV(SystemState.fsp.FspCellProbeIndexBuffer.Handle);
         Parameters->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
-        Parameters->RWFspPackedSH = GraphBuilder.CreateUAV(SystemState.fsp.FspPackedSHBuffer.Handle);
+        Parameters->RWFspIrradianceVolumeSHTexture = GraphBuilder.CreateUAV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle);
         TShaderMapRef<FInstantRdvFspIrradianceVolumePropagateCS> ComputeShader(GetGlobalShaderMap(View.GetFeatureLevel()));
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.FspIrradianceVolumePropagate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(FMath::DivideAndRoundUp(FspCellCount, 64u), 1, 1));
     }
@@ -2319,7 +2352,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 VSParams->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
                 VSParams->FspProbeAtlas = ProbeAtlas;
                 VSParams->FspProbeAtlasTileWidth = Config.fsp.GetAtlasTileWidth();
-                VSParams->FspPackedSH = GraphBuilder.CreateSRV(SystemState.fsp.FspPackedSHBuffer.Handle);
+                VSParams->FspIrradianceVolumeSHTexture = GraphBuilder.CreateSRV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle);
             }
 
             FInstantRdvFspProbeBillboardPS::FParameters* PSParams = &Params->PS;
@@ -2346,7 +2379,7 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
                 PSParams->FspProbePool = GraphBuilder.CreateSRV(SystemState.fsp.FspProbePoolBuffer.Handle);
                 PSParams->FspProbeAtlas = ProbeAtlas;
                 PSParams->FspProbeAtlasTileWidth = Config.fsp.GetAtlasTileWidth();
-                PSParams->FspPackedSH = GraphBuilder.CreateSRV(SystemState.fsp.FspPackedSHBuffer.Handle);
+                PSParams->FspIrradianceVolumeSHTexture = GraphBuilder.CreateSRV(SystemState.fsp.FspIrradianceVolumeSHTexture.Handle);
                 PSParams->BbvBuffer = GraphBuilder.CreateSRV(SystemState.bbv.BbvBuffer.Handle);
                 PSParams->BrickDataBaseOffset = Config.bbv.GetBitmaskElementCount();
 

@@ -7,7 +7,7 @@
 
 StructuredBuffer<uint> FspCellProbeIndex;
 StructuredBuffer<uint> FspProbePool;
-RWStructuredBuffer<float4> RWFspPackedSH;
+RWTexture3D<float4> RWFspIrradianceVolumeSHTexture;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -58,10 +58,13 @@ bool FspTryLoadNeighborSH(
         GridResolution);
     const uint LocalCellIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
     const uint CellIndex = CascadeCellBase + LocalCellIndex;
-    C0 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)];
-    C1 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)];
-    C2 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)];
-    C3 = RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)];
+    FspLoadIrradianceVolumePackedCoefficientsRw(
+        RWFspIrradianceVolumeSHTexture,
+        CellIndex,
+        C0,
+        C1,
+        C2,
+        C3);
     return any(abs(C0) > 0.0.xxxx) || any(abs(C1) > 0.0.xxxx) || any(abs(C2) > 0.0.xxxx) || any(abs(C3) > 0.0.xxxx);
 }
 
@@ -138,8 +141,11 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     const float InvCount = rcp(float(Count));
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 0u)] = Accum0 * InvCount;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 1u)] = Accum1 * InvCount;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 2u)] = Accum2 * InvCount;
-    RWFspPackedSH[FspIrradianceVolumeSHAddress(CellIndex, 3u)] = Accum3 * InvCount;
+    FspStoreIrradianceVolumePackedCoefficients(
+        RWFspIrradianceVolumeSHTexture,
+        CellIndex,
+        Accum0 * InvCount,
+        Accum1 * InvCount,
+        Accum2 * InvCount,
+        Accum3 * InvCount);
 }

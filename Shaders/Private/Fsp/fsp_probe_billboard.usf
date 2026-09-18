@@ -32,7 +32,7 @@ float3 BbvGridMinPositionWs;
 StructuredBuffer<uint> FspCellProbeIndex;
 StructuredBuffer<uint> FspProbePool;
 Texture2D<float4> FspProbeAtlas;
-StructuredBuffer<float4> FspPackedSH;
+Texture3D<float4> FspIrradianceVolumeSHTexture;
 StructuredBuffer<uint> BbvBuffer;
 uint BrickDataBaseOffset;
 
@@ -113,7 +113,7 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
     FInstantRdvFspProbePoolData ProbeData = (FInstantRdvFspProbePoolData)0;
     const bool bActiveProbe = FspTryGetActiveProbeForCell(ProbeIndex, ProbeData, GlobalCellIndex);
     const bool bIrradianceVolumeDebug = DebugMode == 9u || DebugMode == 10u;
-    const bool bHasVolumeSH = FspIrradianceVolumeHasValidSH(FspPackedSH, GlobalCellIndex);
+    const bool bHasVolumeSH = FspIrradianceVolumeHasValidSH(FspIrradianceVolumeSHTexture, GlobalCellIndex);
     // FspCalcCellCenterWsはtoroidal物理indexから現在のworld-aligned cell centerへ戻す。
     // ここがずれるとprobe球がカメラ追従に見えるため、更新パスと同じhelperを使う。
     const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
@@ -212,7 +212,8 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         // デバッグ表示では、格納された入射Radiance SHの指定方向評価をそのまま表示する。
         // ライティング用のDiffuse Irradiance評価（Cos畳み込み済み）とは意図的に分けている。
         const float3 Radiance = FspUtilEvaluateIrradianceVolumeRadianceAtCell(
-            FspPackedSH,
+            FspIrradianceVolumeSHTexture,
+            FspGetGridParams(),
             CellIndex,
             NormalWs);
         const float3 Mapped = Radiance / (1.0.xxx + Radiance);
@@ -274,7 +275,8 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
         // デバッグ表示では、SkyVisibility SHの指定方向評価を表示する。
         // IBL可視性として使う場合は、正規化Cos畳み込み版のAPIを利用する。
         Color = FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
-            FspPackedSH,
+            FspIrradianceVolumeSHTexture,
+            FspGetGridParams(),
             CellIndex,
             NormalWs).xxxx;
     }

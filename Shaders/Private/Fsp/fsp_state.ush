@@ -45,6 +45,19 @@ float FspRelocationOffsetScale;
 float3 FspGridCenterPositionWs;
 float3 FspPrevGridCenterPositionWs;
 
+FInstantRdvFspGridParams FspGetGridParams()
+{
+    FInstantRdvFspGridParams Params = (FInstantRdvFspGridParams)0;
+    Params.GridResolutionX = FspGridResolutionX;
+    Params.GridResolutionY = FspGridResolutionY;
+    Params.GridResolutionZ = FspGridResolutionZ;
+    Params.CascadeCount = FspCascadeCount;
+    Params.CellSizeCm = FspCellSizeCm;
+    Params.GridCenterPositionWs = FspGridCenterPositionWs;
+    Params.PrevGridCenterPositionWs = FspPrevGridCenterPositionWs;
+    return Params;
+}
+
 uint FspCellCountPerCascade()
 {
     return FspGridResolutionX * FspGridResolutionY * FspGridResolutionZ;
@@ -351,9 +364,106 @@ uint2 FspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)
     return uint2(ProbeIndex % FspProbeAtlasTileWidth, ProbeIndex / FspProbeAtlasTileWidth) * k_irdv_fsp_probe_octmap_width + OctCellId;
 }
 
-uint FspIrradianceVolumeSHAddress(uint CellIndex, uint CoeffIndex)
+uint3 FspIrradianceVolumeTextureCoord(uint CellIndex, uint TextureIndex)
 {
-    return FspUtilIrradianceVolumeSHAddress(CellIndex, CoeffIndex);
+    const uint CellCountPerCascade = FspCellCountPerCascade();
+    const uint CascadeIndex = CellIndex / CellCountPerCascade;
+    const uint LocalCellIndex = CellIndex - CascadeIndex * CellCountPerCascade;
+    const uint3 PhysicalCoord = FspLocalCellIndexToCoord(LocalCellIndex);
+    const uint TextureSliceDepth =
+        FspGridResolutionZ + k_irdv_fsp_irradiance_volume_guard_texel_count;
+    return uint3(
+        PhysicalCoord.xy,
+        CascadeIndex * TextureSliceDepth * k_irdv_fsp_irradiance_volume_sh_texture_count +
+            TextureIndex * TextureSliceDepth + PhysicalCoord.z);
+}
+
+void FspStoreIrradianceVolumeSignal(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    uint TextureIndex,
+    float4 Value)
+{
+    const uint CellCountPerCascade = FspCellCountPerCascade();
+    const uint CascadeIndex = CellIndex / CellCountPerCascade;
+    const uint LocalCellIndex = CellIndex - CascadeIndex * CellCountPerCascade;
+    const uint3 PhysicalCoord = FspLocalCellIndexToCoord(LocalCellIndex);
+    const uint TextureSliceDepth =
+        FspGridResolutionZ + k_irdv_fsp_irradiance_volume_guard_texel_count;
+    const uint TextureZOffset =
+        CascadeIndex * TextureSliceDepth * k_irdv_fsp_irradiance_volume_sh_texture_count +
+        TextureIndex * TextureSliceDepth;
+
+    // 正側Guardには物理座標0の値を複製する。辺と角も複製し、Linear Clampの8点補間を成立させる。
+    const uint DuplicateX = PhysicalCoord.x == 0u ? 1u : 0u;
+    const uint DuplicateY = PhysicalCoord.y == 0u ? 1u : 0u;
+    const uint DuplicateZ = PhysicalCoord.z == 0u ? 1u : 0u;
+    [unroll]
+    for (uint Z = 0u; Z <= DuplicateZ; ++Z)
+    {
+        [unroll]
+        for (uint Y = 0u; Y <= DuplicateY; ++Y)
+        {
+            [unroll]
+            for (uint X = 0u; X <= DuplicateX; ++X)
+            {
+                const uint3 StoreCoord = uint3(
+                    X == 0u ? PhysicalCoord.x : FspGridResolutionX,
+                    Y == 0u ? PhysicalCoord.y : FspGridResolutionY,
+                    TextureZOffset + (Z == 0u ? PhysicalCoord.z : FspGridResolutionZ));
+                IrradianceVolume[StoreCoord] = Value;
+            }
+        }
+    }
+}
+
+void FspStoreIrradianceVolumeSignals(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    float4 SkyVisibility,
+    float4 IrradianceR,
+    float4 IrradianceG,
+    float4 IrradianceB)
+{
+    FspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 0u, SkyVisibility);
+    FspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 1u, IrradianceR);
+    FspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 2u, IrradianceG);
+    FspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 3u, IrradianceB);
+}
+
+void FspStoreIrradianceVolumePackedCoefficients(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    float4 C0,
+    float4 C1,
+    float4 C2,
+    float4 C3)
+{
+    FspStoreIrradianceVolumeSignals(
+        IrradianceVolume,
+        CellIndex,
+        float4(C0.r, C1.r, C2.r, C3.r),
+        float4(C0.g, C1.g, C2.g, C3.g),
+        float4(C0.b, C1.b, C2.b, C3.b),
+        float4(C0.a, C1.a, C2.a, C3.a));
+}
+
+void FspLoadIrradianceVolumePackedCoefficientsRw(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    out float4 C0,
+    out float4 C1,
+    out float4 C2,
+    out float4 C3)
+{
+    const float4 SkyVisibility = IrradianceVolume[FspIrradianceVolumeTextureCoord(CellIndex, 0u)];
+    const float4 IrradianceR = IrradianceVolume[FspIrradianceVolumeTextureCoord(CellIndex, 1u)];
+    const float4 IrradianceG = IrradianceVolume[FspIrradianceVolumeTextureCoord(CellIndex, 2u)];
+    const float4 IrradianceB = IrradianceVolume[FspIrradianceVolumeTextureCoord(CellIndex, 3u)];
+    C0 = float4(SkyVisibility.x, IrradianceR.x, IrradianceG.x, IrradianceB.x);
+    C1 = float4(SkyVisibility.y, IrradianceR.y, IrradianceG.y, IrradianceB.y);
+    C2 = float4(SkyVisibility.z, IrradianceR.z, IrradianceG.z, IrradianceB.z);
+    C3 = float4(SkyVisibility.w, IrradianceR.w, IrradianceG.w, IrradianceB.w);
 }
 
 uint FspPackRayRequestKey(uint ProbeIndex, uint OctCellIndex)
@@ -396,9 +506,9 @@ float4 FspEvaluateL1ShBasis(float3 Dir)
     return FspUtilEvaluateL1ShBasis(Dir);
 }
 
-bool FspIrradianceVolumeHasValidSH(StructuredBuffer<float4> SHBuffer, uint CellIndex)
+bool FspIrradianceVolumeHasValidSH(Texture3D<float4> SHTexture, uint CellIndex)
 {
-    return FspUtilIrradianceVolumeHasValidSH(SHBuffer, CellIndex);
+    return FspUtilIrradianceVolumeHasValidSH(SHTexture, FspGetGridParams(), CellIndex);
 }
 
 #endif // INSTANT_RDV_FSP_STATE_USH

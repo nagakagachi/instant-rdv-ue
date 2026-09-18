@@ -211,11 +211,11 @@ private:
             FPersistentRdgPooledBufferSet FspProbePoolBuffer;
             FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
             FPersistentRdgPooledBufferSet FspActiveProbeListBuffers[2];
-            // ProbeAtlasはActiveProbeごとの6x6 OctMap、PackedSHはdense IrradianceVolume cellごとのL1 SH。
+            // ProbeAtlasはActiveProbeごとの6x6 OctMap、IrradianceVolumeは全CascadeをZ方向へ連結した3D Texture。
             FPersistentRdgPooledTextureSet FspProbeAtlas;
             FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
             FPersistentRdgPooledBufferSet FspProbeRayResultBuffer;
-            FPersistentRdgPooledBufferSet FspPackedSHBuffer;
+            FPersistentRdgPooledTextureSet FspIrradianceVolumeSHTexture;
             FPersistentRdgPooledTextureSet ReducedSurfaceBuffer;
             uint32 FspUpdateFrameCount = 0;
         };

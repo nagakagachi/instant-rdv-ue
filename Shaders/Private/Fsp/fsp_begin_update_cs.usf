@@ -13,7 +13,7 @@ RWStructuredBuffer<uint> RWFspCellProbeIndex;
 RWStructuredBuffer<uint> RWFspProbePool;
 RWStructuredBuffer<uint> RWFspProbeRayRequestBuffer;
 RWStructuredBuffer<uint> RWFspProbeRayResultBuffer;
-RWStructuredBuffer<float4> RWFspIrradianceVolumeSH;
+RWTexture3D<float4> RWFspIrradianceVolumeSHTexture;
 
 uint FspProbePoolElementCount;
 uint FrameCount;
@@ -49,11 +49,13 @@ void FspPushCurrActiveProbeIndex(uint ProbeIndex)
 
 void FspClearIrradianceVolumeCell(uint CellIndex)
 {
-    [unroll]
-    for (uint CoeffIndex = 0u; CoeffIndex < k_irdv_fsp_irradiance_volume_sh_float4_count; ++CoeffIndex)
-    {
-        RWFspIrradianceVolumeSH[FspIrradianceVolumeSHAddress(CellIndex, CoeffIndex)] = 0.0.xxxx;
-    }
+    FspStoreIrradianceVolumePackedCoefficients(
+        RWFspIrradianceVolumeSHTexture,
+        CellIndex,
+        0.0.xxxx,
+        0.0.xxxx,
+        0.0.xxxx,
+        0.0.xxxx);
 }
 
 [numthreads(64, 1, 1)]
