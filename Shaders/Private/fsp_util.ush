@@ -256,24 +256,36 @@ bool FspUtilTryGetTrilinearCellCoordinates(
     return true;
 }
 
-// 連続したカメラ位置を中心に、量子化のずれを吸収する1セルの余白を確保する。
-// 軸ごとの解像度を保持し、立方体以外のグリッドにも対応する。
-float3 FspUtilCascadeSelectionHalfExtentWs(FInstantRdvFspGridParams Params, uint CascadeIndex)
+// カメラ位置に対して連続な、細かいCascadeから親Cascadeへのディザ遷移率を返す。
+// グリッド中心はマイナス無限方向へ量子化されるため、実グリッド外縁はカメラの
+// セル内位相で最大1セル動く。親CascadeのActiveProbeが常に存在する範囲だけを
+// 遷移帯として用い、未更新の親IVをサンプリングしない。
+float FspUtilCalcIrradianceVolumeCascadeDitherRate(
+    FInstantRdvFspGridParams Params,
+    float3 WorldPositionWs,
+    uint CascadeIndex)
 {
-    return max(
-        float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * 0.5 - 1.0,
-        0.0.xxx) * FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const float3 CameraToSampleCell =
+        (WorldPositionWs - Params.GridCenterPositionWs) /
+        max(FspUtilCascadeCellSizeCm(Params, CascadeIndex), 0.001);
+    const float3 HalfExtentCell =
+        float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * 0.5;
+
+    // 正方向は [H-2, H-1)、負方向は [H-1, H) を使う。
+    // これらは各位相で実外縁から2セル以内にあり、辺と角でも同じ規則で安全である。
+    const float3 SafeRangeEndCell = select(
+        CameraToSampleCell >= 0.0.xxx,
+        HalfExtentCell - 1.0.xxx,
+        HalfExtentCell);
+    const float3 BorderGradient = max(
+        abs(CameraToSampleCell) - (SafeRangeEndCell - 1.0.xxx),
+        0.0.xxx);
+    return saturate(max(
+        BorderGradient.x,
+        max(BorderGradient.y, BorderGradient.z)));
 }
 
-float FspUtilCascadeSelectionBoundaryDistanceWs(
-    FInstantRdvFspGridParams Params, float3 WorldPositionWs, uint CascadeIndex)
-{
-    const float3 DistanceToBoundary = FspUtilCascadeSelectionHalfExtentWs(Params, CascadeIndex)
-        - abs(WorldPositionWs - Params.GridCenterPositionWs);
-    return min(DistanceToBoundary.x, min(DistanceToBoundary.y, DistanceToBoundary.z));
-}
-
-// 連続位置の選択境界から最細Cascadeとトリリニア座標を求める。
+// カメラ距離に連続な安全帯から最細Cascadeとトリリニア座標を求める。
 bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
     FInstantRdvFspGridParams Params,
     float3 WorldPositionWs,
@@ -296,9 +308,14 @@ bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
             break;
         }
 
-        // 親のない最終Cascadeは、余白で縮めず実グリッド全域を利用する。
-        if (CascadeIndex + 1u < CascadeCount &&
-            FspUtilCascadeSelectionBoundaryDistanceWs(Params, WorldPositionWs, CascadeIndex) < 0.0)
+        const bool bIsLastCascade = CascadeIndex + 1u >= CascadeCount;
+        const float CoarseBlendWeight = bIsLastCascade
+            ? 0.0
+            : FspUtilCalcIrradianceVolumeCascadeDitherRate(
+                Params,
+                WorldPositionWs,
+                CascadeIndex);
+        if (!bIsLastCascade && CoarseBlendWeight >= 1.0)
         {
             continue;
         }
@@ -448,74 +465,120 @@ bool FspUtilTryLoadIrradianceVolumeL1SH(
 }
 
 // 同一Cascade内のSHをハードウェアTrilinear補間する。
+// Materialのデバッグシェーダに定義される汎用マクロとの衝突を避けるため、
+// この関数内の非公開識別子にはIrdvFsp接頭辞を付ける。
 // 正側Guardへ物理座標0を複製しているため、Toroidal境界でも隣の信号やCascadeと混ざらない。
 void FspUtilLoadIrradianceVolumeL1SHTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
-    uint CascadeIndex,
-    int3 BaseCellCoord,
-    float3 CellFraction,
-    bool bNeedSkyVisibility,
-    bool bNeedRadiance,
-    out float4 OutSkyVisibility,
-    out float4 OutRadianceR,
-    out float4 OutRadianceG,
-    out float4 OutRadianceB)
+    FInstantRdvFspGridParams IrdvFspGridParams,
+    uint IrdvFspCascadeIndex,
+    int3 IrdvFspBaseCellCoord,
+    float3 IrdvFspCellFraction,
+    bool bIrdvFspNeedSkyVisibility,
+    bool bIrdvFspNeedRadiance,
+    out float4 OutIrdvFspSkyVisibility,
+    out float4 OutIrdvFspRadianceR,
+    out float4 OutIrdvFspRadianceG,
+    out float4 OutIrdvFspRadianceB)
 {
-    OutSkyVisibility = 0.0.xxxx;
-    OutRadianceR = 0.0.xxxx;
-    OutRadianceG = 0.0.xxxx;
-    OutRadianceB = 0.0.xxxx;
+    OutIrdvFspSkyVisibility = 0.0.xxxx;
+    OutIrdvFspRadianceR = 0.0.xxxx;
+    OutIrdvFspRadianceG = 0.0.xxxx;
+    OutIrdvFspRadianceB = 0.0.xxxx;
 
-    const uint3 GridResolution = uint3(
-        GridParams.GridResolutionX,
-        GridParams.GridResolutionY,
-        GridParams.GridResolutionZ);
-    const uint3 PaddedResolution =
-        GridResolution + k_irdv_fsp_irradiance_volume_guard_texel_count;
-    const int3 ToroidalOffset = FspUtilToroidalOffset(
-        GridParams,
-        CascadeIndex,
-        GridParams.GridCenterPositionWs);
-    const int3 PhysicalBaseCellCoord = LogicalToPhysicalGridCoord(
-        BaseCellCoord,
-        ToroidalOffset,
-        GridResolution);
-    const uint CascadeTextureZ =
-        CascadeIndex * PaddedResolution.z * k_irdv_fsp_irradiance_volume_sh_texture_count;
-    const float TextureDepth =
-        float(PaddedResolution.z * max(FspUtilEffectiveCascadeCount(GridParams), 1u) *
-            k_irdv_fsp_irradiance_volume_sh_texture_count);
-    const float3 TextureResolution =
-        float3(float2(PaddedResolution.xy), TextureDepth);
-
-    if (bNeedSkyVisibility)
+    bool bIrdvFspUseTrilinearInterpolation = true;
+#if IS_MATERIAL_SHADER
+    bIrdvFspUseTrilinearInterpolation = Scene.InstantRdvParam.FspTrilinearInterpolation != 0u;
+#endif
+    if (!bIrdvFspUseTrilinearInterpolation)
     {
-        const float3 SampleTexel = float3(
-            float2(PhysicalBaseCellCoord.xy) + 0.5.xx + CellFraction.xy,
-            float(CascadeTextureZ + PhysicalBaseCellCoord.z) + 0.5 + CellFraction.z);
-        OutSkyVisibility = IrradianceVolumeSH.SampleLevel(
+        const int3 IrdvFspNearestLinearCellCoord = IrdvFspBaseCellCoord + int3(
+            IrdvFspCellFraction.x >= 0.5 ? 1 : 0,
+            IrdvFspCellFraction.y >= 0.5 ? 1 : 0,
+            IrdvFspCellFraction.z >= 0.5 ? 1 : 0);
+        const uint IrdvFspNearestCellIndex = FspUtilEncodeGlobalCellIndex(
+            IrdvFspGridParams,
+            IrdvFspCascadeIndex,
+            FspUtilPhysicalCellCoordToLocalIndex(
+                IrdvFspGridParams,
+                FspUtilLinearToPhysicalCoord(
+                    IrdvFspGridParams,
+                    IrdvFspNearestLinearCellCoord,
+                    IrdvFspCascadeIndex)));
+        float4 IrdvFspC0;
+        float4 IrdvFspC1;
+        float4 IrdvFspC2;
+        float4 IrdvFspC3;
+        FspUtilLoadIrradianceVolumeL1SHCoefficients(
+            IrradianceVolumeSH,
+            IrdvFspGridParams,
+            IrdvFspNearestCellIndex,
+            IrdvFspC0,
+            IrdvFspC1,
+            IrdvFspC2,
+            IrdvFspC3);
+        if (bIrdvFspNeedSkyVisibility)
+        {
+            OutIrdvFspSkyVisibility = float4(IrdvFspC0.r, IrdvFspC1.r, IrdvFspC2.r, IrdvFspC3.r);
+        }
+        if (bIrdvFspNeedRadiance)
+        {
+            OutIrdvFspRadianceR = float4(IrdvFspC0.g, IrdvFspC1.g, IrdvFspC2.g, IrdvFspC3.g);
+            OutIrdvFspRadianceG = float4(IrdvFspC0.b, IrdvFspC1.b, IrdvFspC2.b, IrdvFspC3.b);
+            OutIrdvFspRadianceB = float4(IrdvFspC0.a, IrdvFspC1.a, IrdvFspC2.a, IrdvFspC3.a);
+        }
+        return;
+    }
+
+    const uint3 IrdvFspGridResolution = uint3(
+        IrdvFspGridParams.GridResolutionX,
+        IrdvFspGridParams.GridResolutionY,
+        IrdvFspGridParams.GridResolutionZ);
+    const uint3 IrdvFspPaddedResolution =
+        IrdvFspGridResolution + k_irdv_fsp_irradiance_volume_guard_texel_count;
+    const int3 IrdvFspToroidalOffset = FspUtilToroidalOffset(
+        IrdvFspGridParams,
+        IrdvFspCascadeIndex,
+        IrdvFspGridParams.GridCenterPositionWs);
+    const int3 IrdvFspPhysicalBaseCellCoord = LogicalToPhysicalGridCoord(
+        IrdvFspBaseCellCoord,
+        IrdvFspToroidalOffset,
+        IrdvFspGridResolution);
+    const uint IrdvFspCascadeTextureZ =
+        IrdvFspCascadeIndex * IrdvFspPaddedResolution.z * k_irdv_fsp_irradiance_volume_sh_texture_count;
+    const float IrdvFspTextureDepth =
+        float(IrdvFspPaddedResolution.z * max(FspUtilEffectiveCascadeCount(IrdvFspGridParams), 1u) *
+            k_irdv_fsp_irradiance_volume_sh_texture_count);
+    const float3 IrdvFspTextureResolution =
+        float3(float2(IrdvFspPaddedResolution.xy), IrdvFspTextureDepth);
+
+    if (bIrdvFspNeedSkyVisibility)
+    {
+        const float3 IrdvFspSampleTexel = float3(
+            float2(IrdvFspPhysicalBaseCellCoord.xy) + 0.5.xx + IrdvFspCellFraction.xy,
+            float(IrdvFspCascadeTextureZ + IrdvFspPhysicalBaseCellCoord.z) + 0.5 + IrdvFspCellFraction.z);
+        OutIrdvFspSkyVisibility = IrradianceVolumeSH.SampleLevel(
             IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            SampleTexel / TextureResolution,
+            IrdvFspSampleTexel / IrdvFspTextureResolution,
             0.0);
     }
-    if (bNeedRadiance)
+    if (bIrdvFspNeedRadiance)
     {
-        const float2 SampleTexelXY =
-            float2(PhysicalBaseCellCoord.xy) + 0.5.xx + CellFraction.xy;
-        const float SampleTexelZ =
-            float(CascadeTextureZ + PhysicalBaseCellCoord.z) + 0.5 + CellFraction.z;
-        OutRadianceR = IrradianceVolumeSH.SampleLevel(
+        const float2 IrdvFspSampleTexelXY =
+            float2(IrdvFspPhysicalBaseCellCoord.xy) + 0.5.xx + IrdvFspCellFraction.xy;
+        const float IrdvFspSampleTexelZ =
+            float(IrdvFspCascadeTextureZ + IrdvFspPhysicalBaseCellCoord.z) + 0.5 + IrdvFspCellFraction.z;
+        OutIrdvFspRadianceR = IrradianceVolumeSH.SampleLevel(
             IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            float3(SampleTexelXY, SampleTexelZ + PaddedResolution.z) / TextureResolution,
+            float3(IrdvFspSampleTexelXY, IrdvFspSampleTexelZ + IrdvFspPaddedResolution.z) / IrdvFspTextureResolution,
             0.0);
-        OutRadianceG = IrradianceVolumeSH.SampleLevel(
+        OutIrdvFspRadianceG = IrradianceVolumeSH.SampleLevel(
             IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            float3(SampleTexelXY, SampleTexelZ + PaddedResolution.z * 2u) / TextureResolution,
+            float3(IrdvFspSampleTexelXY, IrdvFspSampleTexelZ + IrdvFspPaddedResolution.z * 2u) / IrdvFspTextureResolution,
             0.0);
-        OutRadianceB = IrradianceVolumeSH.SampleLevel(
+        OutIrdvFspRadianceB = IrradianceVolumeSH.SampleLevel(
             IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            float3(SampleTexelXY, SampleTexelZ + PaddedResolution.z * 3u) / TextureResolution,
+            float3(IrdvFspSampleTexelXY, IrdvFspSampleTexelZ + IrdvFspPaddedResolution.z * 3u) / IrdvFspTextureResolution,
             0.0);
     }
 }
@@ -545,14 +608,10 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
     out float4 OutRadianceB)
 {
     const uint CoarseCascadeIndex = FineCascadeIndex + 1u;
-    const float FineCellSize = FspUtilCascadeCellSizeCm(GridParams, FineCascadeIndex);
-    const float3 HalfExtent = FspUtilCascadeSelectionHalfExtentWs(GridParams, FineCascadeIndex);
-    const float MinHalfExtent = min(HalfExtent.x, min(HalfExtent.y, HalfExtent.z));
-    const float DitherWidthWs = min(max(DitherRangeCells, 0.0) * FineCellSize, MinHalfExtent * 0.5);
-    const float DistanceToNearestBoundary = FspUtilCascadeSelectionBoundaryDistanceWs(
-        GridParams, WorldPositionWs, FineCascadeIndex);
-    const float CoarseBlendWeight = 1.0 - saturate(
-        DistanceToNearestBoundary / max(DitherWidthWs, 0.001));
+    const float CoarseBlendWeight = FspUtilCalcIrradianceVolumeCascadeDitherRate(
+        GridParams,
+        WorldPositionWs,
+        FineCascadeIndex);
 
     const bool bUseCoarseCascade =
 #if IS_MATERIAL_SHADER

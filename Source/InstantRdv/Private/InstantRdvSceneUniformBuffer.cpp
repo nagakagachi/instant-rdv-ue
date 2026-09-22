@@ -32,6 +32,7 @@ static void GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams(FIn
     ShaderParams.FspIrradianceVolumeCellCount = 0u;
     ShaderParams.FspCellSizeCm = 0.0f;
     ShaderParams.FspCascadeDitherInterpolation = 1u;
+    ShaderParams.FspTrilinearInterpolation = 1u;
     ShaderParams.FspGridCenterPositionWs = FVector3f::ZeroVector;
     ShaderParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Texture);
     ShaderParams.FspIrradianceVolumeSampler =

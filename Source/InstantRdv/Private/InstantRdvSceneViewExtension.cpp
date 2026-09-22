@@ -51,13 +51,12 @@ INSTANT_RDV_CVAR_INT(
     TEXT("1: XY fine-voxel Z-count map (no raytrace)\n")
     TEXT("2: Brick raytrace debug\n")
     TEXT("3: Voxel raytrace debug\n")
-    TEXT("4: Voxel radiance debug\n")
-    TEXT("5: BBV hitとDepth Surfaceの前後距離（青=手前、赤=奥）"),
+    TEXT("4: Voxel radiance debug"),
     ECVF_RenderThreadSafe,
     TEXT("Debug"),
     TEXT("BBV visualization mode"),
     0.0f,
-    5.0f,
+    4.0f,
     0);
 
 INSTANT_RDV_CVAR_FLOAT(

@@ -115,6 +115,18 @@ INSTANT_RDV_CVAR_BOOL(
     TEXT("Cascade dither interpolation"),
     50);
 
+INSTANT_RDV_CVAR_BOOL(
+    CVarInstantRdvFspTrilinearInterpolation,
+    TEXT("r.InstantRdv.Fsp.TrilinearInterpolation"),
+    1,
+    TEXT("マテリアルからのIrradiance / SkyVisibility取得時のIrradianceVolumeトリリニア補間。\n")
+    TEXT("0: Disabled (nearest cell)\n")
+    TEXT("1: Enabled"),
+    ECVF_RenderThreadSafe,
+    TEXT("FSP"),
+    TEXT("IrradianceVolume trilinear interpolation"),
+    51);
+
 TGlobalResource<FEmptyVertexDeclaration, FRenderResource::EInitPhase::Pre> GInstantRdvNullVertexDeclaration;
 
 // 移植時の重要注意（RDG/RHI）:
@@ -184,22 +196,6 @@ INSTANT_RDV_CVAR_INT(
     0.0f,
     1.0f,
     210);
-
-INSTANT_RDV_CVAR_FLOAT(
-    CVarInstantRdvBbvDepthRelationRangeFineCells,
-    TEXT("r.InstantRdv.Bbv.DepthRelationRangeFineCells"),
-    8.0f,
-    TEXT("BBV Depth Relation debugの表示範囲（±fine cell数）。"),
-    ECVF_RenderThreadSafe,
-    TEXT("Debug"),
-    TEXT("BBV depth relation range (fine cells)"),
-    0.0f,
-    32.0f,
-    4);
-// 移植ミス再発防止:
-// - 参照実装は「固定m値」ではなく fine cell 基準でオフセット量を決める。
-// - UE側はワールド単位がcmのため、シェーダへ渡す前に必ず CellSizeCm/k_irdv_bbv_brick_reso で換算する。
-// - CVarの意味は「ワールド距離」ではなく「fine cell数」を維持すること。
 
 INSTANT_RDV_CVAR_FLOAT(
     CVarInstantRdvFspDebugProbeRadiusCm,
@@ -867,7 +863,6 @@ public:
         SHADER_PARAMETER(float, CellSizeCm)
         SHADER_PARAMETER(FVector3f, BbvGridMinPositionWs)
         SHADER_PARAMETER(float, MaxTraceDistanceCm)
-        SHADER_PARAMETER(float, DepthRelationRangeFineCells)
         SHADER_PARAMETER(int32, DebugMode)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BbvBuffer)
         SHADER_PARAMETER(uint32, BrickDataBaseOffset)
@@ -1275,6 +1270,7 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     OutParams.FspIrradianceVolumeCellCount = CellCount;
     OutParams.FspCellSizeCm = Config.fsp.ProbeCellSizeCm;
     OutParams.FspCascadeDitherInterpolation = CVarInstantRdvFspCascadeDitherInterpolation.GetValueOnRenderThread() != 0 ? 1u : 0u;
+    OutParams.FspTrilinearInterpolation = CVarInstantRdvFspTrilinearInterpolation.GetValueOnRenderThread() != 0 ? 1u : 0u;
     OutParams.FspGridCenterPositionWs = FVector3f(SystemState.fsp.CurrentGridCenterPositionWs);
     OutParams.FspIrradianceVolumeSH =
         bUseLiveResources && SystemState.fsp.FspIrradianceVolumeSHTexture.Handle != nullptr
@@ -2262,7 +2258,6 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
         BbvDebugMode == 2 ||
         BbvDebugMode == 3 ||
         BbvDebugMode == 4 ||
-        BbvDebugMode == 5 ||
 
         false
         )
@@ -2293,7 +2288,6 @@ void FInstantRdvBbv::ExecuteDebugVisualize(
             Parameters->CellSizeCm = Config.bbv.BbvBrickSizeCm;
             Parameters->BbvGridMinPositionWs = FVector3f(SystemState.bbv.TrGrid.MinPositionWs);
             Parameters->MaxTraceDistanceCm = Config.bbv.BbvBrickSizeCm * static_cast<float>(SystemState.bbv.TrGrid.GridReso.GetMax());
-            Parameters->DepthRelationRangeFineCells = FMath::Max(CVarInstantRdvBbvDepthRelationRangeFineCells.GetValueOnRenderThread(), 0.001f);
             Parameters->DebugMode = BbvDebugMode;
             Parameters->BbvBuffer = GraphBuilder.CreateSRV(BbvBuffer);
             Parameters->BrickDataBaseOffset = Config.bbv.GetBitmaskElementCount();
