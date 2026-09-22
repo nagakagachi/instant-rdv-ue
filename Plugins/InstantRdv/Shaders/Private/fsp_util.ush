@@ -1,4 +1,5 @@
 // ファイル名: fsp_util.ush
+// 役割: InstantRDV FSPの内部シェーダで使用するグリッド、Probe、IrradianceVolume操作および評価のユーティリティを定義する。
 #ifndef INSTANT_RDV_FSP_UTIL_USH
 #define INSTANT_RDV_FSP_UTIL_USH
 

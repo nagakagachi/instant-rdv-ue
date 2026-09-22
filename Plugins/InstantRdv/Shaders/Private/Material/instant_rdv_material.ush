@@ -1,0 +1,72 @@
+// ファイル名: instant_rdv_material.ush
+// 役割: Unreal Engine Material Custom NodeからInstantRDVのIrradianceVolumeを評価する公開関数を提供する。
+// このファイルをincludeし、InstantRdvMaterialTryEvaluateDiffuseIrradianceまたは
+// InstantRdvMaterialTryEvaluateSkyVisibilityIblを使用する。内部FSP実装の関数・型を
+// Material Custom Nodeから直接使用しない。
+#ifndef INSTANT_RDV_MATERIAL_USH
+#define INSTANT_RDV_MATERIAL_USH
+
+#include "/InstantRdvShaders/Private/fsp_util.ush"
+
+// Material Scene UniformからIrradianceVolume評価に必要なグリッド状態を構築する。
+FInstantRdvFspGridParams InstantRdvMaterialGetFspGridParams()
+{
+    FInstantRdvFspGridParams GridParams = (FInstantRdvFspGridParams)0;
+    GridParams.GridResolutionX = Scene.InstantRdvParam.FspGridResolutionX;
+    GridParams.GridResolutionY = Scene.InstantRdvParam.FspGridResolutionY;
+    GridParams.GridResolutionZ = Scene.InstantRdvParam.FspGridResolutionZ;
+    GridParams.CascadeCount = Scene.InstantRdvParam.FspCascadeCount;
+    GridParams.CellSizeCm = Scene.InstantRdvParam.FspCellSizeCm;
+    GridParams.GridCenterPositionWs = Scene.InstantRdvParam.FspGridCenterPositionWs;
+    return GridParams;
+}
+
+// WorldPositionWsにおける入射Diffuse Irradiance Eを評価する。
+// EmissiveへLambert反射の輝度として出力する場合は、BaseColor * OutDiffuseIrradiance / PIを使用する。
+// falseはInstantRDVが無効、またはWorldPositionWsがIrradianceVolume外であることを表し、出力はゼロとなる。
+bool InstantRdvMaterialTryEvaluateDiffuseIrradiance(
+    float3 WorldPositionWs,
+    float3 NormalWs,
+    float DitherRangeCells,
+    out float3 OutDiffuseIrradiance)
+{
+    OutDiffuseIrradiance = 0.0.xxx;
+    if (Scene.InstantRdvParam.FspEnabled == 0u)
+    {
+        return false;
+    }
+
+    return FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
+        Scene.InstantRdvParam.FspIrradianceVolumeSH,
+        InstantRdvMaterialGetFspGridParams(),
+        WorldPositionWs,
+        NormalWs,
+        DitherRangeCells,
+        OutDiffuseIrradiance);
+}
+
+// WorldPositionWsにおけるSkyLight/IBL向けの無次元Sky Visibilityを評価する。
+// OutSkyVisibilityは正規化Cos畳み込み済みであり、SkyLightまたはIBLの間接成分へそのまま乗算できる。
+// falseはInstantRDVが無効、またはWorldPositionWsがIrradianceVolume外であることを表し、出力はゼロとなる。
+bool InstantRdvMaterialTryEvaluateSkyVisibilityIbl(
+    float3 WorldPositionWs,
+    float3 NormalWs,
+    float DitherRangeCells,
+    out float OutSkyVisibility)
+{
+    OutSkyVisibility = 0.0;
+    if (Scene.InstantRdvParam.FspEnabled == 0u)
+    {
+        return false;
+    }
+
+    return FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
+        Scene.InstantRdvParam.FspIrradianceVolumeSH,
+        InstantRdvMaterialGetFspGridParams(),
+        WorldPositionWs,
+        NormalWs,
+        DitherRangeCells,
+        OutSkyVisibility);
+}
+
+#endif // INSTANT_RDV_MATERIAL_USH
