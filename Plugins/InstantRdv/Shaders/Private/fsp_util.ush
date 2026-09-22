@@ -22,7 +22,6 @@ struct FInstantRdvFspGridParams
     uint GridResolutionZ;
     uint CascadeCount;
     float CellSizeCm;
-    float IrradianceCascadeDitherRangeCells;
     float3 GridCenterPositionWs;
     float3 PrevGridCenterPositionWs;
 };
@@ -591,7 +590,7 @@ float FspUtilCascadeDitherNoise(float3 WorldPositionWs)
 
 // 最細Cascadeの境界付近で、最細Cascadeまたは一つ上のCascadeを確率的に選択する。
 // 選択と同じ連続位置の境界を使い、グリッドのスナップによるディザ率の跳躍を防ぐ。
-// Dither範囲は最細Cascadeのセル数で指定し、小さいグリッドでは補間帯の重なりを防ぐ。
+// ディザ帯は最細Cascadeの境界から1セルの固定安全帯であり、呼び出し側から変更しない。
 // 両Cascadeを同時にロードせず、選択された方だけをサンプリングする。
 bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
     Texture3D<float4> IrradianceVolumeSH,
@@ -600,7 +599,6 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
     uint FineCascadeIndex,
     int3 FineBaseCellCoord,
     float3 FineCellFraction,
-    float DitherRangeCells,
     bool bNeedSkyVisibility,
     bool bNeedRadiance,
     out float4 OutSkyVisibility,
@@ -614,13 +612,16 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
         WorldPositionWs,
         FineCascadeIndex);
 
-    const bool bUseCoarseCascade =
+    // MaterialではデバッグCVarでのみ切り替える。内部FSPシェーダは固定で有効化する。
+    const bool bCascadeDitherEnabled =
 #if IS_MATERIAL_SHADER
-        // Scene UB経由で切り替え、既存CustomNodeの引数や補間幅を維持する。
-        Scene.InstantRdvParam.FspCascadeDitherInterpolation != 0u &&
+        Scene.InstantRdvParam.FspCascadeDitherInterpolation != 0u;
+#else
+        true;
 #endif
+    const bool bUseCoarseCascade =
+        bCascadeDitherEnabled &&
         CoarseCascadeIndex < FspUtilEffectiveCascadeCount(GridParams) &&
-        DitherRangeCells > 0.0 &&
         FspUtilCascadeDitherNoise(WorldPositionWs) < CoarseBlendWeight;
 
     if (bUseCoarseCascade)
@@ -1097,7 +1098,6 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
-    float DitherRangeCells,
     out float3 OutRadiance)
 {
     OutRadiance = 0.0.xxx;
@@ -1126,7 +1126,6 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
-        DitherRangeCells,
         false,
         true,
         SkyVisibility,
@@ -1158,7 +1157,6 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
-    float DitherRangeCells,
     out float3 OutDiffuseIrradiance)
 {
     OutDiffuseIrradiance = 0.0.xxx;
@@ -1187,7 +1185,6 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
-        DitherRangeCells,
         false,
         true,
         SkyVisibility,
@@ -1211,7 +1208,6 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
-    float DitherRangeCells,
     out float OutSkyVisibility)
 {
     OutSkyVisibility = 0.0;
@@ -1240,7 +1236,6 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
-        DitherRangeCells,
         true,
         false,
         SkyVisibility,
@@ -1264,7 +1259,6 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
-    float DitherRangeCells,
     out float OutSkyVisibility)
 {
     OutSkyVisibility = 0.0;
@@ -1293,7 +1287,6 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
-        DitherRangeCells,
         true,
         false,
         SkyVisibility,

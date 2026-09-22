@@ -108,8 +108,8 @@ INSTANT_RDV_CVAR_BOOL(
     TEXT("r.InstantRdv.Fsp.CascadeDitherInterpolation"),
     1,
     TEXT("マテリアルからのIrradiance / SkyVisibility取得時のカスケード間ディザ補間。\n")
-    TEXT("0: Disabled (finest cascade only)\n")
-    TEXT("1: Enabled (uses material dither range)"),
+    TEXT("0: Disabled (hard cascade switch)\n")
+    TEXT("1: Enabled (fixed one-cell safety band)"),
     ECVF_RenderThreadSafe,
     TEXT("FSP"),
     TEXT("Cascade dither interpolation"),

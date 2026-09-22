@@ -27,7 +27,6 @@ FInstantRdvFspGridParams InstantRdvMaterialGetFspGridParams()
 bool InstantRdvMaterialTryEvaluateDiffuseIrradiance(
     float3 WorldPositionWs,
     float3 NormalWs,
-    float DitherRangeCells,
     out float3 OutDiffuseIrradiance)
 {
     OutDiffuseIrradiance = 0.0.xxx;
@@ -41,7 +40,6 @@ bool InstantRdvMaterialTryEvaluateDiffuseIrradiance(
         InstantRdvMaterialGetFspGridParams(),
         WorldPositionWs,
         NormalWs,
-        DitherRangeCells,
         OutDiffuseIrradiance);
 }
 
@@ -51,7 +49,6 @@ bool InstantRdvMaterialTryEvaluateDiffuseIrradiance(
 bool InstantRdvMaterialTryEvaluateSkyVisibilityIbl(
     float3 WorldPositionWs,
     float3 NormalWs,
-    float DitherRangeCells,
     out float OutSkyVisibility)
 {
     OutSkyVisibility = 0.0;
@@ -65,7 +62,6 @@ bool InstantRdvMaterialTryEvaluateSkyVisibilityIbl(
         InstantRdvMaterialGetFspGridParams(),
         WorldPositionWs,
         NormalWs,
-        DitherRangeCells,
         OutSkyVisibility);
 }
 
