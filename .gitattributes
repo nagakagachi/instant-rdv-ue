@@ -1,0 +1,6 @@
+# Unreal Engine source assets are binary and must retain their full history outside normal Git blobs.
+*.uasset filter=lfs diff=lfs merge=lfs -text
+*.umap   filter=lfs diff=lfs merge=lfs -text
+*.ubulk  filter=lfs diff=lfs merge=lfs -text
+*.uexp   filter=lfs diff=lfs merge=lfs -text
+*.uptnl  filter=lfs diff=lfs merge=lfs -text

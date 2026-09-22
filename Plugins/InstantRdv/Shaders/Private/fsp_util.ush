@@ -783,8 +783,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
     float4 SkyVisibility,
     float3 NormalWs)
 {
-    return max(
-        0.0,
+    return saturate(
         dot(SkyVisibility, FspUtilEvaluateL1ShBasis(normalize(NormalWs))));
 }
 
@@ -793,8 +792,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
     float4 SkyVisibility,
     float3 NormalWs)
 {
-    return max(
-        0.0,
+    return saturate(
         dot(
             SkyVisibility,
             FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs))));
@@ -1148,9 +1146,12 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
     return true;
 }
 
-// Finest Cascade内でSH係数をトリリニア補間し、Diffuse Irradianceを評価する。
+// Material用: Finest Cascade内でSH係数をトリリニア補間し、Diffuse Irradianceを評価する。
 // 8セルの格納済みDiffuse Irradiance SHを先に補間してから法線評価を1回だけ行う。
-// ワールド位置周辺8セルを補間し、Diffuse Irradianceを評価する。
+// OutDiffuseIrradianceは入射Diffuse Irradiance Eであり、Lambert反射の出力Radianceは
+//    BaseColor * OutDiffuseIrradiance / PI として使用する。
+// 戻り値は位置に使用可能なCascadeと補間座標があるかを表す。false時の出力はゼロ。
+// 未更新セルのゼロSHは座標が有効ならtrueとなるため、GI値の有効性は表さない。
 bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
@@ -1203,7 +1204,7 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
     return true;
 }
 
-// ワールド位置周辺8セルを補間し、指定方向のSkyVisibilityを評価する。
+// ワールド位置周辺8セルを補間し、指定方向のSkyVisibilityを評価する。Cos畳み込み無し.
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
@@ -1246,15 +1247,17 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
         RadianceG,
         RadianceB);
 
-    OutSkyVisibility = max(
-        0.0,
+    OutSkyVisibility = saturate(
         dot(SkyVisibility, FspUtilEvaluateL1ShBasis(normalize(NormalWs))));
     return true;
 }
 
-// Finest Cascade内でSkyVisibility SHをトリリニア補間し、Diffuse/IBL可視性を評価する。
+// Material用: Finest Cascade内でSkyVisibility SHをトリリニア補間し、Diffuse/IBL可視性を評価する。
 // 8セルのSH係数を先に補間してから正規化Cos畳み込みと法線評価を1回だけ行う。
-// ワールド位置周辺8セルを補間し、IBL用SkyVisibilityを評価する。
+// OutSkyVisibilityは無次元のIBL可視性係数で、SkyLightやIBLの間接光成分へ乗算する。
+// 正規化Cos畳み込み済みのためPI除算は不要。
+// 戻り値は位置に使用可能なCascadeと補間座標があるかを表す。false時の出力はゼロ。
+// 未更新セルのゼロSHは座標が有効ならtrueとなるため、可視性値の有効性は表さない。
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
@@ -1297,8 +1300,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
         RadianceG,
         RadianceB);
 
-    OutSkyVisibility = max(
-        0.0,
+    OutSkyVisibility = saturate(
         dot(
             SkyVisibility,
             FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs)))); // Cos畳み込み
