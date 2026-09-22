@@ -1,4 +1,4 @@
-/*
+﻿/*
     InstantRdvBbv.h
 */
 
@@ -94,6 +94,8 @@ struct FToroidalGrid
 class FInstantRdvBbv final
 {
 public:
+
+    FInstantRdvBbv(const FInstantRdvBbvConfig& InBbvConfig, const FInstantRdvFspConfig& InFspConfig);
 
     // 初期化/解放 (Editor/Device 初期化タイミングで呼ぶ)
     void Initialize();

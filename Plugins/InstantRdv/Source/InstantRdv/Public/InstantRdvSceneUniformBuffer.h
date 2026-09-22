@@ -44,3 +44,6 @@ BEGIN_SHADER_PARAMETER_STRUCT(FInstantRdvSceneUniformBufferParams, )
 END_SHADER_PARAMETER_STRUCT()
 
 DECLARE_SCENE_UB_STRUCT(FInstantRdvSceneUniformBufferParams, InstantRdvParam, )
+
+class FRDGBuilder;
+INSTANTRDV_API void InitializeInstantRdvSceneUniformBufferDefaults(FInstantRdvSceneUniformBufferParams& ShaderParams, FRDGBuilder& GraphBuilder);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "SceneViewExtension.h"
+#include "InstantRdvRuntimeSettings.h"
 
 class FInstantRdvBbv;
 class FRDGBuilder;
@@ -43,6 +44,9 @@ private:
     FScreenPassTexture BbvBeforeDof_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& Inputs);
 
     TUniquePtr<FInstantRdvBbv> BbvSystem;
+    const FSceneInterface* ActiveScene_RenderThread = nullptr;
+    uint64 ActiveSettingsRevision_RenderThread = MAX_uint64;
+    FInstantRdvLevelSettings ActiveLevelSettings_RenderThread;
     TArray<const FSceneView*> FrameViews_RenderThread;
     const FSceneViewFamily* AcceptedViewFamily_RenderThread = nullptr;
     const FSceneView* UpdateOwnerView_RenderThread = nullptr;

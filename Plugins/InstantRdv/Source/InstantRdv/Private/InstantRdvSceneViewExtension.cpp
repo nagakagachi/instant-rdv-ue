@@ -10,6 +10,7 @@
 #include "HAL/IConsoleManager.h"
 #include "InstantRdvBbv.h"
 #include "InstantRdvConsoleVariables.h"
+#include "InstantRdvRuntimeSettingsRegistry.h"
 #include "PostProcess/PostProcessMaterialInputs.h"
 #include "PostProcess/PostProcessInputs.h"
 #include "SceneRendering.h"
@@ -293,11 +294,6 @@ static bool IsRdvEligibleView_RenderThread(const FSceneView& View)
 FInstantRdvSceneViewExtension::FInstantRdvSceneViewExtension(const FAutoRegister& AutoRegister)
     : FSceneViewExtensionBase(AutoRegister)
 {
-    BbvSystem = MakeUnique<FInstantRdvBbv>();
-    {
-        BbvSystem->Initialize();
-    }
-
 }
 
 FInstantRdvSceneViewExtension::~FInstantRdvSceneViewExtension() = default;
@@ -331,9 +327,31 @@ void FInstantRdvSceneViewExtension::ResetAcceptedViewFamilyState_RenderThread()
 bool FInstantRdvSceneViewExtension::TryAcceptViewFamilyForRdv_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& ViewFamily)
 {
     const FSceneView* OwnerView = FindRdvUpdateView_RenderThread(ViewFamily);
-    if (OwnerView == nullptr || IsRdvFamilyAlreadyUpdated_RenderThread(ViewFamily) || !BbvSystem.IsValid())
+    const TSharedPtr<const FInstantRdvRenderSettings, ESPMode::ThreadSafe> RenderSettings =
+        FInstantRdvRuntimeSettingsRegistry::Find(ViewFamily.Scene);
+    if (OwnerView == nullptr || IsRdvFamilyAlreadyUpdated_RenderThread(ViewFamily) ||
+        RenderSettings == nullptr || !RenderSettings->LevelSettings.bEnabled)
     {
         return false;
+    }
+
+    if (ActiveScene_RenderThread != ViewFamily.Scene || ActiveSettingsRevision_RenderThread != RenderSettings->Revision)
+    {
+        const FInstantRdvLevelSettings& Settings = RenderSettings->LevelSettings;
+        FInstantRdvBbvConfig BbvConfig;
+        BbvConfig.BbvGridResolution = FIntVector(FMath::Max(Settings.BbvGridResolution.X, 1), FMath::Max(Settings.BbvGridResolution.Y, 1), FMath::Max(Settings.BbvGridResolution.Z, 1));
+        BbvConfig.BbvBrickSizeCm = FMath::Max(Settings.BbvBrickSizeCm, 1.0f);
+        FInstantRdvFspConfig FspConfig;
+        FspConfig.ProbeGridResolution = FIntVector(FMath::Max(Settings.ProbeGridResolution.X, 1), FMath::Max(Settings.ProbeGridResolution.Y, 1), FMath::Max(Settings.ProbeGridResolution.Z, 1));
+        FspConfig.ProbeCellSizeCm = FMath::Max(Settings.ProbeCellSizeCm, 1.0f);
+        FspConfig.ProbeCascadeCount = FMath::Max(Settings.ProbeCascadeCount, 1);
+        FspConfig.ProbeCapacity = FMath::Max(Settings.ProbePoolCapacity, 1);
+        FspConfig.VisibleSurfaceCapacity = FMath::Max(Settings.VisibleSurfaceCapacity, 1);
+        BbvSystem = MakeUnique<FInstantRdvBbv>(BbvConfig, FspConfig);
+        BbvSystem->Initialize();
+        ActiveScene_RenderThread = ViewFamily.Scene;
+        ActiveSettingsRevision_RenderThread = RenderSettings->Revision;
+        ActiveLevelSettings_RenderThread = Settings;
     }
 
     // ここがRDV lifecycleの唯一の入口。
@@ -425,9 +443,11 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
     {
         FSceneUniformBuffer& sceneUniformBuffer = sceneRenderer->GetSceneUniforms();
         FInstantRdvSceneUniformBufferParams params{};
+        InitializeInstantRdvSceneUniformBufferDefaults(params, GraphBuilder);
         if (BbvSystem.IsValid())
         {
-            BbvSystem->FillSceneUniformBufferParams_RenderThread(GraphBuilder, params, bAcceptedForRdv);
+            BbvSystem->FillSceneUniformBufferParams_RenderThread(
+                GraphBuilder, params, bAcceptedForRdv);
         }
         sceneUniformBuffer.Set(SceneUB::InstantRdvParam, params);
     }

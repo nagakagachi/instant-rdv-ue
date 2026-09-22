@@ -1,4 +1,4 @@
-/*
+﻿/*
     InstantRdvBbv.cpp
 
     BBVの永続リソース管理、Geometry/Radiance更新、FSP更新、
@@ -1004,6 +1004,11 @@ IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspProbeBillboardPS, "/InstantRdvShaders/Priv
 IMPLEMENT_GLOBAL_SHADER(FInstantRdvFspDebugTextPS, "/InstantRdvShaders/Private/Fsp/fsp_debug_text_ps.usf", "MainPS", SF_Pixel);
 } // namespace
 
+FInstantRdvBbv::FInstantRdvBbv(const FInstantRdvBbvConfig& InBbvConfig, const FInstantRdvFspConfig& InFspConfig)
+{
+    Config.bbv = InBbvConfig;
+    Config.fsp = InFspConfig;
+}
 
 
 uint32 FInstantRdvBbvConfig::GetBbvBrickCount() const

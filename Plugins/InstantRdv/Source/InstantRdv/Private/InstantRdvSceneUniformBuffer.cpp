@@ -9,7 +9,7 @@
 #include "RenderGraphUtils.h"
 
 // SceneUniformBufferの拡張部のデフォルト値定義用関数.
-static void GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams(FInstantRdvSceneUniformBufferParams& ShaderParams, FRDGBuilder& GraphBuilder)
+void InitializeInstantRdvSceneUniformBufferDefaults(FInstantRdvSceneUniformBufferParams& ShaderParams, FRDGBuilder& GraphBuilder)
 {
     const FRDGTextureRef DummyFloat4Texture = GraphBuilder.CreateTexture(
         FRDGTextureDesc::Create3D(
@@ -51,4 +51,4 @@ static void GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams(FIn
 }
 
 // SceneUniformBufferのメンバ登録.
-IMPLEMENT_SCENE_UB_STRUCT(FInstantRdvSceneUniformBufferParams, InstantRdvParam, GetDefaultResourceParameters_FInstantRdvSceneUniformBufferParams);
+IMPLEMENT_SCENE_UB_STRUCT(FInstantRdvSceneUniformBufferParams, InstantRdvParam, InitializeInstantRdvSceneUniformBufferDefaults);

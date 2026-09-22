@@ -45,13 +45,14 @@ bool InstantRdvMaterialTryEvaluateDiffuseIrradiance(
 
 // WorldPositionWsにおけるSkyLight/IBL向けの無次元Sky Visibilityを評価する。
 // OutSkyVisibilityは正規化Cos畳み込み済みであり、SkyLightまたはIBLの間接成分へそのまま乗算できる。
-// falseはInstantRDVが無効、またはWorldPositionWsがIrradianceVolume外であることを表し、出力はゼロとなる。
+// falseはInstantRDVが無効、またはWorldPositionWsがIrradianceVolume外であることを表す。
+// InstantRDV無効時はSkyLightを遮蔽しないためOutSkyVisibilityは1、Volume外では0となる。
 bool InstantRdvMaterialTryEvaluateSkyVisibilityIbl(
     float3 WorldPositionWs,
     float3 NormalWs,
     out float OutSkyVisibility)
 {
-    OutSkyVisibility = 0.0;
+    OutSkyVisibility = Scene.InstantRdvParam.FspEnabled == 0u ? 1.0 : 0.0;
     if (Scene.InstantRdvParam.FspEnabled == 0u)
     {
         return false;
