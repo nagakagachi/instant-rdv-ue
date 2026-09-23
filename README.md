@@ -35,7 +35,7 @@ BBV の voxel occupancy と brick radiance のデバッグ表示です。
 
 ### BBV: Bitmask Brick Voxel
 
-BBV はジオメトリ情報は高周波, 材質情報は低周波で保持するために voxle をグループ(brick)単位で管理するデータ構造です。空間を brick grid に分割し、brick 内の voxel occupancy を bitmask として保持します。カメラ追従するToroidalGridで管理され、高速なアクセスのためにDenseなレイアウトを採用しています。デモ実装では 8x8x8 voxel を 1 brickとして 512bit で表現します。
+BBV はジオメトリ情報は高周波, 材質情報は低周波で保持するために voxle をグループ(brick)単位で管理するデータ構造です。空間を brick grid に分割し、brick 内の voxel occupancy を bitmask として保持します。カメラ追従するToroidalGridで管理され、高速なアクセスのためにDenseなレイアウトを採用しています。デモ実装では 8x8x8 voxel を 1 brick として 512 bit で表現します。全体の解像度は 64^3 brick  = 512^3 解像度相当のジオメトリ voxel 表現になります。
 
 ジオメトリ情報よりも低周波の情報として、 brick毎の材質等の情報を追加で保持します。デモ実装では scene color 由来の輝度を brick 単位の coarse radiance として格納し、RdvGI のレイトレースのヒット位置の輝度としてサンプリングします。
 
@@ -46,6 +46,10 @@ DepthBuffer から復元した surface は voxel **injection** として occupan
 DepthBuffer の side view から復元した surface sample を BBV brick grid へ直接 injection します。この処理はcompute shaderで実行され、waveintrinsicsを利用した書き込み回数削減をしつつatomic操作で実現されます。
 
 ![BBV voxel injection](docs/images/bbv-voxel-injection.svg)
+
+RDVの仕組みはワールド空間のSurfaceを復元できる情報であればMainView DepthBufferと同様に利用できます。例として Directional ShadowMap を追加の Raster 入力とする場合は、sun view の first-hit depth から同じ BBV grid へ occupancy を追加できます。MainView から見えない geometry も shadow caster として観測される範囲で更新できます。
+
+![MainView と Directional ShadowMap からの BBV injection](docs/images/bbv-multiview-injection.svg)
 
 ### BBV voxel removal
 
