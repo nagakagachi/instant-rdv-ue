@@ -107,6 +107,10 @@ Material shader は更新処理とは別に、cascade IrradianceVolume を trili
 
 ## Unreal Engine integration
 
+### 概要
+
+InstantRDV は `FSceneViewExtensionBase` を利用する Unreal Engine プラグインとして実装しています。BBV のジオメトリ更新は BasePass 前のコールバックで実行し、BrickRadiance と VSP の更新は `BeforeDOF` のポストプロセスパスで実行します。Material Function はプラグインが保持する GPU resource をサンプリングします。
+
 ### Debug menu
 
 `Tools > Debug > Instant-RDV > Instant-RDV Debug` からデバッグメニューを開きます。メニューは Runtime、BBV、VSP、Debug の 4 区分です。Runtime では InstantRDV、RdvGI、ReducedSurfaceBuffer の有効・無効を切り替えます。BBV と VSP では各更新処理と評価方式を確認できます。Debug では BBV、ActiveProbe、IrradianceVolume を可視化できます。

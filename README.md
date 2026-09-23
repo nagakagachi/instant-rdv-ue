@@ -105,6 +105,10 @@ Material shaders evaluate the cascaded IrradianceVolume independently from the u
 
 ## Unreal Engine integration
 
+### Overview
+
+InstantRDV is implemented as an Unreal Engine plugin using `FSceneViewExtensionBase`. It adds BBV geometry updates through the pre-BasePass callback and performs BrickRadiance and VSP updates in the `BeforeDOF` post-processing pass. Material Functions sample the GPU resources maintained by the plugin.
+
 ### Debug menu
 
 Open `Tools > Debug > Instant-RDV > Instant-RDV Debug`. The menu has Runtime, BBV, VSP, and Debug sections. Runtime toggles InstantRDV, RdvGI, and ReducedSurfaceBuffer. BBV and VSP expose update paths and evaluation options. Debug visualizes BBV, ActiveProbe, and IrradianceVolume.
