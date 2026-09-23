@@ -1,8 +1,6 @@
 // ファイル名: instant_rdv_material.ush
-// 役割: Unreal Engine Material Custom NodeからInstantRDVのIrradianceVolumeを評価する公開関数を提供する。
-// このファイルをincludeし、InstantRdvMaterialTryEvaluateDiffuseIrradianceまたは
-// InstantRdvMaterialTryEvaluateSkyVisibilityIblを使用する。内部FSP実装の関数・型を
-// Material Custom Nodeから直接使用しない。
+// 役割: Unreal Engine Material Custom NodeからInstantRDVの統合間接光評価を行う公開関数を提供する。
+// InstantRdvMaterialTryEvaluateIndirectLightingだけをMaterial Custom Nodeから使用する。
 #ifndef INSTANT_RDV_MATERIAL_USH
 #define INSTANT_RDV_MATERIAL_USH
 
@@ -21,49 +19,30 @@ FInstantRdvFspGridParams InstantRdvMaterialGetFspGridParams()
     return GridParams;
 }
 
-// WorldPositionWsにおける入射Diffuse Irradiance Eを評価する。
+// WorldPositionWsにおける入射Diffuse Irradiance EとSkyLight/IBL向けSky Visibilityを同時に評価する。
 // EmissiveへLambert反射の輝度として出力する場合は、BaseColor * OutDiffuseIrradiance / PIを使用する。
-// falseはInstantRDVが無効、またはWorldPositionWsがIrradianceVolume外であることを表し、出力はゼロとなる。
-bool InstantRdvMaterialTryEvaluateDiffuseIrradiance(
+// InstantRDV無効時はfalseを返し、Irradianceはゼロ、SkyVisibilityは遮蔽なしの1を返す。
+// Volume外ではfalseを返し、IrradianceとSkyVisibilityはゼロとなる。
+bool InstantRdvMaterialTryEvaluateIndirectLighting(
     float3 WorldPositionWs,
     float3 NormalWs,
-    out float3 OutDiffuseIrradiance)
+    out float3 OutDiffuseIrradiance,
+    out float OutSkyVisibilityIbl)
 {
     OutDiffuseIrradiance = 0.0.xxx;
+    OutSkyVisibilityIbl = Scene.InstantRdvParam.FspEnabled == 0u ? 1.0 : 0.0;
     if (Scene.InstantRdvParam.FspEnabled == 0u)
     {
         return false;
     }
 
-    return FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
+    return FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
         Scene.InstantRdvParam.FspIrradianceVolumeSH,
         InstantRdvMaterialGetFspGridParams(),
         WorldPositionWs,
         NormalWs,
-        OutDiffuseIrradiance);
-}
-
-// WorldPositionWsにおけるSkyLight/IBL向けの無次元Sky Visibilityを評価する。
-// OutSkyVisibilityは正規化Cos畳み込み済みであり、SkyLightまたはIBLの間接成分へそのまま乗算できる。
-// falseはInstantRDVが無効、またはWorldPositionWsがIrradianceVolume外であることを表す。
-// InstantRDV無効時はSkyLightを遮蔽しないためOutSkyVisibilityは1、Volume外では0となる。
-bool InstantRdvMaterialTryEvaluateSkyVisibilityIbl(
-    float3 WorldPositionWs,
-    float3 NormalWs,
-    out float OutSkyVisibility)
-{
-    OutSkyVisibility = Scene.InstantRdvParam.FspEnabled == 0u ? 1.0 : 0.0;
-    if (Scene.InstantRdvParam.FspEnabled == 0u)
-    {
-        return false;
-    }
-
-    return FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
-        Scene.InstantRdvParam.FspIrradianceVolumeSH,
-        InstantRdvMaterialGetFspGridParams(),
-        WorldPositionWs,
-        NormalWs,
-        OutSkyVisibility);
+        OutDiffuseIrradiance,
+        OutSkyVisibilityIbl);
 }
 
 #endif // INSTANT_RDV_MATERIAL_USH

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "InstantRdvDefaultSettings.h"
 #include "InstantRdvRuntimeSettings.generated.h"
 
 USTRUCT(BlueprintType)
@@ -18,25 +19,25 @@ struct INSTANTRDV_API FInstantRdvLevelSettings
     bool bEnabled = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|BBV", meta = (ClampMin = "1"))
-    FIntVector BbvGridResolution = FIntVector(64, 64, 64);
+    FIntVector BbvGridResolution = InstantRdvDefaults::BbvGridResolution;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|BBV", meta = (ClampMin = "1.0", Units = "cm"))
-    float BbvBrickSizeCm = 300.0f;
+    float BbvBrickSizeCm = InstantRdvDefaults::BbvBrickSizeCm;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1"))
-    FIntVector ProbeGridResolution = FIntVector(32, 32, 32);
+    FIntVector ProbeGridResolution = InstantRdvDefaults::ProbeGridResolution;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1.0", Units = "cm"))
-    float ProbeCellSizeCm = 200.0f;
+    float ProbeCellSizeCm = InstantRdvDefaults::ProbeCellSizeCm;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1", ClampMax = "16"))
-    int32 ProbeCascadeCount = 5;
+    int32 ProbeCascadeCount = static_cast<int32>(InstantRdvDefaults::ProbeCascadeCount);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1"))
-    int32 ProbePoolCapacity = 8192;
+    int32 ProbePoolCapacity = static_cast<int32>(InstantRdvDefaults::ProbePoolCapacity);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1"))
-    int32 VisibleSurfaceCapacity = 4096;
+    int32 VisibleSurfaceCapacity = static_cast<int32>(InstantRdvDefaults::VisibleSurfaceCapacity);
 
 
 };

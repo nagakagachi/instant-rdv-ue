@@ -5,6 +5,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "InstantRdvDefaultSettings.h"
 #include "RenderGraphFwd.h"
 
 #include "../../../Shaders/Private/instant_rdv_common.ush"
@@ -20,8 +21,8 @@ class FInstantRdvSceneUniformBufferParams;
 
 struct FInstantRdvBbvConfig
 {
-    FIntVector BbvGridResolution = FIntVector(64, 64, 64);
-    float BbvBrickSizeCm = 300.0f;// NxNxNのVoxelクラスタをBrickと称し, そのサイズを指定するパラメータ.
+    FIntVector BbvGridResolution = InstantRdvDefaults::BbvGridResolution;
+    float BbvBrickSizeCm = InstantRdvDefaults::BbvBrickSizeCm;// NxNxNのVoxelクラスタをBrickと称し, そのサイズを指定するパラメータ.
 
     uint32 GetBbvBrickCount() const;
     uint32 GetBitmaskElementCount() const;
@@ -32,12 +33,12 @@ struct FInstantRdvBbvConfig
 };
 struct FInstantRdvFspConfig
 {
-    FIntVector ProbeGridResolution = FIntVector(32, 32, 32);
-    float ProbeCellSizeCm = 200.0f;
-    uint32 ProbeCascadeCount = 5;
+    FIntVector ProbeGridResolution = InstantRdvDefaults::ProbeGridResolution;
+    float ProbeCellSizeCm = InstantRdvDefaults::ProbeCellSizeCm;
+    uint32 ProbeCascadeCount = InstantRdvDefaults::ProbeCascadeCount;
     // Denseセル数とは独立した全カスケード共通のSparse容量。
-    uint32 ProbeCapacity = 8192;
-    uint32 VisibleSurfaceCapacity = 4096;
+    uint32 ProbeCapacity = InstantRdvDefaults::ProbePoolCapacity;
+    uint32 VisibleSurfaceCapacity = InstantRdvDefaults::VisibleSurfaceCapacity;
     uint32 GetRayCapacity() const { return ProbeCapacity * k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width; }
     uint32 GetAtlasTileWidth() const { return FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::CeilToInt(FMath::Sqrt(static_cast<float>(ProbeCapacity))))); }
 

@@ -703,6 +703,7 @@ float4 FspUtilConvolveL1SHByNormalizedClampedCosine(float4 SkyVisibilitySH)
     return FspUtilConvolveL1SH(SkyVisibilitySH, 1.0, 2.0 / 3.0);
 }
 
+
 // SH係数ではなく評価基底側へCos畳み込みを移す。
 // dot(SH * Kernel, Basis) == dot(SH, Basis * Kernel) なので、
 // RGB各チャンネルの係数を個別に畳み込むより、基底を一度だけ計算する方が軽い。
@@ -714,15 +715,7 @@ float4 FspUtilEvaluateL1ShBasisWithClampedCosine(float3 DirectionWs)
     return FspUtilConvolveL1SH(ShBasis, Pi, 2.0 * Pi / 3.0);
 }
 
-// SkyVisibilityの正規化Cos畳み込みを評価基底へ移したもの。
-// 正規化Cos畳み込みを基底側へ移して、IBL可視性評価用基底を返す。
-float4 FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(float3 DirectionWs)
-{
-    return FspUtilConvolveL1SH(
-        FspUtilEvaluateL1ShBasis(DirectionWs),
-        1.0,
-        2.0 / 3.0);
-}
+
 
 // IVセルのSH係数が未初期化状態ではないかを判定する。
 bool FspUtilIrradianceVolumeHasValidSH(
@@ -778,6 +771,16 @@ float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
             dot(RadianceR, ShBasis),
             dot(RadianceG, ShBasis),
             dot(RadianceB, ShBasis)));
+}
+
+// SkyVisibilityの正規化Cos畳み込みを評価基底へ移したもの。
+// 正規化Cos畳み込みを基底側へ移して、IBL可視性評価用基底を返す。
+float4 FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(float3 DirectionWs)
+{
+    return FspUtilConvolveL1SH(
+        FspUtilEvaluateL1ShBasis(DirectionWs),
+        1.0,
+        2.0 / 3.0);
 }
 
 // ロード済みSkyVisibility SHを指定方向の可視性へ評価する。
@@ -1146,20 +1149,19 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
     return true;
 }
 
-// Material用: Finest Cascade内でSH係数をトリリニア補間し、Diffuse Irradianceを評価する。
-// 8セルの格納済みDiffuse Irradiance SHを先に補間してから法線評価を1回だけ行う。
-// OutDiffuseIrradianceは入射Diffuse Irradiance Eであり、Lambert反射の出力Radianceは
-//    BaseColor * OutDiffuseIrradiance / PI として使用する。
-// 戻り値は位置に使用可能なCascadeと補間座標があるかを表す。false時の出力はゼロ。
-// 未更新セルのゼロSHは座標が有効ならtrueとなるため、GI値の有効性は表さない。
-bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
+// Material用: Finest Cascade内でSH係数をトリリニア補間し、Diffuse IrradianceとIBL SkyVisibilityを同時に評価する。
+// 位置からのCascade探索、境界ディザ、法線正規化、4 signalの3D Texture sampleを一度だけ実行する。
+// Irradiance RGBは書き込み時にclamped-cosine畳み込み済みであり、SkyVisibilityは生のSHをIBL評価時に正規化clamped-cosine基底で評価する。
+bool FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
     FInstantRdvFspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
-    out float3 OutDiffuseIrradiance)
+    out float3 OutDiffuseIrradiance,
+    out float OutSkyVisibilityIbl)
 {
     OutDiffuseIrradiance = 0.0.xxx;
+    OutSkyVisibilityIbl = 0.0;
 
     int3 BaseCellCoord;
     float3 CellFraction;
@@ -1175,9 +1177,9 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
     }
 
     float4 SkyVisibility;
-    float4 RadianceR;
-    float4 RadianceG;
-    float4 RadianceB;
+    float4 IrradianceR;
+    float4 IrradianceG;
+    float4 IrradianceB;
     FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
         IrradianceVolumeSH,
         GridParams,
@@ -1185,23 +1187,25 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradianceTrilinear(
         CascadeIndex,
         BaseCellCoord,
         CellFraction,
-        false,
+        true,
         true,
         SkyVisibility,
-        RadianceR,
-        RadianceG,
-        RadianceB);
+        IrradianceR,
+        IrradianceG,
+        IrradianceB);
 
-    const float4 ShBasis = FspUtilEvaluateL1ShBasis(normalize(NormalWs));
+    const float3 NormalizedNormalWs = normalize(NormalWs);
+    const float4 ShBasis = FspUtilEvaluateL1ShBasis(NormalizedNormalWs);
     OutDiffuseIrradiance = max(
         0.0.xxx,
         float3(
-            dot(RadianceR, ShBasis),
-            dot(RadianceG, ShBasis),
-            dot(RadianceB, ShBasis)));
+            dot(IrradianceR, ShBasis),
+            dot(IrradianceG, ShBasis),
+            dot(IrradianceB, ShBasis)));
+    OutSkyVisibilityIbl = saturate(
+        dot(SkyVisibility, FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(NormalizedNormalWs)));
     return true;
 }
-
 // ワールド位置周辺8セルを補間し、指定方向のSkyVisibilityを評価する。Cos畳み込み無し.
 bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
@@ -1248,57 +1252,5 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     return true;
 }
 
-// Material用: Finest Cascade内でSkyVisibility SHをトリリニア補間し、Diffuse/IBL可視性を評価する。
-// 8セルのSH係数を先に補間してから正規化Cos畳み込みと法線評価を1回だけ行う。
-// OutSkyVisibilityは無次元のIBL可視性係数で、SkyLightやIBLの間接光成分へ乗算する。
-// 正規化Cos畳み込み済みのためPI除算は不要。
-// 戻り値は位置に使用可能なCascadeと補間座標があるかを表す。false時の出力はゼロ。
-// 未更新セルのゼロSHは座標が有効ならtrueとなるため、可視性値の有効性は表さない。
-bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIblTrilinear(
-    Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
-    float3 WorldPositionWs,
-    float3 NormalWs,
-    out float OutSkyVisibility)
-{
-    OutSkyVisibility = 0.0;
-
-    int3 BaseCellCoord;
-    float3 CellFraction;
-    uint CascadeIndex = 0u;
-    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
-        GridParams,
-        WorldPositionWs,
-        CascadeIndex,
-        BaseCellCoord,
-        CellFraction))
-    {
-        return false;
-    }
-
-    float4 SkyVisibility;
-    float4 RadianceR;
-    float4 RadianceG;
-    float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
-        IrradianceVolumeSH,
-        GridParams,
-        WorldPositionWs,
-        CascadeIndex,
-        BaseCellCoord,
-        CellFraction,
-        true,
-        false,
-        SkyVisibility,
-        RadianceR,
-        RadianceG,
-        RadianceB);
-
-    OutSkyVisibility = saturate(
-        dot(
-            SkyVisibility,
-            FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs)))); // Cos畳み込み
-    return true;
-}
 
 #endif // INSTANT_RDV_FSP_UTIL_USH

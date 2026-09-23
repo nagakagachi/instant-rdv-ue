@@ -30,6 +30,6 @@ SceneViewExtension を基盤に、GI 機能を積み上げるための最小構�
 
 - BBV: `64 x 64 x 64`
 - BBV voxel size: `300 cm`（native 3m 相当）
-- Probe: `32 x 32 x 32`
+- Probe: `16 x 16 x 16`
 - Probe cell size: `200 cm`（native 2m 相当）
 - Probe cascade count: `5`
