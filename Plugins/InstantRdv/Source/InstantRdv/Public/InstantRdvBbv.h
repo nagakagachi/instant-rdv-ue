@@ -113,7 +113,7 @@ public:
     void FillSceneUniformBufferParams_RenderThread(
         FRDGBuilder& GraphBuilder,
         FInstantRdvSceneUniformBufferParams& OutParams,
-        bool bUseLiveResources);
+        bool bUseLiveResources, bool bUseVspResources);
 
     // BBV Geometry 更新（Injection / Removal）本体。
     void ExecuteGeometryUpdate(

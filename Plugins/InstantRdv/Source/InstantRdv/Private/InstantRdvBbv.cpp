@@ -1242,7 +1242,8 @@ void FInstantRdvBbv::BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FS
 void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     FRDGBuilder& GraphBuilder,
     FInstantRdvSceneUniformBufferParams& OutParams,
-    bool bUseLiveResources)
+    bool bUseLiveResources,
+    bool bUseVspResources)
 {
     const FRDGTextureRef DummyFloat4Texture = GraphBuilder.CreateTexture(
         FRDGTextureDesc::Create3D(
@@ -1267,7 +1268,7 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     const FIntVector& Resolution = SystemState.vsp.TrGrid.GridReso;
     const uint32 CellCount = Config.vsp.GetVspTotalCellCount();
 
-    OutParams.VspEnabled = bUseLiveResources && SystemState.bRenderInitialized ? 1u : 0u;
+    OutParams.VspEnabled = bUseVspResources && SystemState.bRenderInitialized ? 1u : 0u;
     OutParams.VspGridResolutionX = static_cast<uint32>(FMath::Max(Resolution.X, 0));
     OutParams.VspGridResolutionY = static_cast<uint32>(FMath::Max(Resolution.Y, 0));
     OutParams.VspGridResolutionZ = static_cast<uint32>(FMath::Max(Resolution.Z, 0));
@@ -1278,7 +1279,7 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
     OutParams.VspTrilinearInterpolation = CVarInstantRdvVspTrilinearInterpolation.GetValueOnRenderThread() != 0 ? 1u : 0u;
     OutParams.VspGridCenterPositionWs = FVector3f(SystemState.vsp.CurrentGridCenterPositionWs);
     OutParams.VspIrradianceVolumeSH =
-        bUseLiveResources && SystemState.vsp.VspIrradianceVolumeSHTexture.Handle != nullptr
+        bUseVspResources && SystemState.vsp.VspIrradianceVolumeSHTexture.Handle != nullptr
             ? GraphBuilder.CreateSRV(SystemState.vsp.VspIrradianceVolumeSHTexture.Handle)
             : OutParams.VspIrradianceVolumeSH;
 

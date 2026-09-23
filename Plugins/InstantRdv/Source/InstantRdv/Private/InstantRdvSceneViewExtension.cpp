@@ -21,28 +21,28 @@ namespace
 {
 INSTANT_RDV_CVAR_BOOL(
     CVarInstantRdvEnable,
-    TEXT("r.InstantRdv.GI"),
+    TEXT("r.InstantRdv.Enable"),
     1,
-    TEXT("Enable Instant-RDV runtime hooks.\n")
+    TEXT("Enable InstantRDV core runtime hooks, including BBV updates.\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
     ECVF_RenderThreadSafe,
     TEXT("Runtime"),
-    TEXT("Instant-RDV enabled"),
+    TEXT("InstantRDV enabled"),
     0);
 
 INSTANT_RDV_CVAR_BOOL(
-    CVarInstantRdvBbvEnable,
-    TEXT("r.InstantRdv.Bbv.Enable"),
+    CVarInstantRdvGiEnable,
+    TEXT("r.InstantRdv.Gi.Enable"),
     1,
-    TEXT("Enable Instant-RDV BBV update passes.\n")
+    TEXT("Enable InstantRDV GI features (VSP update and material GI output).\n")
+    TEXT("BBV core updates remain active when disabled.\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled"),
     ECVF_RenderThreadSafe,
     TEXT("Runtime"),
-    TEXT("BBV enabled"),
-    10);
-
+    TEXT("InstantRDV GI enabled"),
+    5);
 INSTANT_RDV_CVAR_INT(
     CVarInstantRdvBbvVisDebug,
     TEXT("r.InstantRdv.Bbv.VisDebug"),
@@ -447,7 +447,7 @@ void FInstantRdvSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder
         if (BbvSystem.IsValid())
         {
             BbvSystem->FillSceneUniformBufferParams_RenderThread(
-                GraphBuilder, params, bAcceptedForRdv);
+                GraphBuilder, params, bAcceptedForRdv, bAcceptedForRdv && ActiveLevelSettings_RenderThread.bGiEnabled && CVarInstantRdvGiEnable.GetValueOnRenderThread() != 0);
         }
         sceneUniformBuffer.Set(SceneUB::InstantRdvParam, params);
     }
@@ -461,7 +461,7 @@ void FInstantRdvSceneViewExtension::PreRenderView_RenderThread(FRDGBuilder& Grap
 
 void FInstantRdvSceneViewExtension::ExecuteBbvGeometryUpdate_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTexture* SceneDepthTexture)
 {
-    if (CVarInstantRdvBbvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
+    if (CVarInstantRdvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
     {
         return;
     }
@@ -506,7 +506,7 @@ void FInstantRdvSceneViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& 
 // PostProcess先頭.
 void FInstantRdvSceneViewExtension::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs)
 {
-    if (CVarInstantRdvBbvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
+    if (CVarInstantRdvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
     {
         return;
     }
@@ -540,7 +540,7 @@ void FInstantRdvSceneViewExtension::SubscribeToPostProcessingPass(EPostProcessin
 
 FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& Inputs)
 {
-    if (CVarInstantRdvBbvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
+    if (CVarInstantRdvEnable.GetValueOnRenderThread() == 0 || BbvSystem.IsValid() == false)
     {
         return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
     }
@@ -580,7 +580,7 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 GraphBuilder,
                 View,
                 SceneDepthTexture,
-                CVarInstantRdvVspUpdate.GetValueOnRenderThread() != 0,
+                ActiveLevelSettings_RenderThread.bGiEnabled && CVarInstantRdvGiEnable.GetValueOnRenderThread() != 0 && CVarInstantRdvVspUpdate.GetValueOnRenderThread() != 0,
                 CVarInstantRdvVspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
                 bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
             bAcceptedFamilyPostProcessUpdated_RenderThread = true;

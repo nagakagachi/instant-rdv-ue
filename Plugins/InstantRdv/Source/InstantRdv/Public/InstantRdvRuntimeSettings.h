@@ -16,7 +16,12 @@ struct INSTANTRDV_API FInstantRdvLevelSettings
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV")
-    bool bEnabled = true;
+    // InstantRDV基幹機能をレベル単位で有効にする。BBV更新を含む。
+    bool bEnabled = false;
+
+    // InstantRDV GI機能のVSP更新とマテリアル公開をレベル単位で制御する。BBV基幹更新には影響しない。
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|GI")
+    bool bGiEnabled = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|BBV", meta = (ClampMin = "1"))
     FIntVector BbvGridResolution = InstantRdvDefaults::BbvGridResolution;
