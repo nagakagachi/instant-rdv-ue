@@ -13,7 +13,7 @@ RdvGI は InstantRDV を利用したリアルタイム GI のデモ実装です�
 
 ▶ [YouTube で再生](https://www.youtube.com/watch?v=Mr9syMFeEFI)
 
-UE サンプルシーンでの RdvGI の ON/OFF 比較です。
+UE サンプルシーンでの RdvGI の ON/OFF 比較です。(LumenをOFFにしています)
 
 | RdvGI OFF | RdvGI ON |
 |---|---|
