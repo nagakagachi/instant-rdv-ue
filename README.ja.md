@@ -44,7 +44,7 @@ BBV の voxel occupancy と brick radiance のデバッグ表示です。
 
 ### BBV: Bitmask Brick Voxel
 
-BBV は、ジオメトリ情報を高周波、材質情報を低周波で保持するために、voxel をグループ（brick）単位で管理するデータ構造です。空間を brick grid に分割し、brick 内の voxel occupancy を bitmask として保持します。カメラに追従する ToroidalGrid で管理され、高速なアクセスのために dense なレイアウトを採用しています。デモ実装では 8x8x8 voxel を 1 brick として 512 bit で表現します。64^3 bricks の grid により、512^3 解像度相当のジオメトリ voxel 表現になります。
+BBV は、ジオメトリ情報を高周波、材質情報を低周波で保持するために、voxel をグループ（brick）単位で管理するデータ構造です。空間を brick grid に分割し、brick 内の voxel occupancy を bitmask として保持します。カメラに追従する ToroidalGrid で管理され、高速なアクセスのために dense なレイアウトを採用しています。デモ実装では 8x8x8 voxel を 1 brick として 512 bit で表現します。64^3 bricks で 512^3 解像度相当のジオメトリ voxel 表現になります。
 
 ジオメトリ情報よりも低周波の情報として、brick ごとの材質などの情報を追加で保持します。デモ実装では SceneColor 由来の輝度を brick 単位の coarse radiance として格納し、RdvGI のレイトレーシングのヒット位置の輝度としてサンプリングします。
 
