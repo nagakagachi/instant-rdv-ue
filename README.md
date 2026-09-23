@@ -1,146 +1,153 @@
-# InstantRDV for Unreal Engine
-本リポジトリにはInstantRDVデモ実装の Unreal Engine 5.8 向けプラグインとサンプルプロジェクトを含みます。
+﻿# InstantRDV for Unreal Engine
 
-InstantRDV は ラスタライズ描画パイプライン の成果物から GPU voxel scene を逐次構築・維持する仕組みです。
-RdvGi は InstantRDVを利用したリアルタイムGIのデモ実装です。(ハードウェアレイトレース不使用)
+[English](README.md) | [日本語](README.ja.md)
 
-UE サンプルシーンでの RdvGI の ON/OFF 比較です。
+This repository contains an Unreal Engine 5.8 plugin and sample project for the InstantRDV technical demo.
+
+InstantRDV incrementally constructs and maintains a GPU voxel scene from rasterization pipeline outputs. RdvGI is a real-time global illumination demo built on InstantRDV. It does not use hardware ray tracing.
+
+## Demo video
+
+[![Watch the InstantRDV technical demo on YouTube](https://i.ytimg.com/vi/Mr9syMFeEFI/hqdefault.jpg)](https://www.youtube.com/watch?v=Mr9syMFeEFI)
+
+▶ [Watch on YouTube](https://www.youtube.com/watch?v=Mr9syMFeEFI)
+
+RdvGI enabled and disabled in the Unreal Engine sample scene:
 
 | RdvGI OFF | RdvGI ON |
 |---|---|
-| ![RdvGI 無効時のサンプルシーン](docs/images/rdvgi_off.png) | ![RdvGI 有効時のサンプルシーン](docs/images/rdvgi_on.png) |
+| ![Sample scene with RdvGI disabled](docs/images/rdvgi_off.png) | ![Sample scene with RdvGI enabled](docs/images/rdvgi_on.png) |
 
 ## Terminology
 
-- **RDV — Raster Derived Voxel**: Raster Pass の成果物から導出する voxel scene。
-- **BBV — Bitmask Brick Voxel**: occupancy を bitmask で保持する brick voxel grid。
-- **RdvGI**: InstantRDV の仕組みを利用した real-time global illumination 実装。
-- **VSP — Visible Surface Probe**: 可視 surface 上に Probe を配置して GI 計算を行う probe system。
+- **RDV — Raster Derived Voxel**: A voxel scene derived from raster pass outputs.
+- **BBV — Bitmask Brick Voxel**: A brick voxel grid that stores occupancy as bitmasks.
+- **RdvGI**: A real-time global illumination implementation built on InstantRDV.
+- **VSP — Visible Surface Probe**: A probe system that places probes on visible surfaces for GI evaluation.
 
-## InstantRDV: Raster 成果物を流用した GPU Voxel Scene 構築
+## InstantRDV: GPU voxel scene construction from rasterization
 
-一般的な voxelization では、scene geometry の追加 rasterization または CPU 側 scene data の GPU 転送を行います。InstantRDV は main view rendering で生成済みの DepthBuffer を入力として利用します。Depth から world-space surface position を復元し、Compute Shader で BBV を更新します。追加 geometry pass および CPU-side voxel build は不要です。(でも実装ではMainViewのみです)
+Conventional voxelization requires an additional geometry rasterization pass or CPU-to-GPU transfer of scene data. InstantRDV uses the DepthBuffer already generated during main-view rendering. It reconstructs world-space surface positions from depth and updates BBV with compute shaders. No additional geometry pass or CPU-side voxel build is required. The current implementation uses MainView input only.
 
-入力は MainView の DepthBuffer に限りません。world-space surface position を復元できる Raster 成果物を BBV 更新に使用できます。ShadowMap、GBuffer、独自の surface cache も使用できます。
+The design is not restricted to the MainView DepthBuffer. Any raster output that can reconstruct world-space surface positions can update BBV, including ShadowMaps, GBuffer data, and custom surface caches.
 
-SceneDepth は geometry occupancy、SceneColor は BrickRadiance の入力です。GBuffer などの Raster 成果物も同様に入力として使用できます。
+SceneDepth supplies geometry occupancy. SceneColor supplies BrickRadiance. Other raster outputs, including GBuffer data, can be used in the same way.
 
-![Raster 成果物から BBV を更新するデータフロー](docs/images/raster-to-bbv.svg)
+![Raster-output-to-BBV update flow](docs/images/raster-to-bbv.svg)
 
-BBV の voxel occupancy と brick radiance のデバッグ表示です。
+BBV voxel occupancy and brick radiance debug views:
 
 | Voxel occupancy | Brick radiance |
 |---|---|
-| ![BBV の voxel occupancy の可視化](docs/images/bbv_visualize_voxel.png) | ![BBV の brick radiance の可視化](docs/images/bbv_visualize_brick_radiance.png) |
+| ![BBV voxel occupancy visualization](docs/images/bbv_visualize_voxel.png) | ![BBV brick radiance visualization](docs/images/bbv_visualize_brick_radiance.png) |
 
 ### BBV: Bitmask Brick Voxel
 
-BBV はジオメトリ情報は高周波, 材質情報は低周波で保持するために voxle をグループ(brick)単位で管理するデータ構造です。空間を brick grid に分割し、brick 内の voxel occupancy を bitmask として保持します。カメラ追従するToroidalGridで管理され、高速なアクセスのためにDenseなレイアウトを採用しています。デモ実装では 8x8x8 voxel を 1 brick として 512 bit で表現します。全体の解像度は 64^3 brick  = 512^3 解像度相当のジオメトリ voxel 表現になります。
+BBV groups voxels into bricks so high-frequency geometry and lower-frequency material data can use different representations. Space is divided into a brick grid, and each brick stores voxel occupancy as a bitmask. The grid follows the camera as a ToroidalGrid and uses a dense layout for fast access. In the demo, one brick contains 8x8x8 voxels and is represented by 512 bits. A 64^3-brick grid provides geometry voxel resolution equivalent to 512^3 voxels.
 
-ジオメトリ情報よりも低周波の情報として、 brick毎の材質等の情報を追加で保持します。デモ実装では scene color 由来の輝度を brick 単位の coarse radiance として格納し、RdvGI のレイトレースのヒット位置の輝度としてサンプリングします。
+BBV also stores lower-frequency data per brick. The demo stores SceneColor-derived radiance as coarse brick radiance and samples it at BBV ray-trace hit locations for RdvGI.
 
-DepthBuffer から復元した surface は voxel **injection** として occupancy に追加します。視点移動および screen coverage の変化で観測されなくなった領域は **removal** で除去します。BBV はこの逐次更新によってリアルタイムにシーンに追従する voxel scene 表現です。
+Surfaces reconstructed from DepthBuffer are added to occupancy through voxel **injection**. Areas that are no longer observed after camera movement or coverage changes are removed through **removal**. These incremental updates keep BBV synchronized with the scene in real time.
 
 ### BBV voxel injection
 
-DepthBuffer の side view から復元した surface sample を BBV brick grid へ直接 injection します。この処理はcompute shaderで実行され、waveintrinsicsを利用した書き込み回数削減をしつつatomic操作で実現されます。
+Surface samples reconstructed from a DepthBuffer side view are injected directly into the BBV brick grid. The compute shader uses Wave Intrinsics to reduce writes, then updates occupancy through atomic operations.
 
 ![BBV voxel injection](docs/images/bbv-voxel-injection.svg)
 
-RDVの仕組みはワールド空間のSurfaceを復元できる情報であればMainView DepthBufferと同様に利用できます。例として Directional ShadowMap を追加の Raster 入力とする場合は、sun view の first-hit depth から同じ BBV grid へ occupancy を追加できます。MainView から見えない geometry も shadow caster として観測される範囲で更新できます。
+RDV can use any data that reconstructs world-space surfaces in the same way as MainView DepthBuffer. For example, a Directional ShadowMap can be used as an additional raster input to inject occupancy from first-hit depth in the light view. Geometry hidden from MainView can then be updated where it is observed as a shadow caster.
 
-![MainView と Directional ShadowMap からの BBV injection](docs/images/bbv-multiview-injection.svg)
+![BBV injection from MainView and Directional ShadowMap](docs/images/bbv-multiview-injection.svg)
 
 ### BBV voxel removal
 
-injection だけでは 動的なシーンへの追従ができないため、depth test によって占有されなくなった領域のvoxelを除去します。BBV voxel を current camera view へ投影し、voxel depth と SceneDepth sample を比較します。voxel depth が SceneDepth より小さい場合は occupancy を除去し、それ以外は維持します。
+Injection alone cannot track a dynamic scene. BBV projects voxels into the current camera view and compares voxel depth with SceneDepth samples to remove regions that are no longer occupied. If voxel depth is smaller than SceneDepth, the occupancy is removed; otherwise it is retained.
 
 ![BBV voxel removal](docs/images/bbv-voxel-removal.svg)
 
-
 ### BBV ray tracing
 
-BBV は Compute Shader から voxel ray tracing できます。ray traversal は BBV occupancy を参照して hit surface を検出します。VSP の visibility capture、probe relocation、debug visualization 等がこの ray tracing を利用しています。hardware ray tracing scene は必要としません。
+BBV supports voxel ray tracing from compute shaders. Ray traversal tests BBV occupancy to detect surface hits. VSP visibility capture, probe relocation, and debug visualization use this ray tracing. No hardware ray-tracing scene is required.
 
-## RdvGI: Rdv 上で実装される probe based GI
+## RdvGI: probe-based GI on RDV
 
-RdvGI は BBV ray tracing を使用する GI 実装です。Enshrouded の GI および SurfelGI と同様に、visible surface を起点に probe を更新します。
+RdvGI is a GI implementation that uses BBV ray tracing. Similar to Enshrouded GI and SurfelGI, it updates probes from visible surfaces.
 
-VSP は DepthBuffer で観測した surface cell から sparse probe を配置・再利用します。各 probe は BBV ray tracing で octahedral map に radiance と sky visibility を capture し、L1 spherical harmonics へ投影します。投影結果を cascade IrradianceVolume へ伝播・格納します。material evaluation は volume を trilinear sample し、indirect diffuse irradiance と sky visibility IBL を取得します。
+VSP places and reuses sparse probes from surface cells observed through DepthBuffer. Each probe captures radiance and sky visibility into an octahedral map with BBV ray tracing, then projects the result to L1 spherical harmonics. The projection is propagated into cascaded IrradianceVolumes. Material evaluation trilinearly samples the volume to obtain indirect diffuse irradiance and sky-visibility IBL.
 
-probe ray origin は、対応する surface に埋まらない位置へ relocation します。capture に使う origin は relocation で確保します。このため GI evaluation 時に DDGI のような probe validity weight および visibility-weighted interpolation を使用しません。評価時には cascade selection、boundary dither、hardware trilinear filtering、SH evaluation を行います。
+Probe ray origins are relocated outside their associated surfaces. Capture uses these relocated origins, so GI evaluation does not use DDGI-style probe validity weights or visibility-weighted interpolation. Evaluation performs cascade selection, boundary dithering, hardware trilinear filtering, and SH evaluation.
 
-![RdvGI の Visible Surface Probe 更新フロー](docs/images/rdvgi-vsp-pipeline.svg)
+![RdvGI Visible Surface Probe update flow](docs/images/rdvgi-vsp-pipeline.svg)
 
-ActiveProbe の octahedral map は BBV ray trace の radiance と sky visibility を保持します。
+An ActiveProbe octahedral map stores radiance and sky visibility from BBV ray tracing.
 
-![ActiveProbe の octahedral map](docs/images/activeprobe_octahedralmap.png)
+![ActiveProbe octahedral map](docs/images/activeprobe_octahedralmap.png)
 
-ActiveProbe と IrradianceVolume のデバッグ表示です。
+ActiveProbe and IrradianceVolume debug views:
 
 | ActiveProbe | IrradianceVolume |
 |---|---|
-| ![VSP の ActiveProbe の可視化](docs/images/vsp_visualize_active_probe.png) | ![カスケード IrradianceVolume の可視化](docs/images/vsp_visualize_irradiancevolume.png) |
+| ![VSP ActiveProbe visualization](docs/images/vsp_visualize_active_probe.png) | ![Cascaded IrradianceVolume visualization](docs/images/vsp_visualize_irradiancevolume.png) |
 
-## GPU 更新フロー
+## GPU update flow
 
-InstantRDV の更新は選択した MainView を入力とします。BBV geometry は BasePass 前に更新し、BrickRadiance と VSP は lighting 後かつ tonemap 前に更新します。後者は同一 ViewFamily の一つの view を入力として 1 回だけ実行します。
+InstantRDV uses one selected MainView as input. BBV geometry updates run before BasePass. BrickRadiance and VSP update after lighting and before tonemapping. The latter updates once for one owner view in a ViewFamily.
 
-1. **Toroidal BBV の追従**: camera position に応じて BBV grid を移動し、新たに流入した brick を clear します。
-2. **Surface sample の構築**: MainView の SceneDepth から world-space surface position を復元します。ReducedSurface path では depth、normal、normal confidence を低解像度の surface sample として保持します。この sample は geometry、BrickRadiance、VSP の各更新で共有します。
-3. **Geometry の逐次更新**: surface sample を BBV voxel へ injection します。現在の depth surface より手前に残る voxel は removal で除去します。injection は Wave Intrinsics で同一 occupancy word の更新を集約してから atomic 操作を行います。
-4. **BrickRadiance の更新**: lighting 後、tonemap 前の SceneColor を occupancy surface へ対応付けます。brick ごとに蓄積・平均した coarse radiance は、後段の BBV ray trace の hit radiance になります。
-5. **Visible Surface Probe の更新**: visible surface を VSP cell へ対応付け、可視 cell だけを compact します。probe pool から必要な probe を割り当て、surface anchor と BBV ray tracing で probe origin を relocation します。
-6. **Probe capture**: active probe ごとに 6x6 octahedral directions の ray を生成し、BBV occupancy を trace します。hit は brick radiance、miss は sky visibility として ActiveProbe の octahedral map へ反映します。処理量は grid 全体ではなく active probe と ray request の数で決まります。
-7. **IrradianceVolume の更新**: octahedral map を L1 SH へ積分し、probe owner cell の IrradianceVolume を更新します。probe がない cell には近傍の SH を checkerboard propagation します。
+1. **Toroidal BBV tracking**: The BBV grid moves with the camera. Bricks entering the grid are cleared.
+2. **Surface sample construction**: World-space surface positions are reconstructed from MainView SceneDepth. The ReducedSurface path stores depth, normal, and normal confidence as low-resolution surface samples shared by geometry, BrickRadiance, and VSP updates.
+3. **Incremental geometry update**: Surface samples inject BBV voxels. Removal clears voxels remaining in front of the current depth surface. Injection aggregates updates to the same occupancy word with Wave Intrinsics before atomic operations.
+4. **BrickRadiance update**: SceneColor after lighting and before tonemapping is associated with occupancy surfaces. Coarse radiance accumulated and averaged per brick becomes the hit radiance for later BBV ray tracing.
+5. **Visible Surface Probe update**: Visible surfaces are mapped to VSP cells and only visible cells are compacted. Required probes are allocated from the probe pool, and probe origins are relocated with surface anchors and BBV ray tracing.
+6. **Probe capture**: Each active probe traces 6x6 octahedral ray directions through BBV occupancy. Hits provide brick radiance; misses provide sky visibility. Both are written to the ActiveProbe octahedral map. Work scales with active probes and ray requests rather than the full grid.
+7. **IrradianceVolume update**: Octahedral maps are integrated into L1 SH and update the IrradianceVolume at probe owner cells. Nearby SH values are checkerboard-propagated into cells without probes.
 
-Material shader は更新処理とは別に、cascade IrradianceVolume を trilinear sample します。cascade selection と boundary dither の後、L1 SH を surface normal で評価して diffuse irradiance と sky visibility IBL を取得します。
+Material shaders evaluate the cascaded IrradianceVolume independently from the update passes. After cascade selection and boundary dithering, L1 SH is evaluated with the surface normal to obtain diffuse irradiance and sky-visibility IBL.
 
 ## Unreal Engine integration
 
 ### Debug menu
 
-`Tools > Debug > Instant-RDV > Instant-RDV Debug` からデバッグメニューを開きます。メニューは Runtime、BBV、VSP、Debug の4区分です。Runtime では InstantRDV、RdvGI、ReducedSurfaceBuffer の有効・無効を切り替えます。BBV と VSP では各更新処理と評価方式を確認できます。Debug では BBV、ActiveProbe、IrradianceVolume を可視化できます。
+Open `Tools > Debug > Instant-RDV > Instant-RDV Debug`. The menu has Runtime, BBV, VSP, and Debug sections. Runtime toggles InstantRDV, RdvGI, and ReducedSurfaceBuffer. BBV and VSP expose update paths and evaluation options. Debug visualizes BBV, ActiveProbe, and IrradianceVolume.
 
-![Instant-RDV Debug メニューの場所](docs/images/debugmenu_location.png)
+![Instant-RDV Debug menu location](docs/images/debugmenu_location.png)
 
-![Instant-RDV Debug の項目レイアウト](docs/images/debugmenu_layout.png)
+![Instant-RDV Debug menu layout](docs/images/debugmenu_layout.png)
 
 ### Level Settings Actor
 
-`InstantRdvSettingsActor` は `Plugins > Instant-RDV > InstantRdv > Public` にある Actor class です。この Actor をレベルへ配置し、Details パネルでレベルごとの設定を変更します。`Enabled` は BBV を含む InstantRDV の有効・無効を切り替えます。`Gi Enabled` は VSP 更新とマテリアルからの GI 出力を切り替えます。BBV の更新は `Gi Enabled` の影響を受けません。BBV、VSP、Rendering、LOD、Relocation にはレベルごとのパラメータがあります。
+`InstantRdvSettingsActor` is an Actor class under `Plugins > Instant-RDV > InstantRdv > Public`. Place it in a level and change level-specific settings in the Details panel. `Enabled` toggles InstantRDV including BBV. `Gi Enabled` toggles VSP updates and material GI output. BBV updates are unaffected by `Gi Enabled`. Level-specific parameters are available for BBV, VSP, rendering, LOD, and relocation.
 
-![InstantRdvSettingsActor の配置元](docs/images/settingsactor_location.png)
+![InstantRdvSettingsActor placement](docs/images/settingsactor_location.png)
 
-![InstantRdvSettingsActor の主要パラメータ](docs/images/settingsactor_param.png)
+![InstantRdvSettingsActor parameters](docs/images/settingsactor_param.png)
 
-CVar では各機能を実行時に無効化できます。
+CVars can disable features at runtime.
 
-- `r.InstantRdv.Enable`: InstantRDV 基幹機能。
-- `r.InstantRdv.Gi.Enable`: RdvGI。
+- `r.InstantRdv.Enable`: InstantRDV core functionality.
+- `r.InstantRdv.Gi.Enable`: RdvGI.
 
-両 CVar の既定値は有効です。Settings Actor の `Enabled` と `Gi Enabled` の既定値は無効です。レベルに Actor を配置して必要な機能を有効化するまで処理は実行されません。
+Both CVars default to enabled. The Settings Actor defaults for `Enabled` and `Gi Enabled` are disabled. No processing runs until an Actor placed in the level enables the required functionality.
 
 ### Material Function
 
-`MF_Irdv_SampleGi` はプラグインの Content に含まれる Material Function です。Material Graph から呼び出し、`InSamplePosition` に Absolute World Position、`InSampleNormal` に VertexNormalWS を接続します。内部の Custom Node は `instant_rdv_material.ush` を include し、`InstantRdvMaterialTryEvaluateIndirectLighting` を呼び出します。
+`MF_Irdv_SampleGi` is a Material Function in the plugin Content. Call it from a Material Graph. Connect Absolute World Position to `InSamplePosition` and VertexNormalWS to `InSampleNormal`. Its Custom Node includes `instant_rdv_material.ush` and calls `InstantRdvMaterialTryEvaluateIndirectLighting`.
 
-出力 `Irradiance` は入射照度 `E` です。`Irradiance/PI` は `E / PI` です。Lambert diffuse として Emissive へ加算する場合は、Base Color と `Irradiance/PI` を乗算します。`SkyVisibility` は SkyLight / IBL 用の遮蔽係数です。
+`Irradiance` output is incident irradiance `E`. `Irradiance/PI` is `E / PI`. To add Lambert diffuse light through Emissive, multiply Base Color by `Irradiance/PI`. `SkyVisibility` is an occlusion factor for SkyLight and IBL.
 
-![MF_Irdv_SampleGi の配置場所](docs/images/customnode_content_mf.png)
+![MF_Irdv_SampleGi location](docs/images/customnode_content_mf.png)
 
-![MF_Irdv_SampleGi を使用したマテリアルグラフ](docs/images/customnode_sampling_gi.png)
+![Material graph using MF_Irdv_SampleGi](docs/images/customnode_sampling_gi.png)
 
-## 実装上の注記
+## Implementation notes
 
-- BBV の main-view injection / removal、radiance update、VSP update、reduced-surface path は CVar で個別に観察できます。
-- VSP の probe pool、active probe list、ray request/result、probe atlas、IrradianceVolume は GPU resource として管理します。
-- VSP は GI を無効にしても GPU resource を確保したままです。
-- MainView 外の BrickRadiance は更新しません。高輝度 brick が画面外へ移動した後も残ります。
+- Main-view injection/removal, radiance update, VSP update, and the reduced-surface path can be observed independently through CVars.
+- VSP manages the probe pool, active probe list, ray request/result data, probe atlas, and IrradianceVolume as GPU resources.
+- VSP retains GPU resources while GI is disabled.
+- BrickRadiance outside MainView is not updated. High-radiance bricks remain after they move off-screen.
 
-## 初期パラメータ
+## Initial parameters
 
-| 項目 | 既定値 |
+| Item | Default |
 |---|---:|
 | BBV grid | `64 x 64 x 64` bricks |
 | BBV brick size | `300 cm` |
