@@ -21,7 +21,7 @@ UE サンプルシーンでの RdvGI の ON/OFF 比較です。(LumenをOFFに�
 
 ## Terminology
 
-- **RDV — Raster Derived Voxel**: Raster Pass の成果物から導出する voxel scene。
+- **RDV — Raster Derived Voxel**: Raster Pass の成果物を利用した voxel scene 構築の枠組み。
 - **BBV — Bitmask Brick Voxel**: occupancy を bitmask で保持する brick voxel grid。
 - **RdvGI**: InstantRDV の仕組みを利用した real-time global illumination 実装。
 - **VSP — Visible Surface Probe**: 可視 surface 上に Probe を配置して GI 計算を行う probe system。
