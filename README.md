@@ -49,7 +49,7 @@ DepthBuffer の side view から復元した surface sample を BBV brick grid �
 
 ### BBV voxel removal
 
-BBV voxel を current camera view へ投影し、voxel depth と SceneDepth sample を比較します。voxel depth が SceneDepth より小さい場合は occupancy を除去し、それ以外は維持します。
+injection だけでは 動的なシーンへの追従ができないため、depth test によって占有されなくなった領域のvoxelを除去します。BBV voxel を current camera view へ投影し、voxel depth と SceneDepth sample を比較します。voxel depth が SceneDepth より小さい場合は occupancy を除去し、それ以外は維持します。
 
 ![BBV voxel removal](docs/images/bbv-voxel-removal.svg)
 

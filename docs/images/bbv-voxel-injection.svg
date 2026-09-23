@@ -1,18 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620">
-  <rect width="1600" height="620" fill="#ffffff"/>
-  <style>.title{font:600 22px Arial,sans-serif;fill:#1f2933}.label{font:16px Arial,sans-serif;fill:#374151}.small{font:14px Arial,sans-serif;fill:#4b5563}.line{stroke:#374151;stroke-width:2;fill:none}.grid{stroke:#9ca3af;stroke-width:1;fill:none}.boundary{stroke:#111827;stroke-width:4;fill:none}.surface{stroke:#111827;stroke-width:5;fill:none}.blue{fill:#2563a6}</style>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640">
+  <rect width="1600" height="640" fill="#ffffff"/>
+  <style>.title{font:600 22px Arial,sans-serif;fill:#1f2933}.label{font:16px Arial,sans-serif;fill:#374151}.small{font:14px Arial,sans-serif;fill:#4b5563}.box{fill:#f8fafc;stroke:#6b7280;stroke-width:2}.viewray{stroke:#9ca3af;stroke-width:2;stroke-dasharray:6 5;fill:none}.flow{stroke:#2563a6;stroke-width:3;fill:none}.grid{stroke:#9ca3af;stroke-width:1;fill:none}.brick{stroke:#111827;stroke-width:4;fill:none}.surface{stroke:#4b5563;stroke-width:3;stroke-dasharray:7 4;fill:none}.blue{fill:#2563a6}</style>
   <text x="52" y="52" class="title">BBV voxel injection</text>
-  <text x="80" y="110" class="title">DepthBuffer side view</text><text x="80" y="137" class="small">Nearest depth samples are reconstructed as world-space surface positions.</text>
-  <path d="M70 325 H142" class="line"/><path d="M130 316 L142 325 L130 334" class="line"/><text x="54" y="300" class="label">camera</text>
-  <g class="grid" stroke-dasharray="5 5"><path d="M160 182 V480 M200 182 V480 M240 182 V480 M280 182 V480 M320 182 V480 M360 182 V480 M400 182 V480 M440 182 V480"/></g>
-  <path d="M160 430 H200 V390 H240 V350 H280 V350 H320 V310 H360 V270 H400 V270 H440 V230" class="surface"/>
-  <text x="158" y="525" class="label">depth surface</text>
-  <path d="M510 325 H650" class="line"/><path d="M638 316 L650 325 L638 334" class="line"/><text x="535" y="301" class="label">inject occupancy</text>
-  <text x="700" y="110" class="title">BBV brick grid</text><text x="700" y="137" class="small">2D view of adjacent 8 x 8 x 8 bricks. Each block shows one 8 x 8 slice.</text>
-  <rect x="700" y="185" width="720" height="320" class="grid"/>
-  <path d="M720 185 V505 M740 185 V505 M760 185 V505 M780 185 V505 M800 185 V505 M820 185 V505 M840 185 V505 M860 185 V505 M880 185 V505 M900 185 V505 M920 185 V505 M940 185 V505 M960 185 V505 M980 185 V505 M1000 185 V505 M1020 185 V505 M1040 185 V505 M1060 185 V505 M1080 185 V505 M1100 185 V505 M1120 185 V505 M1140 185 V505 M1160 185 V505 M1180 185 V505 M1200 185 V505 M1220 185 V505 M1240 185 V505 M1260 185 V505 M1280 185 V505 M1300 185 V505 M1320 185 V505 M1340 185 V505 M1360 185 V505 M1380 185 V505 M1400 185 V505 M700 205 H1420 M700 225 H1420 M700 245 H1420 M700 265 H1420 M700 285 H1420 M700 305 H1420 M700 325 H1420 M700 345 H1420 M700 365 H1420 M700 385 H1420 M700 405 H1420 M700 425 H1420 M700 445 H1420 M700 465 H1420 M700 485 H1420" class="grid"/>
-  <rect x="860" y="185" width="160" height="160" class="boundary"/><rect x="1020" y="185" width="160" height="160" class="boundary"/><rect x="1180" y="185" width="160" height="160" class="boundary"/>
-  <rect x="860" y="345" width="160" height="160" class="boundary"/><rect x="1020" y="345" width="160" height="160" class="boundary"/><rect x="1180" y="345" width="160" height="160" class="boundary"/>
-  <rect x="1020" y="465" width="20" height="20" class="blue"/><rect x="1040" y="425" width="20" height="20" class="blue"/><rect x="1060" y="385" width="20" height="20" class="blue"/><rect x="1080" y="385" width="20" height="20" class="blue"/><rect x="1100" y="345" width="20" height="20" class="blue"/><rect x="1120" y="305" width="20" height="20" class="blue"/><rect x="1140" y="305" width="20" height="20" class="blue"/><rect x="1160" y="265" width="20" height="20" class="blue"/>
-  <text x="1038" y="548" class="label">selected brick</text><text x="1038" y="574" class="small">8 x 8 x 8 occupancy bits</text>
+
+  <rect x="60" y="105" width="410" height="410" class="box"/>
+  <text x="86" y="143" class="title">DepthBuffer side view</text>
+  <text x="86" y="170" class="small">The nearest depth sample is selected for each view ray.</text>
+  <rect x="88" y="296" width="44" height="34" fill="#374151"/><path d="M132 303 L156 313 L132 323 Z" fill="#374151"/><circle cx="107" cy="313" r="9" fill="#ffffff"/><text x="82" y="357" class="label">camera</text>
+  <path d="M156 230 H350 M156 270 H310 M156 310 H270 M156 350 H270 M156 390 H230 M156 430 H190" class="viewray"/>
+  <path d="M350 210 V230 H310 V270 H270 V310 H270 V350 H230 V390 H190 V430" stroke="#111827" stroke-width="5" fill="none"/>
+  <text x="188" y="470" class="label">depth surface</text>
+  <text x="86" y="496" class="small">dashed lines: view rays</text>
+
+  <path d="M505 310 H625" class="flow"/><path d="M611 301 L625 310 L611 319" class="flow"/>
+  <text x="510" y="278" class="label">surface samples</text><text x="510" y="301" class="label">inject occupancy</text>
+
+  <rect x="670" y="105" width="860" height="500" class="box"/>
+  <text x="696" y="143" class="title">BBV brick grid</text>
+  <text x="696" y="170" class="small">The same depth profile is expressed in BBV coordinates. Blue cells receive occupancy injection.</text><rect x="688" y="333" width="34" height="26" fill="#374151"/><path d="M722 339 L740 346 L722 353 Z" fill="#374151"/><circle cx="703" cy="346" r="7" fill="#ffffff"/><text x="680" y="382" class="small">same camera</text><path d="M730 346 H758" class="viewray"/>
+  <rect x="740" y="195" width="720" height="320" class="grid"/>
+  <path d="M760 195 V515 M780 195 V515 M800 195 V515 M820 195 V515 M840 195 V515 M860 195 V515 M880 195 V515 M900 195 V515 M920 195 V515 M940 195 V515 M960 195 V515 M980 195 V515 M1000 195 V515 M1020 195 V515 M1040 195 V515 M1060 195 V515 M1080 195 V515 M1100 195 V515 M1120 195 V515 M1140 195 V515 M1160 195 V515 M1180 195 V515 M1200 195 V515 M1220 195 V515 M1240 195 V515 M1260 195 V515 M1280 195 V515 M1300 195 V515 M1320 195 V515 M1340 195 V515 M1360 195 V515 M1380 195 V515 M1400 195 V515 M1420 195 V515 M1440 195 V515 M740 215 H1460 M740 235 H1460 M740 255 H1460 M740 275 H1460 M740 295 H1460 M740 315 H1460 M740 335 H1460 M740 355 H1460 M740 375 H1460 M740 395 H1460 M740 415 H1460 M740 435 H1460 M740 455 H1460 M740 475 H1460 M740 495 H1460" class="grid"/>
+  <rect x="900" y="195" width="160" height="160" class="brick"/><rect x="1060" y="195" width="160" height="160" class="brick"/><rect x="1220" y="195" width="160" height="160" class="brick"/>
+  <rect x="900" y="355" width="160" height="160" class="brick"/><rect x="1060" y="355" width="160" height="160" class="brick"/><rect x="1220" y="355" width="160" height="160" class="brick"/>
+
+  <rect x="1200" y="195" width="20" height="20" class="blue"/><rect x="1200" y="215" width="20" height="20" class="blue"/><rect x="1160" y="215" width="20" height="20" class="blue"/><rect x="1160" y="235" width="20" height="20" class="blue"/><rect x="1160" y="255" width="20" height="20" class="blue"/><rect x="1120" y="255" width="20" height="20" class="blue"/><rect x="1120" y="275" width="20" height="20" class="blue"/><rect x="1120" y="295" width="20" height="20" class="blue"/><rect x="1120" y="315" width="20" height="20" class="blue"/><rect x="1120" y="335" width="20" height="20" class="blue"/><rect x="1080" y="335" width="20" height="20" class="blue"/><rect x="1080" y="355" width="20" height="20" class="blue"/><rect x="1080" y="375" width="20" height="20" class="blue"/><rect x="1040" y="375" width="20" height="20" class="blue"/><rect x="1040" y="395" width="20" height="20" class="blue"/><rect x="1040" y="415" width="20" height="20" class="blue"/><path d="M1210 205 V225 H1170 V265 H1130 V305 H1130 V345 H1090 V385 H1050 V425" class="surface"/>
+  <text x="900" y="550" class="label">bold borders: adjacent 8 x 8 x 8 bricks</text>
+  <text x="900" y="574" class="small">dashed line: same 6 depth samples / blue cells: first hit along each view ray</text>
 </svg>
