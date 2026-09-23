@@ -4,12 +4,12 @@
 
 ## 対象と算定方法
 
-本書はUEプラグインのBBV、FSP、ReducedSurfaceを対象とし、現時点のD3D12参照実装と比較する。数値はリソース記述子から求めた論理ペイロード量である。D3D12の配置アラインメント、RDGプールの保持、アロケータ粒度、解像度変更時に旧リソースと新リソースが同時に生存する期間は含まない。
+本書はUEプラグインのBBV、VSP、ReducedSurfaceを対象とし、現時点のD3D12参照実装と比較する。数値はリソース記述子から求めた論理ペイロード量である。D3D12の配置アラインメント、RDGプールの保持、アロケータ粒度、解像度変更時に旧リソースと新リソースが同時に生存する期間は含まない。
 
 既定値は以下の通り。
 
 - BBVグリッド: `64 x 64 x 64` brick、brick内解像度 `8 x 8 x 8`。
-- FSPグリッド: Cascadeごとに `16 x 16 x 16` cell、5 Cascade。
+- VSPグリッド: Cascadeごとに `16 x 16 x 16` cell、5 Cascade。
 - Sparse Probe容量: 全Cascade共有で8,192。
 - 可視Surfaceリスト容量: 4,096。
 - Probe Atlas: `6 x 6` octahedral map。
@@ -27,30 +27,30 @@
 
 BBV永続リソース合計は28.000 MiBである。`to_surface_vector`はSDF的なBBV情報の検証用であり、現行ReducedSurface Probe Relocationでは使用しない。
 
-### FSP
+### VSP
 
 | リソース | 構成 | 論理サイズ | 用途 |
 |---|---|---:|---|
-| `FspCellProbeIndexBuffer` | 20,480 × `uint` | 0.078 MiB | denseなcellからSparse Probeへの対応表。 |
-| `FspVisibleSurfaceListBuffer` | 4,097 × `uint` | 0.016 MiB | 可視Surface cellの作業リスト。 |
-| `FspVisibleSurfaceSourceTexelListBuffer` | 4,097 × `uint` | 0.016 MiB | 可視Surfaceリストと対になるsource texel。 |
-| `FspProbePoolBuffer` | 8,192 × 8 × `uint` | 0.250 MiB | Sparse Probeの状態。 |
-| `FspProbeFreeStackBuffer` | 8,193 × `uint` | 0.031 MiB | Sparse Probe allocator。 |
-| `FspActiveProbeList0/1` | 2 × 8,194 × `uint` | 0.063 MiB | 世代を交互に使うActive Probeリスト。 |
-| `FspProbeAtlas` | `768 x 384`、RGBA16F | 2.250 MiB | ProbeごとのRadiance RGBとSkyVisibility A。 |
-| `FspProbeRayRequestBuffer` | 294,913 × `uint` | 1.125 MiB | ray requestの作業領域。 |
-| `FspProbeRayResultBuffer` | 589,825 × `uint` | 2.250 MiB | ray resultの作業領域。 |
-| `FspIrradianceVolumeSHTexture` | `17 x 17 x 340`、RGBA16F | 0.750 MiB | 5 Cascade × 4信号をZ方向に連結したGI用3D Texture。 |
+| `VspCellProbeIndexBuffer` | 20,480 × `uint` | 0.078 MiB | denseなcellからSparse Probeへの対応表。 |
+| `VspVisibleSurfaceListBuffer` | 4,097 × `uint` | 0.016 MiB | 可視Surface cellの作業リスト。 |
+| `VspVisibleSurfaceSourceTexelListBuffer` | 4,097 × `uint` | 0.016 MiB | 可視Surfaceリストと対になるsource texel。 |
+| `VspProbePoolBuffer` | 8,192 × 8 × `uint` | 0.250 MiB | Sparse Probeの状態。 |
+| `VspProbeFreeStackBuffer` | 8,193 × `uint` | 0.031 MiB | Sparse Probe allocator。 |
+| `VspActiveProbeList0/1` | 2 × 8,194 × `uint` | 0.063 MiB | 世代を交互に使うActive Probeリスト。 |
+| `VspProbeAtlas` | `768 x 384`、RGBA16F | 2.250 MiB | ProbeごとのRadiance RGBとSkyVisibility A。 |
+| `VspProbeRayRequestBuffer` | 294,913 × `uint` | 1.125 MiB | ray requestの作業領域。 |
+| `VspProbeRayResultBuffer` | 589,825 × `uint` | 2.250 MiB | ray resultの作業領域。 |
+| `VspIrradianceVolumeSHTexture` | `17 x 17 x 340`、RGBA16F | 0.750 MiB | 5 Cascade × 4信号をZ方向に連結したGI用3D Texture。 |
 
 IrradianceVolumeは、各Cascadeで`16 x 16 x 16`の物理cellと正側1 texelのGuardを持つ。信号ごとの33 sliceを連結し、信号順はSkyVisibility、Irradiance R、G、Bである。Guardはトロイダル物理座標0を複製し、Linear Clampフィルタが物理境界やCascade境界を越えて混合しないようにする。
 
-FSP永続リソース合計は約6.828 MiB、BBVとFSPの合計は約34.828 MiBである。作業用リストとray bufferは現在はプール保持されるが、グラフ内だけで完結できるかをTODOで検討する。
+VSP永続リソース合計は約6.828 MiB、BBVとVSPの合計は約34.828 MiBである。作業用リストとray bufferは現在はプール保持されるが、グラフ内だけで完結できるかをTODOで検討する。
 
 ### ReducedSurface
 
 `ReducedSurfaceBuffer`は`PF_A32B32G32R32F`のquarter-resolution Textureである。Geometry RDG graphで生成して抽出し、後続graphへ外部Textureとして登録する。View解像度の変更時に再確保する。
 
-| View解像度 | ReducedSurface解像度 | 論理サイズ | BBV + FSP + ReducedSurface |
+| View解像度 | ReducedSurface解像度 | 論理サイズ | BBV + VSP + ReducedSurface |
 |---:|---:|---:|---:|
 | 1920 × 1080 | 480 × 270 | 1.978 MiB | 36.806 MiB |
 | 2560 × 1440 | 640 × 360 | 3.516 MiB | 38.344 MiB |
@@ -65,7 +65,7 @@ FSP永続リソース合計は約6.828 MiB、BBVとFSPの合計は約34.828 MiB�
 3. 後続graphではpooled resourceを外部リソースとして登録する。
 4. 各passのSRV/UAV用途をRDG parameterで宣言し、状態遷移とbarrierはRDGに任せる。
 
-`ReducedSurfaceBuffer`とIrradianceVolumeはTextureとしてRDG用途を記録する。前者は複数phaseで利用されるためRDGが状態遷移を管理する。後者はRDGへ外部Textureとして登録し、FSP passおよびMaterial Uniform Bufferで使用する。
+`ReducedSurfaceBuffer`とIrradianceVolumeはTextureとしてRDG用途を記録する。前者は複数phaseで利用されるためRDGが状態遷移を管理する。後者はRDGへ外部Textureとして登録し、VSP passおよびMaterial Uniform Bufferで使用する。
 
 ## 実装上の確認事項
 

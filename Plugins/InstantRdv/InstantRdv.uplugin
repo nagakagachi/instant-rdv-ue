@@ -3,7 +3,7 @@
   "Version": 1,
   "VersionName": "0.1.0",
   "FriendlyName": "Instant-RDV",
-  "Description": "Instant Raster Derived Voxel scene rendering plugin with BBV and FSP ActiveProbe rendering hooks.",
+  "Description": "Instant Raster Derived Voxel scene rendering plugin with BBV and VSP ActiveProbe rendering hooks.",
   "Category": "Rendering",
   "CreatedBy": "@nagakagachi",
   "CanContainContent": true,

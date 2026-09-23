@@ -1,35 +1,35 @@
-// ファイル名: fsp_irradiance_volume_propagate_cs.usf
+// ファイル名: vsp_irradiance_volume_propagate_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
 // ActiveProbeが直接更新しないIrradianceVolume cellへ、近傍cellのSHを伝播する。
 // Checkerboard更新にして、毎フレームの全cell書き換えと隣接cell同時更新のフィードバックを抑える。
 
-StructuredBuffer<uint> FspCellProbeIndex;
-StructuredBuffer<uint> FspProbePool;
-RWTexture3D<float4> RWFspIrradianceVolumeSHTexture;
+StructuredBuffer<uint> VspCellProbeIndex;
+StructuredBuffer<uint> VspProbePool;
+RWTexture3D<float4> RWVspIrradianceVolumeSHTexture;
 
-uint FspProbePoolElementCount;
+uint VspProbePoolElementCount;
 uint FrameCount;
 
-bool FspIsActiveProbeOwnedCell(uint CellIndex)
+bool VspIsActiveProbeOwnedCell(uint CellIndex)
 {
-    if (CellIndex >= FspTotalCellCount())
+    if (CellIndex >= VspTotalCellCount())
     {
         return false;
     }
 
-    const uint ProbeIndex = FspCellProbeIndex[CellIndex];
-    if (ProbeIndex == k_irdv_fsp_invalid_probe_index || ProbeIndex >= FspProbePoolElementCount)
+    const uint ProbeIndex = VspCellProbeIndex[CellIndex];
+    if (ProbeIndex == k_irdv_vsp_invalid_probe_index || ProbeIndex >= VspProbePoolElementCount)
     {
         return false;
     }
 
-    const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+    const FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(VspProbePool, ProbeIndex);
     return Data.OwnerCellIndex == CellIndex;
 }
 
-bool FspTryLoadNeighborSH(
+bool VspTryLoadNeighborSH(
     out float4 C0,
     out float4 C1,
     out float4 C2,
@@ -58,8 +58,8 @@ bool FspTryLoadNeighborSH(
         GridResolution);
     const uint LocalCellIndex = FlattenGridCoord(PhysicalCoord, GridResolution);
     const uint CellIndex = CascadeCellBase + LocalCellIndex;
-    FspLoadIrradianceVolumePackedCoefficientsRw(
-        RWFspIrradianceVolumeSHTexture,
+    VspLoadIrradianceVolumePackedCoefficientsRw(
+        RWVspIrradianceVolumeSHTexture,
         CellIndex,
         C0,
         C1,
@@ -72,19 +72,19 @@ bool FspTryLoadNeighborSH(
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint CellIndex = DispatchThreadId.x;
-    if (CellIndex >= FspTotalCellCount() || FspIsActiveProbeOwnedCell(CellIndex))
+    if (CellIndex >= VspTotalCellCount() || VspIsActiveProbeOwnedCell(CellIndex))
     {
         return;
     }
 
     uint CascadeIndex = 0u;
     uint LocalCellIndex = 0u;
-    if (!FspDecodeGlobalCellIndex(CellIndex, CascadeIndex, LocalCellIndex))
+    if (!VspDecodeGlobalCellIndex(CellIndex, CascadeIndex, LocalCellIndex))
     {
         return;
     }
 
-    const int3 Coord = FspPhysicalToLinearCoord(FspLocalCellIndexToCoord(LocalCellIndex), CascadeIndex);
+    const int3 Coord = VspPhysicalToLinearCoord(VspLocalCellIndexToCoord(LocalCellIndex), CascadeIndex);
     const uint Parity = uint((Coord.x + Coord.y + Coord.z) & 1);
     // 偶奇cellを交互に更新することで、同一frame内に伝播結果をさらに伝播する連鎖を弱める。
     if (Parity != (FrameCount & 1u))
@@ -108,16 +108,16 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     float4 Accum3 = 0.0.xxxx;
     uint Count = 0u;
     const uint3 GridResolution = uint3(
-        FspGridResolutionX,
-        FspGridResolutionY,
-        FspGridResolutionZ);
-    const int3 ToroidalOffset = FspCascadeToroidalOffset(CascadeIndex);
-    const uint CascadeCellBase = CascadeIndex * FspCellCountPerCascade();
+        VspGridResolutionX,
+        VspGridResolutionY,
+        VspGridResolutionZ);
+    const int3 ToroidalOffset = VspCascadeToroidalOffset(CascadeIndex);
+    const uint CascadeCellBase = CascadeIndex * VspCellCountPerCascade();
     [unroll]
     for (uint I = 0u; I < 6u; ++I)
     {
         float4 C0, C1, C2, C3;
-        if (FspTryLoadNeighborSH(
+        if (VspTryLoadNeighborSH(
             C0,
             C1,
             C2,
@@ -141,8 +141,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     const float InvCount = rcp(float(Count));
-    FspStoreIrradianceVolumePackedCoefficients(
-        RWFspIrradianceVolumeSHTexture,
+    VspStoreIrradianceVolumePackedCoefficients(
+        RWVspIrradianceVolumeSHTexture,
         CellIndex,
         Accum0 * InvCount,
         Accum1 * InvCount,

@@ -1,21 +1,21 @@
-// ファイル名: fsp_util.ush
-// 役割: InstantRDV FSPの内部シェーダで使用するグリッド、Probe、IrradianceVolume操作および評価のユーティリティを定義する。
-#ifndef INSTANT_RDV_FSP_UTIL_USH
-#define INSTANT_RDV_FSP_UTIL_USH
+// ファイル名: vsp_util.ush
+// 役割: InstantRDV VSPの内部シェーダで使用するグリッド、Probe、IrradianceVolume操作および評価のユーティリティを定義する。
+#ifndef INSTANT_RDV_VSP_UTIL_USH
+#define INSTANT_RDV_VSP_UTIL_USH
 
 #include "/InstantRdvShaders/Private/instant_rdv_util.ush"
 
 #if IS_MATERIAL_SHADER
-    #define IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER Scene.InstantRdvParam.FspIrradianceVolumeSampler
+    #define IRDV_VSP_IRRADIANCE_VOLUME_SAMPLER Scene.InstantRdvParam.VspIrradianceVolumeSampler
 #else
-    SamplerState FspIrradianceVolumeSampler;
-    #define IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER FspIrradianceVolumeSampler
+    SamplerState VspIrradianceVolumeSampler;
+    #define IRDV_VSP_IRRADIANCE_VOLUME_SAMPLER VspIrradianceVolumeSampler
 #endif
 
-// 再利用可能なユーティリティへ明示的に渡すFSPグリッド状態。
+// 再利用可能なユーティリティへ明示的に渡すVSPグリッド状態。
 // シェーダのエントリポイントはUniformParamsから値を設定し、Material CustomNodeは
-// FSPシェーダのグローバル変数に依存せず同等の値を渡せる。
-struct FInstantRdvFspGridParams
+// VSPシェーダのグローバル変数に依存せず同等の値を渡せる。
+struct FInstantRdvVspGridParams
 {
     uint GridResolutionX;
     uint GridResolutionY;
@@ -27,52 +27,52 @@ struct FInstantRdvFspGridParams
 };
 
 // CascadeごとのIVセル数を返す。
-uint FspUtilCellCountPerCascade(FInstantRdvFspGridParams Params)
+uint VspUtilCellCountPerCascade(FInstantRdvVspGridParams Params)
 {
     return Params.GridResolutionX * Params.GridResolutionY * Params.GridResolutionZ;
 }
 
 // 実際に参照可能なCascade数を上限値内へ正規化する。
-uint FspUtilEffectiveCascadeCount(FInstantRdvFspGridParams Params)
+uint VspUtilEffectiveCascadeCount(FInstantRdvVspGridParams Params)
 {
-    return min(Params.CascadeCount, k_irdv_fsp_max_cascade_count);
+    return min(Params.CascadeCount, k_irdv_vsp_max_cascade_count);
 }
 
 // 全Cascadeを含むIVの総セル数を返す。
-uint FspUtilTotalCellCount(FInstantRdvFspGridParams Params)
+uint VspUtilTotalCellCount(FInstantRdvVspGridParams Params)
 {
-    return FspUtilCellCountPerCascade(Params) *
-        max(FspUtilEffectiveCascadeCount(Params), 1u);
+    return VspUtilCellCountPerCascade(Params) *
+        max(VspUtilEffectiveCascadeCount(Params), 1u);
 }
 
 // Cascade番号と物理セル番号を連続バッファのglobal indexへ変換する。
-uint FspUtilEncodeGlobalCellIndex(FInstantRdvFspGridParams Params, uint CascadeIndex, uint LocalCellIndex)
+uint VspUtilEncodeGlobalCellIndex(FInstantRdvVspGridParams Params, uint CascadeIndex, uint LocalCellIndex)
 {
-    return CascadeIndex * FspUtilCellCountPerCascade(Params) + LocalCellIndex;
+    return CascadeIndex * VspUtilCellCountPerCascade(Params) + LocalCellIndex;
 }
 
 // global indexをCascade番号とCascade内セル番号へ分解する。
-bool FspUtilDecodeGlobalCellIndex(
-    FInstantRdvFspGridParams Params,
+bool VspUtilDecodeGlobalCellIndex(
+    FInstantRdvVspGridParams Params,
     uint GlobalCellIndex,
     out uint OutCascadeIndex,
     out uint OutLocalCellIndex)
 {
-    const uint CellCountPerCascade = FspUtilCellCountPerCascade(Params);
+    const uint CellCountPerCascade = VspUtilCellCountPerCascade(Params);
     OutCascadeIndex = 0u;
     OutLocalCellIndex = 0u;
-    if (CellCountPerCascade == 0u || GlobalCellIndex >= FspUtilTotalCellCount(Params))
+    if (CellCountPerCascade == 0u || GlobalCellIndex >= VspUtilTotalCellCount(Params))
     {
         return false;
     }
 
     OutCascadeIndex = GlobalCellIndex / CellCountPerCascade;
     OutLocalCellIndex = GlobalCellIndex - OutCascadeIndex * CellCountPerCascade;
-    return OutCascadeIndex < FspUtilEffectiveCascadeCount(Params);
+    return OutCascadeIndex < VspUtilEffectiveCascadeCount(Params);
 }
 
 // Cascade内の線形セル番号を物理XYZ座標へ変換する。
-uint3 FspUtilLocalCellIndexToCoord(FInstantRdvFspGridParams Params, uint LocalCellIndex)
+uint3 VspUtilLocalCellIndexToCoord(FInstantRdvVspGridParams Params, uint LocalCellIndex)
 {
     const uint Slice = Params.GridResolutionX * Params.GridResolutionY;
     const uint Z = LocalCellIndex / Slice;
@@ -83,7 +83,7 @@ uint3 FspUtilLocalCellIndexToCoord(FInstantRdvFspGridParams Params, uint LocalCe
 }
 
 // 物理XYZ座標をCascade内の線形セル番号へ変換する。
-uint FspUtilPhysicalCellCoordToLocalIndex(FInstantRdvFspGridParams Params, uint3 PhysicalCoord)
+uint VspUtilPhysicalCellCoordToLocalIndex(FInstantRdvVspGridParams Params, uint3 PhysicalCoord)
 {
     return PhysicalCoord.x
         + PhysicalCoord.y * Params.GridResolutionX
@@ -91,79 +91,79 @@ uint FspUtilPhysicalCellCoordToLocalIndex(FInstantRdvFspGridParams Params, uint3
 }
 
 // Cascade番号に対応するワールドセルサイズをcm単位で返す。
-float FspUtilCascadeCellSizeCm(FInstantRdvFspGridParams Params, uint CascadeIndex)
+float VspUtilCascadeCellSizeCm(FInstantRdvVspGridParams Params, uint CascadeIndex)
 {
     return Params.CellSizeCm * exp2(float(CascadeIndex));
 }
 
 // Probe relocationで許容する最大オフセット距離をcm単位で返す。
-float FspUtilProbeMaxOffsetDistanceCm(FInstantRdvFspGridParams Params, uint CascadeIndex)
+float VspUtilProbeMaxOffsetDistanceCm(FInstantRdvVspGridParams Params, uint CascadeIndex)
 {
-    return FspUtilCascadeCellSizeCm(Params, CascadeIndex) * 0.9;
+    return VspUtilCascadeCellSizeCm(Params, CascadeIndex) * 0.9;
 }
 
 // ワールド中心位置をCascadeの量子化セルIDへ変換する。
-int3 FspUtilCenterCellIdFromPosition(FInstantRdvFspGridParams Params, uint CascadeIndex, float3 CenterPositionWs)
+int3 VspUtilCenterCellIdFromPosition(FInstantRdvVspGridParams Params, uint CascadeIndex, float3 CenterPositionWs)
 {
-    return int3(floor(CenterPositionWs / max(FspUtilCascadeCellSizeCm(Params, CascadeIndex), 0.001)));
+    return int3(floor(CenterPositionWs / max(VspUtilCascadeCellSizeCm(Params, CascadeIndex), 0.001)));
 }
 
 // Cascade中心から、物理格納グリッドのtoroidal offsetを求める。
-int3 FspUtilToroidalOffset(FInstantRdvFspGridParams Params, uint CascadeIndex, float3 CenterPositionWs)
+int3 VspUtilToroidalOffset(FInstantRdvVspGridParams Params, uint CascadeIndex, float3 CenterPositionWs)
 {
     const int3 Resolution = int3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ);
-    const int3 CenterCellId = FspUtilCenterCellIdFromPosition(Params, CascadeIndex, CenterPositionWs);
+    const int3 CenterCellId = VspUtilCenterCellIdFromPosition(Params, CascadeIndex, CenterPositionWs);
     return ((CenterCellId % Resolution) + Resolution) % Resolution;
 }
 
 // Cascadeグリッドのワールド空間最小座標を返す。
-float3 FspUtilCascadeGridMinPositionWs(FInstantRdvFspGridParams Params, uint CascadeIndex)
+float3 VspUtilCascadeGridMinPositionWs(FInstantRdvVspGridParams Params, uint CascadeIndex)
 {
-    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const float CellSize = VspUtilCascadeCellSizeCm(Params, CascadeIndex);
     const float3 Extent = float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * CellSize;
-    return float3(FspUtilCenterCellIdFromPosition(Params, CascadeIndex, Params.GridCenterPositionWs)) * CellSize - Extent * 0.5.xxx;
+    return float3(VspUtilCenterCellIdFromPosition(Params, CascadeIndex, Params.GridCenterPositionWs)) * CellSize - Extent * 0.5.xxx;
 }
 
 // 論理セル座標をtoroidal物理格納座標へ変換する。
-uint3 FspUtilLinearToPhysicalCoord(FInstantRdvFspGridParams Params, int3 LinearCoord, uint CascadeIndex)
+uint3 VspUtilLinearToPhysicalCoord(FInstantRdvVspGridParams Params, int3 LinearCoord, uint CascadeIndex)
 {
     return LogicalToPhysicalGridCoord(
         LinearCoord,
-        FspUtilToroidalOffset(Params, CascadeIndex, Params.GridCenterPositionWs),
+        VspUtilToroidalOffset(Params, CascadeIndex, Params.GridCenterPositionWs),
         uint3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ));
 }
 
 // toroidal物理格納座標を論理セル座標へ逆変換する。
-int3 FspUtilPhysicalToLinearCoord(FInstantRdvFspGridParams Params, uint3 PhysicalCoord, uint CascadeIndex)
+int3 VspUtilPhysicalToLinearCoord(FInstantRdvVspGridParams Params, uint3 PhysicalCoord, uint CascadeIndex)
 {
     return PhysicalToLogicalGridCoord(
         int3(PhysicalCoord),
-        FspUtilToroidalOffset(Params, CascadeIndex, Params.GridCenterPositionWs),
+        VspUtilToroidalOffset(Params, CascadeIndex, Params.GridCenterPositionWs),
         uint3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ));
 }
 
 // 物理セル番号に対応するワールド空間セル中心を返す。
-float3 FspUtilCalcCellCenterWs(FInstantRdvFspGridParams Params, uint CascadeIndex, uint LocalCellIndex)
+float3 VspUtilCalcCellCenterWs(FInstantRdvVspGridParams Params, uint CascadeIndex, uint LocalCellIndex)
 {
-    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
-    const int3 LinearCoord = FspUtilPhysicalToLinearCoord(
+    const float CellSize = VspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const int3 LinearCoord = VspUtilPhysicalToLinearCoord(
         Params,
-        FspUtilLocalCellIndexToCoord(Params, LocalCellIndex),
+        VspUtilLocalCellIndexToCoord(Params, LocalCellIndex),
         CascadeIndex);
-    return FspUtilCascadeGridMinPositionWs(Params, CascadeIndex) + (float3(LinearCoord) + 0.5.xxx) * CellSize;
+    return VspUtilCascadeGridMinPositionWs(Params, CascadeIndex) + (float3(LinearCoord) + 0.5.xxx) * CellSize;
 }
 
 // ワールド位置を指定Cascadeのglobalセル番号へ変換する。
-bool FspUtilTryGetGlobalCellIndexFromWorldPos(
-    FInstantRdvFspGridParams Params,
+bool VspUtilTryGetGlobalCellIndexFromWorldPos(
+    FInstantRdvVspGridParams Params,
     float3 WorldPosWs,
     uint CascadeIndex,
     out uint OutGlobalCellIndex)
 {
-    OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
-    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    OutGlobalCellIndex = k_irdv_vsp_invalid_probe_index;
+    const float CellSize = VspUtilCascadeCellSizeCm(Params, CascadeIndex);
     const int3 LinearCoord = int3(floor(
-        (WorldPosWs - FspUtilCascadeGridMinPositionWs(Params, CascadeIndex)) / max(CellSize, 0.001)));
+        (WorldPosWs - VspUtilCascadeGridMinPositionWs(Params, CascadeIndex)) / max(CellSize, 0.001)));
     if (any(LinearCoord < 0) ||
         LinearCoord.x >= int(Params.GridResolutionX) ||
         LinearCoord.y >= int(Params.GridResolutionY) ||
@@ -172,34 +172,34 @@ bool FspUtilTryGetGlobalCellIndexFromWorldPos(
         return false;
     }
 
-    OutGlobalCellIndex = FspUtilEncodeGlobalCellIndex(
+    OutGlobalCellIndex = VspUtilEncodeGlobalCellIndex(
         Params,
         CascadeIndex,
-        FspUtilPhysicalCellCoordToLocalIndex(Params, FspUtilLinearToPhysicalCoord(Params, LinearCoord, CascadeIndex)));
+        VspUtilPhysicalCellCoordToLocalIndex(Params, VspUtilLinearToPhysicalCoord(Params, LinearCoord, CascadeIndex)));
     return true;
 }
 
 // ワールド位置を含む最も細かいCascadeのセルを検索する。
-bool FspUtilTryGetFinestCascadeCellFromWorldPos(
-    FInstantRdvFspGridParams Params,
+bool VspUtilTryGetFinestCascadeCellFromWorldPos(
+    FInstantRdvVspGridParams Params,
     float3 WorldPositionWs,
     out uint OutCascadeIndex,
     out uint OutGlobalCellIndex)
 {
     OutCascadeIndex = 0u;
-    OutGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
+    OutGlobalCellIndex = k_irdv_vsp_invalid_probe_index;
 
     [unroll]
     for (uint CascadeIndex = 0u;
-         CascadeIndex < k_irdv_fsp_max_cascade_count;
+         CascadeIndex < k_irdv_vsp_max_cascade_count;
          ++CascadeIndex)
     {
-        if (CascadeIndex >= FspUtilEffectiveCascadeCount(Params))
+        if (CascadeIndex >= VspUtilEffectiveCascadeCount(Params))
         {
             break;
         }
-        uint CellIndex = k_irdv_fsp_invalid_probe_index;
-        if (FspUtilTryGetGlobalCellIndexFromWorldPos(
+        uint CellIndex = k_irdv_vsp_invalid_probe_index;
+        if (VspUtilTryGetGlobalCellIndexFromWorldPos(
             Params,
             WorldPositionWs,
             CascadeIndex,
@@ -215,8 +215,8 @@ bool FspUtilTryGetFinestCascadeCellFromWorldPos(
 }
 
 // ワールド位置をトリリニア補間用の基底セルと補間率へ変換する。
-bool FspUtilTryGetTrilinearCellCoordinates(
-    FInstantRdvFspGridParams Params,
+bool VspUtilTryGetTrilinearCellCoordinates(
+    FInstantRdvVspGridParams Params,
     float3 WorldPositionWs,
     uint CascadeIndex,
     out int3 OutBaseCellCoord,
@@ -227,13 +227,13 @@ bool FspUtilTryGetTrilinearCellCoordinates(
     if (Params.GridResolutionX == 0u ||
         Params.GridResolutionY == 0u ||
         Params.GridResolutionZ == 0u ||
-        CascadeIndex >= FspUtilEffectiveCascadeCount(Params))
+        CascadeIndex >= VspUtilEffectiveCascadeCount(Params))
     {
         return false;
     }
 
-    const float CellSize = FspUtilCascadeCellSizeCm(Params, CascadeIndex);
-    const float3 GridMinPositionWs = FspUtilCascadeGridMinPositionWs(Params, CascadeIndex);
+    const float CellSize = VspUtilCascadeCellSizeCm(Params, CascadeIndex);
+    const float3 GridMinPositionWs = VspUtilCascadeGridMinPositionWs(Params, CascadeIndex);
     const float3 GridExtentWs =
         float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * CellSize;
     const float3 PositionInGridWs = WorldPositionWs - GridMinPositionWs;
@@ -260,14 +260,14 @@ bool FspUtilTryGetTrilinearCellCoordinates(
 // グリッド中心はマイナス無限方向へ量子化されるため、実グリッド外縁はカメラの
 // セル内位相で最大1セル動く。親CascadeのActiveProbeが常に存在する範囲だけを
 // 遷移帯として用い、未更新の親IVをサンプリングしない。
-float FspUtilCalcIrradianceVolumeCascadeDitherRate(
-    FInstantRdvFspGridParams Params,
+float VspUtilCalcIrradianceVolumeCascadeDitherRate(
+    FInstantRdvVspGridParams Params,
     float3 WorldPositionWs,
     uint CascadeIndex)
 {
     const float3 CameraToSampleCell =
         (WorldPositionWs - Params.GridCenterPositionWs) /
-        max(FspUtilCascadeCellSizeCm(Params, CascadeIndex), 0.001);
+        max(VspUtilCascadeCellSizeCm(Params, CascadeIndex), 0.001);
     const float3 HalfExtentCell =
         float3(Params.GridResolutionX, Params.GridResolutionY, Params.GridResolutionZ) * 0.5;
 
@@ -286,8 +286,8 @@ float FspUtilCalcIrradianceVolumeCascadeDitherRate(
 }
 
 // カメラ距離に連続な安全帯から最細Cascadeとトリリニア座標を求める。
-bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
-    FInstantRdvFspGridParams Params,
+bool VspUtilTryGetFinestCascadeTrilinearCoordinates(
+    FInstantRdvVspGridParams Params,
     float3 WorldPositionWs,
     out uint OutCascadeIndex,
     out int3 OutBaseCellCoord,
@@ -297,10 +297,10 @@ bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
     OutBaseCellCoord = int3(0, 0, 0);
     OutCellFraction = 0.0.xxx;
 
-    const uint CascadeCount = FspUtilEffectiveCascadeCount(Params);
+    const uint CascadeCount = VspUtilEffectiveCascadeCount(Params);
     [unroll]
     for (uint CascadeIndex = 0u;
-         CascadeIndex < k_irdv_fsp_max_cascade_count;
+         CascadeIndex < k_irdv_vsp_max_cascade_count;
          ++CascadeIndex)
     {
         if (CascadeIndex >= CascadeCount)
@@ -311,7 +311,7 @@ bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
         const bool bIsLastCascade = CascadeIndex + 1u >= CascadeCount;
         const float CoarseBlendWeight = bIsLastCascade
             ? 0.0
-            : FspUtilCalcIrradianceVolumeCascadeDitherRate(
+            : VspUtilCalcIrradianceVolumeCascadeDitherRate(
                 Params,
                 WorldPositionWs,
                 CascadeIndex);
@@ -320,7 +320,7 @@ bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
             continue;
         }
 
-        if (FspUtilTryGetTrilinearCellCoordinates(
+        if (VspUtilTryGetTrilinearCellCoordinates(
             Params,
             WorldPositionWs,
             CascadeIndex,
@@ -336,27 +336,27 @@ bool FspUtilTryGetFinestCascadeTrilinearCoordinates(
 }
 
 // Global Cell Indexと信号番号から、全CascadeをZ方向へ連結した3D Texture座標を求める。
-uint3 FspUtilIrradianceVolumeTextureCoord(
-    FInstantRdvFspGridParams Params,
+uint3 VspUtilIrradianceVolumeTextureCoord(
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     uint TextureIndex)
 {
-    const uint CellCountPerCascade = FspUtilCellCountPerCascade(Params);
+    const uint CellCountPerCascade = VspUtilCellCountPerCascade(Params);
     const uint CascadeIndex = CellIndex / CellCountPerCascade;
     const uint LocalCellIndex = CellIndex - CascadeIndex * CellCountPerCascade;
-    const uint3 PhysicalCoord = FspUtilLocalCellIndexToCoord(Params, LocalCellIndex);
+    const uint3 PhysicalCoord = VspUtilLocalCellIndexToCoord(Params, LocalCellIndex);
     const uint TextureSliceDepth =
-        Params.GridResolutionZ + k_irdv_fsp_irradiance_volume_guard_texel_count;
+        Params.GridResolutionZ + k_irdv_vsp_irradiance_volume_guard_texel_count;
     return uint3(
         PhysicalCoord.xy,
-        CascadeIndex * TextureSliceDepth * k_irdv_fsp_irradiance_volume_sh_texture_count +
+        CascadeIndex * TextureSliceDepth * k_irdv_vsp_irradiance_volume_sh_texture_count +
             TextureIndex * TextureSliceDepth + PhysicalCoord.z);
 }
 
 // IVセルの4個のfloat4係数を、格納形式のままロードする。
-void FspUtilLoadIrradianceVolumeL1SHCoefficients(
+void VspUtilLoadIrradianceVolumeL1SHCoefficients(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     out float4 OutC0,
     out float4 OutC1,
@@ -364,13 +364,13 @@ void FspUtilLoadIrradianceVolumeL1SHCoefficients(
     out float4 OutC3)
 {
     const float4 SkyVisibility = IrradianceVolumeSH.Load(int4(
-        FspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 0u), 0));
+        VspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 0u), 0));
     const float4 IrradianceR = IrradianceVolumeSH.Load(int4(
-        FspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 1u), 0));
+        VspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 1u), 0));
     const float4 IrradianceG = IrradianceVolumeSH.Load(int4(
-        FspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 2u), 0));
+        VspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 2u), 0));
     const float4 IrradianceB = IrradianceVolumeSH.Load(int4(
-        FspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 3u), 0));
+        VspUtilIrradianceVolumeTextureCoord(Params, CellIndex, 3u), 0));
     OutC0 = float4(SkyVisibility.x, IrradianceR.x, IrradianceG.x, IrradianceB.x);
     OutC1 = float4(SkyVisibility.y, IrradianceR.y, IrradianceG.y, IrradianceB.y);
     OutC2 = float4(SkyVisibility.z, IrradianceR.z, IrradianceG.z, IrradianceB.z);
@@ -379,7 +379,7 @@ void FspUtilLoadIrradianceVolumeL1SHCoefficients(
 
 // 格納済みDiffuse Irradiance SHを入射Radiance SHへ戻す。
 // 既存のRadiance取得APIとの互換用で、通常のGI評価では格納値を直接使用する。
-float4 FspUtilDeconvolveL1SHByClampedCosine(float4 IrradianceSH)
+float4 VspUtilDeconvolveL1SHByClampedCosine(float4 IrradianceSH)
 {
     const float Pi = 3.14159265358979323846;
     return IrradianceSH * float4(1.0 / Pi, 3.0 / (2.0 * Pi), 3.0 / (2.0 * Pi), 3.0 / (2.0 * Pi));
@@ -387,9 +387,9 @@ float4 FspUtilDeconvolveL1SHByClampedCosine(float4 IrradianceSH)
 
 // IVセルの係数をSkyVisibilityとRadiance RGBのSHへ展開する。
 // Texture内のRGBはDiffuse Irradiance SHなので、Radiance取得APIでは逆畳み込みする。
-void FspUtilLoadIrradianceVolumeL1SH(
+void VspUtilLoadIrradianceVolumeL1SH(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     out float4 OutSkyVisibility,
     out float4 OutRadianceR,
@@ -400,7 +400,7 @@ void FspUtilLoadIrradianceVolumeL1SH(
     float4 C1;
     float4 C2;
     float4 C3;
-    FspUtilLoadIrradianceVolumeL1SHCoefficients(
+    VspUtilLoadIrradianceVolumeL1SHCoefficients(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -414,17 +414,17 @@ void FspUtilLoadIrradianceVolumeL1SH(
         C1.r,
         C2.r,
         C3.r);
-    OutRadianceR = FspUtilDeconvolveL1SHByClampedCosine(float4(
+    OutRadianceR = VspUtilDeconvolveL1SHByClampedCosine(float4(
         C0.g,
         C1.g,
         C2.g,
         C3.g));
-    OutRadianceG = FspUtilDeconvolveL1SHByClampedCosine(float4(
+    OutRadianceG = VspUtilDeconvolveL1SHByClampedCosine(float4(
         C0.b,
         C1.b,
         C2.b,
         C3.b));
-    OutRadianceB = FspUtilDeconvolveL1SHByClampedCosine(float4(
+    OutRadianceB = VspUtilDeconvolveL1SHByClampedCosine(float4(
         C0.a,
         C1.a,
         C2.a,
@@ -432,9 +432,9 @@ void FspUtilLoadIrradianceVolumeL1SH(
 }
 
 // IVセルのSHをロードし、全係数ゼロでない場合だけ有効を返す。
-bool FspUtilTryLoadIrradianceVolumeL1SH(
+bool VspUtilTryLoadIrradianceVolumeL1SH(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     out float4 OutSkyVisibility,
     out float4 OutRadianceR,
@@ -445,7 +445,7 @@ bool FspUtilTryLoadIrradianceVolumeL1SH(
     float4 C1;
     float4 C2;
     float4 C3;
-    FspUtilLoadIrradianceVolumeL1SHCoefficients(
+    VspUtilLoadIrradianceVolumeL1SHCoefficients(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -455,9 +455,9 @@ bool FspUtilTryLoadIrradianceVolumeL1SH(
         C3);
 
     OutSkyVisibility = float4(C0.r, C1.r, C2.r, C3.r);
-    OutRadianceR = FspUtilDeconvolveL1SHByClampedCosine(float4(C0.g, C1.g, C2.g, C3.g));
-    OutRadianceG = FspUtilDeconvolveL1SHByClampedCosine(float4(C0.b, C1.b, C2.b, C3.b));
-    OutRadianceB = FspUtilDeconvolveL1SHByClampedCosine(float4(C0.a, C1.a, C2.a, C3.a));
+    OutRadianceR = VspUtilDeconvolveL1SHByClampedCosine(float4(C0.g, C1.g, C2.g, C3.g));
+    OutRadianceG = VspUtilDeconvolveL1SHByClampedCosine(float4(C0.b, C1.b, C2.b, C3.b));
+    OutRadianceB = VspUtilDeconvolveL1SHByClampedCosine(float4(C0.a, C1.a, C2.a, C3.a));
     return any(abs(C0) > 0.0.xxxx) ||
         any(abs(C1) > 0.0.xxxx) ||
         any(abs(C2) > 0.0.xxxx) ||
@@ -466,124 +466,124 @@ bool FspUtilTryLoadIrradianceVolumeL1SH(
 
 // 同一Cascade内のSHをハードウェアTrilinear補間する。
 // Materialのデバッグシェーダに定義される汎用マクロとの衝突を避けるため、
-// この関数内の非公開識別子にはIrdvFsp接頭辞を付ける。
+// この関数内の非公開識別子にはIrdvVsp接頭辞を付ける。
 // 正側Guardへ物理座標0を複製しているため、Toroidal境界でも隣の信号やCascadeと混ざらない。
-void FspUtilLoadIrradianceVolumeL1SHTrilinear(
+void VspUtilLoadIrradianceVolumeL1SHTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams IrdvFspGridParams,
-    uint IrdvFspCascadeIndex,
-    int3 IrdvFspBaseCellCoord,
-    float3 IrdvFspCellFraction,
-    bool bIrdvFspNeedSkyVisibility,
-    bool bIrdvFspNeedRadiance,
-    out float4 OutIrdvFspSkyVisibility,
-    out float4 OutIrdvFspRadianceR,
-    out float4 OutIrdvFspRadianceG,
-    out float4 OutIrdvFspRadianceB)
+    FInstantRdvVspGridParams IrdvVspGridParams,
+    uint IrdvVspCascadeIndex,
+    int3 IrdvVspBaseCellCoord,
+    float3 IrdvVspCellFraction,
+    bool bIrdvVspNeedSkyVisibility,
+    bool bIrdvVspNeedRadiance,
+    out float4 OutIrdvVspSkyVisibility,
+    out float4 OutIrdvVspRadianceR,
+    out float4 OutIrdvVspRadianceG,
+    out float4 OutIrdvVspRadianceB)
 {
-    OutIrdvFspSkyVisibility = 0.0.xxxx;
-    OutIrdvFspRadianceR = 0.0.xxxx;
-    OutIrdvFspRadianceG = 0.0.xxxx;
-    OutIrdvFspRadianceB = 0.0.xxxx;
+    OutIrdvVspSkyVisibility = 0.0.xxxx;
+    OutIrdvVspRadianceR = 0.0.xxxx;
+    OutIrdvVspRadianceG = 0.0.xxxx;
+    OutIrdvVspRadianceB = 0.0.xxxx;
 
-    bool bIrdvFspUseTrilinearInterpolation = true;
+    bool bIrdvVspUseTrilinearInterpolation = true;
 #if IS_MATERIAL_SHADER
-    bIrdvFspUseTrilinearInterpolation = Scene.InstantRdvParam.FspTrilinearInterpolation != 0u;
+    bIrdvVspUseTrilinearInterpolation = Scene.InstantRdvParam.VspTrilinearInterpolation != 0u;
 #endif
-    if (!bIrdvFspUseTrilinearInterpolation)
+    if (!bIrdvVspUseTrilinearInterpolation)
     {
-        const int3 IrdvFspNearestLinearCellCoord = IrdvFspBaseCellCoord + int3(
-            IrdvFspCellFraction.x >= 0.5 ? 1 : 0,
-            IrdvFspCellFraction.y >= 0.5 ? 1 : 0,
-            IrdvFspCellFraction.z >= 0.5 ? 1 : 0);
-        const uint IrdvFspNearestCellIndex = FspUtilEncodeGlobalCellIndex(
-            IrdvFspGridParams,
-            IrdvFspCascadeIndex,
-            FspUtilPhysicalCellCoordToLocalIndex(
-                IrdvFspGridParams,
-                FspUtilLinearToPhysicalCoord(
-                    IrdvFspGridParams,
-                    IrdvFspNearestLinearCellCoord,
-                    IrdvFspCascadeIndex)));
-        float4 IrdvFspC0;
-        float4 IrdvFspC1;
-        float4 IrdvFspC2;
-        float4 IrdvFspC3;
-        FspUtilLoadIrradianceVolumeL1SHCoefficients(
+        const int3 IrdvVspNearestLinearCellCoord = IrdvVspBaseCellCoord + int3(
+            IrdvVspCellFraction.x >= 0.5 ? 1 : 0,
+            IrdvVspCellFraction.y >= 0.5 ? 1 : 0,
+            IrdvVspCellFraction.z >= 0.5 ? 1 : 0);
+        const uint IrdvVspNearestCellIndex = VspUtilEncodeGlobalCellIndex(
+            IrdvVspGridParams,
+            IrdvVspCascadeIndex,
+            VspUtilPhysicalCellCoordToLocalIndex(
+                IrdvVspGridParams,
+                VspUtilLinearToPhysicalCoord(
+                    IrdvVspGridParams,
+                    IrdvVspNearestLinearCellCoord,
+                    IrdvVspCascadeIndex)));
+        float4 IrdvVspC0;
+        float4 IrdvVspC1;
+        float4 IrdvVspC2;
+        float4 IrdvVspC3;
+        VspUtilLoadIrradianceVolumeL1SHCoefficients(
             IrradianceVolumeSH,
-            IrdvFspGridParams,
-            IrdvFspNearestCellIndex,
-            IrdvFspC0,
-            IrdvFspC1,
-            IrdvFspC2,
-            IrdvFspC3);
-        if (bIrdvFspNeedSkyVisibility)
+            IrdvVspGridParams,
+            IrdvVspNearestCellIndex,
+            IrdvVspC0,
+            IrdvVspC1,
+            IrdvVspC2,
+            IrdvVspC3);
+        if (bIrdvVspNeedSkyVisibility)
         {
-            OutIrdvFspSkyVisibility = float4(IrdvFspC0.r, IrdvFspC1.r, IrdvFspC2.r, IrdvFspC3.r);
+            OutIrdvVspSkyVisibility = float4(IrdvVspC0.r, IrdvVspC1.r, IrdvVspC2.r, IrdvVspC3.r);
         }
-        if (bIrdvFspNeedRadiance)
+        if (bIrdvVspNeedRadiance)
         {
-            OutIrdvFspRadianceR = float4(IrdvFspC0.g, IrdvFspC1.g, IrdvFspC2.g, IrdvFspC3.g);
-            OutIrdvFspRadianceG = float4(IrdvFspC0.b, IrdvFspC1.b, IrdvFspC2.b, IrdvFspC3.b);
-            OutIrdvFspRadianceB = float4(IrdvFspC0.a, IrdvFspC1.a, IrdvFspC2.a, IrdvFspC3.a);
+            OutIrdvVspRadianceR = float4(IrdvVspC0.g, IrdvVspC1.g, IrdvVspC2.g, IrdvVspC3.g);
+            OutIrdvVspRadianceG = float4(IrdvVspC0.b, IrdvVspC1.b, IrdvVspC2.b, IrdvVspC3.b);
+            OutIrdvVspRadianceB = float4(IrdvVspC0.a, IrdvVspC1.a, IrdvVspC2.a, IrdvVspC3.a);
         }
         return;
     }
 
-    const uint3 IrdvFspGridResolution = uint3(
-        IrdvFspGridParams.GridResolutionX,
-        IrdvFspGridParams.GridResolutionY,
-        IrdvFspGridParams.GridResolutionZ);
-    const uint3 IrdvFspPaddedResolution =
-        IrdvFspGridResolution + k_irdv_fsp_irradiance_volume_guard_texel_count;
-    const int3 IrdvFspToroidalOffset = FspUtilToroidalOffset(
-        IrdvFspGridParams,
-        IrdvFspCascadeIndex,
-        IrdvFspGridParams.GridCenterPositionWs);
-    const int3 IrdvFspPhysicalBaseCellCoord = LogicalToPhysicalGridCoord(
-        IrdvFspBaseCellCoord,
-        IrdvFspToroidalOffset,
-        IrdvFspGridResolution);
-    const uint IrdvFspCascadeTextureZ =
-        IrdvFspCascadeIndex * IrdvFspPaddedResolution.z * k_irdv_fsp_irradiance_volume_sh_texture_count;
-    const float IrdvFspTextureDepth =
-        float(IrdvFspPaddedResolution.z * max(FspUtilEffectiveCascadeCount(IrdvFspGridParams), 1u) *
-            k_irdv_fsp_irradiance_volume_sh_texture_count);
-    const float3 IrdvFspTextureResolution =
-        float3(float2(IrdvFspPaddedResolution.xy), IrdvFspTextureDepth);
+    const uint3 IrdvVspGridResolution = uint3(
+        IrdvVspGridParams.GridResolutionX,
+        IrdvVspGridParams.GridResolutionY,
+        IrdvVspGridParams.GridResolutionZ);
+    const uint3 IrdvVspPaddedResolution =
+        IrdvVspGridResolution + k_irdv_vsp_irradiance_volume_guard_texel_count;
+    const int3 IrdvVspToroidalOffset = VspUtilToroidalOffset(
+        IrdvVspGridParams,
+        IrdvVspCascadeIndex,
+        IrdvVspGridParams.GridCenterPositionWs);
+    const int3 IrdvVspPhysicalBaseCellCoord = LogicalToPhysicalGridCoord(
+        IrdvVspBaseCellCoord,
+        IrdvVspToroidalOffset,
+        IrdvVspGridResolution);
+    const uint IrdvVspCascadeTextureZ =
+        IrdvVspCascadeIndex * IrdvVspPaddedResolution.z * k_irdv_vsp_irradiance_volume_sh_texture_count;
+    const float IrdvVspTextureDepth =
+        float(IrdvVspPaddedResolution.z * max(VspUtilEffectiveCascadeCount(IrdvVspGridParams), 1u) *
+            k_irdv_vsp_irradiance_volume_sh_texture_count);
+    const float3 IrdvVspTextureResolution =
+        float3(float2(IrdvVspPaddedResolution.xy), IrdvVspTextureDepth);
 
-    if (bIrdvFspNeedSkyVisibility)
+    if (bIrdvVspNeedSkyVisibility)
     {
-        const float3 IrdvFspSampleTexel = float3(
-            float2(IrdvFspPhysicalBaseCellCoord.xy) + 0.5.xx + IrdvFspCellFraction.xy,
-            float(IrdvFspCascadeTextureZ + IrdvFspPhysicalBaseCellCoord.z) + 0.5 + IrdvFspCellFraction.z);
-        OutIrdvFspSkyVisibility = IrradianceVolumeSH.SampleLevel(
-            IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            IrdvFspSampleTexel / IrdvFspTextureResolution,
+        const float3 IrdvVspSampleTexel = float3(
+            float2(IrdvVspPhysicalBaseCellCoord.xy) + 0.5.xx + IrdvVspCellFraction.xy,
+            float(IrdvVspCascadeTextureZ + IrdvVspPhysicalBaseCellCoord.z) + 0.5 + IrdvVspCellFraction.z);
+        OutIrdvVspSkyVisibility = IrradianceVolumeSH.SampleLevel(
+            IRDV_VSP_IRRADIANCE_VOLUME_SAMPLER,
+            IrdvVspSampleTexel / IrdvVspTextureResolution,
             0.0);
     }
-    if (bIrdvFspNeedRadiance)
+    if (bIrdvVspNeedRadiance)
     {
-        const float2 IrdvFspSampleTexelXY =
-            float2(IrdvFspPhysicalBaseCellCoord.xy) + 0.5.xx + IrdvFspCellFraction.xy;
-        const float IrdvFspSampleTexelZ =
-            float(IrdvFspCascadeTextureZ + IrdvFspPhysicalBaseCellCoord.z) + 0.5 + IrdvFspCellFraction.z;
-        OutIrdvFspRadianceR = IrradianceVolumeSH.SampleLevel(
-            IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            float3(IrdvFspSampleTexelXY, IrdvFspSampleTexelZ + IrdvFspPaddedResolution.z) / IrdvFspTextureResolution,
+        const float2 IrdvVspSampleTexelXY =
+            float2(IrdvVspPhysicalBaseCellCoord.xy) + 0.5.xx + IrdvVspCellFraction.xy;
+        const float IrdvVspSampleTexelZ =
+            float(IrdvVspCascadeTextureZ + IrdvVspPhysicalBaseCellCoord.z) + 0.5 + IrdvVspCellFraction.z;
+        OutIrdvVspRadianceR = IrradianceVolumeSH.SampleLevel(
+            IRDV_VSP_IRRADIANCE_VOLUME_SAMPLER,
+            float3(IrdvVspSampleTexelXY, IrdvVspSampleTexelZ + IrdvVspPaddedResolution.z) / IrdvVspTextureResolution,
             0.0);
-        OutIrdvFspRadianceG = IrradianceVolumeSH.SampleLevel(
-            IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            float3(IrdvFspSampleTexelXY, IrdvFspSampleTexelZ + IrdvFspPaddedResolution.z * 2u) / IrdvFspTextureResolution,
+        OutIrdvVspRadianceG = IrradianceVolumeSH.SampleLevel(
+            IRDV_VSP_IRRADIANCE_VOLUME_SAMPLER,
+            float3(IrdvVspSampleTexelXY, IrdvVspSampleTexelZ + IrdvVspPaddedResolution.z * 2u) / IrdvVspTextureResolution,
             0.0);
-        OutIrdvFspRadianceB = IrradianceVolumeSH.SampleLevel(
-            IRDV_FSP_IRRADIANCE_VOLUME_SAMPLER,
-            float3(IrdvFspSampleTexelXY, IrdvFspSampleTexelZ + IrdvFspPaddedResolution.z * 3u) / IrdvFspTextureResolution,
+        OutIrdvVspRadianceB = IrradianceVolumeSH.SampleLevel(
+            IRDV_VSP_IRRADIANCE_VOLUME_SAMPLER,
+            float3(IrdvVspSampleTexelXY, IrdvVspSampleTexelZ + IrdvVspPaddedResolution.z * 3u) / IrdvVspTextureResolution,
             0.0);
     }
 }
 
-float FspUtilCascadeDitherNoise(float3 WorldPositionWs)
+float VspUtilCascadeDitherNoise(float3 WorldPositionWs)
 {
     return frac(sin(dot(WorldPositionWs, float3(12.9898, 78.233, 37.719))) * 43758.5453);
 }
@@ -592,9 +592,9 @@ float FspUtilCascadeDitherNoise(float3 WorldPositionWs)
 // 選択と同じ連続位置の境界を使い、グリッドのスナップによるディザ率の跳躍を防ぐ。
 // ディザ帯は最細Cascadeの境界から1セルの固定安全帯であり、呼び出し側から変更しない。
 // 両Cascadeを同時にロードせず、選択された方だけをサンプリングする。
-bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
+bool VspUtilLoadIrradianceVolumeL1SHCascadeBlended(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     uint FineCascadeIndex,
     int3 FineBaseCellCoord,
@@ -607,35 +607,35 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
     out float4 OutRadianceB)
 {
     const uint CoarseCascadeIndex = FineCascadeIndex + 1u;
-    const float CoarseBlendWeight = FspUtilCalcIrradianceVolumeCascadeDitherRate(
+    const float CoarseBlendWeight = VspUtilCalcIrradianceVolumeCascadeDitherRate(
         GridParams,
         WorldPositionWs,
         FineCascadeIndex);
 
-    // MaterialではデバッグCVarでのみ切り替える。内部FSPシェーダは固定で有効化する。
+    // MaterialではデバッグCVarでのみ切り替える。内部VSPシェーダは固定で有効化する。
     const bool bCascadeDitherEnabled =
 #if IS_MATERIAL_SHADER
-        Scene.InstantRdvParam.FspCascadeDitherInterpolation != 0u;
+        Scene.InstantRdvParam.VspCascadeDitherInterpolation != 0u;
 #else
         true;
 #endif
     const bool bUseCoarseCascade =
         bCascadeDitherEnabled &&
-        CoarseCascadeIndex < FspUtilEffectiveCascadeCount(GridParams) &&
-        FspUtilCascadeDitherNoise(WorldPositionWs) < CoarseBlendWeight;
+        CoarseCascadeIndex < VspUtilEffectiveCascadeCount(GridParams) &&
+        VspUtilCascadeDitherNoise(WorldPositionWs) < CoarseBlendWeight;
 
     if (bUseCoarseCascade)
     {
         int3 CoarseBaseCellCoord;
         float3 CoarseCellFraction;
-        if (FspUtilTryGetTrilinearCellCoordinates(
+        if (VspUtilTryGetTrilinearCellCoordinates(
             GridParams,
             WorldPositionWs,
             CoarseCascadeIndex,
             CoarseBaseCellCoord,
             CoarseCellFraction))
         {
-            FspUtilLoadIrradianceVolumeL1SHTrilinear(
+            VspUtilLoadIrradianceVolumeL1SHTrilinear(
                 IrradianceVolumeSH,
                 GridParams,
                 CoarseCascadeIndex,
@@ -651,7 +651,7 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
         }
     }
 
-    FspUtilLoadIrradianceVolumeL1SHTrilinear(
+    VspUtilLoadIrradianceVolumeL1SHTrilinear(
         IrradianceVolumeSH,
         GridParams,
         FineCascadeIndex,
@@ -667,7 +667,7 @@ bool FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
 }
 
 // 方向ベクトルに対するL1 SH基底(Y00,Y1-1,Y10,Y1+1)を評価する。
-float4 FspUtilEvaluateL1ShBasis(float3 DirectionWs)
+float4 VspUtilEvaluateL1ShBasis(float3 DirectionWs)
 {
     return float4(
         0.2820947918,
@@ -679,7 +679,7 @@ float4 FspUtilEvaluateL1ShBasis(float3 DirectionWs)
 // L1 SHへ軸対称カーネルを畳み込む。
 // 係数を変更するだけで、RadianceのCos畳み込みとSkyVisibilityの正規化Cos畳み込みを共有する。
 // L1 SH係数へ軸対称カーネルのL0/L1スケールを適用する。
-float4 FspUtilConvolveL1SH(float4 SHCoefficients, float L0Scale, float L1Scale)
+float4 VspUtilConvolveL1SH(float4 SHCoefficients, float L0Scale, float L1Scale)
 {
     return SHCoefficients * float4(L0Scale, L1Scale, L1Scale, L1Scale);
 }
@@ -689,18 +689,18 @@ float4 FspUtilConvolveL1SH(float4 SHCoefficients, float L0Scale, float L1Scale)
 // これはLambert BRDFの1/PIを含まない入射Diffuse Irradianceである。
 // Lambert BRDFへ渡す場合はBRDF側でPI除算し、最終Diffuse反射値として使う場合は利用側でPI除算する。
 // Radiance SHをCos畳み込み済みDiffuse Irradiance SHへ変換する。
-float4 FspUtilConvolveL1SHByClampedCosine(float4 RadianceSH)
+float4 VspUtilConvolveL1SHByClampedCosine(float4 RadianceSH)
 {
     const float Pi = 3.14159265358979323846;
-    return FspUtilConvolveL1SH(RadianceSH, Pi, 2.0 * Pi / 3.0);
+    return VspUtilConvolveL1SH(RadianceSH, Pi, 2.0 * Pi / 3.0);
 }
 
 // SkyVisibility SHを半球平均の可視性係数へ変換する。
 // 戻り値は0から1を基本範囲とする無次元のDiffuse/IBL可視性係数で、PI除算は不要。
 // SkyVisibility SHを正規化Cos畳み込み済み可視性SHへ変換する。
-float4 FspUtilConvolveL1SHByNormalizedClampedCosine(float4 SkyVisibilitySH)
+float4 VspUtilConvolveL1SHByNormalizedClampedCosine(float4 SkyVisibilitySH)
 {
-    return FspUtilConvolveL1SH(SkyVisibilitySH, 1.0, 2.0 / 3.0);
+    return VspUtilConvolveL1SH(SkyVisibilitySH, 1.0, 2.0 / 3.0);
 }
 
 
@@ -708,26 +708,26 @@ float4 FspUtilConvolveL1SHByNormalizedClampedCosine(float4 SkyVisibilitySH)
 // dot(SH * Kernel, Basis) == dot(SH, Basis * Kernel) なので、
 // RGB各チャンネルの係数を個別に畳み込むより、基底を一度だけ計算する方が軽い。
 // Cos畳み込みを基底側へ移して、PI除算前のDiffuse Irradiance評価用基底を返す。
-float4 FspUtilEvaluateL1ShBasisWithClampedCosine(float3 DirectionWs)
+float4 VspUtilEvaluateL1ShBasisWithClampedCosine(float3 DirectionWs)
 {
-    const float4 ShBasis = FspUtilEvaluateL1ShBasis(DirectionWs);
+    const float4 ShBasis = VspUtilEvaluateL1ShBasis(DirectionWs);
     const float Pi = 3.14159265358979323846;
-    return FspUtilConvolveL1SH(ShBasis, Pi, 2.0 * Pi / 3.0);
+    return VspUtilConvolveL1SH(ShBasis, Pi, 2.0 * Pi / 3.0);
 }
 
 
 
 // IVセルのSH係数が未初期化状態ではないかを判定する。
-bool FspUtilIrradianceVolumeHasValidSH(
+bool VspUtilIrradianceVolumeHasValidSH(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex)
 {
     float4 C0;
     float4 C1;
     float4 C2;
     float4 C3;
-    FspUtilLoadIrradianceVolumeL1SHCoefficients(
+    VspUtilLoadIrradianceVolumeL1SHCoefficients(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -742,13 +742,13 @@ bool FspUtilIrradianceVolumeHasValidSH(
 }
 
 // ロード済みRadiance SHを指定方向のRGB Radianceへ評価する。
-float3 FspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
+float3 VspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
     float4 RadianceR,
     float4 RadianceG,
     float4 RadianceB,
     float3 NormalWs)
 {
-    const float4 ShBasis = FspUtilEvaluateL1ShBasis(normalize(NormalWs));
+    const float4 ShBasis = VspUtilEvaluateL1ShBasis(normalize(NormalWs));
     return max(
         0.0.xxx,
         float3(
@@ -758,13 +758,13 @@ float3 FspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
 }
 
 // ロード済みRadiance SHをCos畳み込み済みDiffuse Irradianceへ評価する。
-float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
+float3 VspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
     float4 RadianceR,
     float4 RadianceG,
     float4 RadianceB,
     float3 NormalWs)
 {
-    const float4 ShBasis = FspUtilEvaluateL1ShBasisWithClampedCosine(normalize(NormalWs));
+    const float4 ShBasis = VspUtilEvaluateL1ShBasisWithClampedCosine(normalize(NormalWs));
     return max(
         0.0.xxx,
         float3(
@@ -775,38 +775,38 @@ float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
 
 // SkyVisibilityの正規化Cos畳み込みを評価基底へ移したもの。
 // 正規化Cos畳み込みを基底側へ移して、IBL可視性評価用基底を返す。
-float4 FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(float3 DirectionWs)
+float4 VspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(float3 DirectionWs)
 {
-    return FspUtilConvolveL1SH(
-        FspUtilEvaluateL1ShBasis(DirectionWs),
+    return VspUtilConvolveL1SH(
+        VspUtilEvaluateL1ShBasis(DirectionWs),
         1.0,
         2.0 / 3.0);
 }
 
 // ロード済みSkyVisibility SHを指定方向の可視性へ評価する。
-float FspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
+float VspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
     float4 SkyVisibility,
     float3 NormalWs)
 {
     return saturate(
-        dot(SkyVisibility, FspUtilEvaluateL1ShBasis(normalize(NormalWs))));
+        dot(SkyVisibility, VspUtilEvaluateL1ShBasis(normalize(NormalWs))));
 }
 
 // ロード済みSkyVisibility SHをDiffuse/IBL用可視性へ評価する。
-float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
+float VspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
     float4 SkyVisibility,
     float3 NormalWs)
 {
     return saturate(
         dot(
             SkyVisibility,
-            FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs))));
+            VspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(normalize(NormalWs))));
 }
 
 // 指定セルのRadiance SHを直接評価する。
-float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
+float3 VspUtilEvaluateIrradianceVolumeRadianceAtCell(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -814,7 +814,7 @@ float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SH(
+    VspUtilLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -825,7 +825,7 @@ float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
 
     // 生SHの方向評価。Diffuse IrradianceやLambert BRDFの入力ではなく、
     // デバッグ表示または指定方向の入射Radianceを取得したい場合に使用する。
-    return FspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
+    return VspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
         RadianceR,
         RadianceG,
         RadianceB,
@@ -836,9 +836,9 @@ float3 FspUtilEvaluateIrradianceVolumeRadianceAtCell(
 // 戻り値はPI除算前のE(N) = integral(L * max(N・omega, 0) domega)である。
 // Lambert BRDFへの入力ではBRDF側の1/PIを使い、最終Diffuse反射値では利用側でPI除算する。
 // 指定セルのRadiance SHからDiffuse Irradianceを評価する。
-float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
+float3 VspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -846,7 +846,7 @@ float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SH(
+    VspUtilLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -855,7 +855,7 @@ float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
         RadianceG,
         RadianceB);
 
-    return FspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
+    return VspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
         RadianceR,
         RadianceG,
         RadianceB,
@@ -863,9 +863,9 @@ float3 FspUtilEvaluateIrradianceVolumeDiffuseIrradianceAtCell(
 }
 
 // 指定セルのSkyVisibility SHを指定方向へ評価する。
-float FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
+float VspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -873,7 +873,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SH(
+    VspUtilLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -883,7 +883,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
         RadianceB);
 
     // 生SHの方向評価。反射方向など、単一方向の可視性を取得する場合に使用する。
-    return FspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
+    return VspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
         SkyVisibility,
         NormalWs);
 }
@@ -891,9 +891,9 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
 // 指定セルのSkyVisibility SHを正規化Cos畳み込みし、Diffuse/IBL可視性を評価する。
 // 戻り値は無次元の可視性係数であり、PI除算やRadianceの色補正は行わない。
 // 指定セルのSkyVisibility SHからIBL可視性を評価する。
-float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblAtCell(
+float VspUtilEvaluateIrradianceVolumeSkyVisibilityIblAtCell(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams Params,
+    FInstantRdvVspGridParams Params,
     uint CellIndex,
     float3 NormalWs)
 {
@@ -901,7 +901,7 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblAtCell(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SH(
+    VspUtilLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         Params,
         CellIndex,
@@ -910,15 +910,15 @@ float FspUtilEvaluateIrradianceVolumeSkyVisibilityIblAtCell(
         RadianceG,
         RadianceB);
 
-    return FspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
+    return VspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
         SkyVisibility,
         NormalWs);
 }
 
 // ワールド位置からセルを検索し、最近傍セルのRadianceを評価する。
-bool FspUtilTryEvaluateIrradianceVolumeRadiance(
+bool VspUtilTryEvaluateIrradianceVolumeRadiance(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float3 OutRadiance)
@@ -926,8 +926,8 @@ bool FspUtilTryEvaluateIrradianceVolumeRadiance(
     OutRadiance = 0.0.xxx;
 
     uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
+    uint CellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspUtilTryGetFinestCascadeCellFromWorldPos(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -940,7 +940,7 @@ bool FspUtilTryEvaluateIrradianceVolumeRadiance(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    if (!FspUtilTryLoadIrradianceVolumeL1SH(
+    if (!VspUtilTryLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         GridParams,
         CellIndex,
@@ -952,7 +952,7 @@ bool FspUtilTryEvaluateIrradianceVolumeRadiance(
         return false;
     }
 
-    OutRadiance = FspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
+    OutRadiance = VspUtilEvaluateIrradianceVolumeRadianceFromL1SH(
         RadianceR,
         RadianceG,
         RadianceB,
@@ -961,9 +961,9 @@ bool FspUtilTryEvaluateIrradianceVolumeRadiance(
 }
 
 // ワールド位置からセルを検索し、最近傍セルのSkyVisibilityを評価する。
-bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
+bool VspUtilTryEvaluateIrradianceVolumeSkyVisibility(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float OutSkyVisibility)
@@ -971,8 +971,8 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
     OutSkyVisibility = 0.0;
 
     uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
+    uint CellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspUtilTryGetFinestCascadeCellFromWorldPos(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -985,7 +985,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    if (!FspUtilTryLoadIrradianceVolumeL1SH(
+    if (!VspUtilTryLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         GridParams,
         CellIndex,
@@ -997,7 +997,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
         return false;
     }
 
-    OutSkyVisibility = FspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
+    OutSkyVisibility = VspUtilEvaluateIrradianceVolumeSkyVisibilityFromL1SH(
         SkyVisibility,
         NormalWs);
     return true;
@@ -1006,9 +1006,9 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibility(
 // Finest Cascadeの単一セルを参照し、Diffuse Irradianceを評価する。
 // 戻り値はCos畳み込み済みのDiffuse Irradianceで、Lambert BRDF側の入力に使用する。
 // ワールド位置からセルを検索し、最近傍セルのDiffuse Irradianceを評価する。
-bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
+bool VspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float3 OutDiffuseIrradiance)
@@ -1016,8 +1016,8 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
     OutDiffuseIrradiance = 0.0.xxx;
 
     uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
+    uint CellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspUtilTryGetFinestCascadeCellFromWorldPos(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -1030,7 +1030,7 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    if (!FspUtilTryLoadIrradianceVolumeL1SH(
+    if (!VspUtilTryLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         GridParams,
         CellIndex,
@@ -1042,7 +1042,7 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
         return false;
     }
 
-    OutDiffuseIrradiance = FspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
+    OutDiffuseIrradiance = VspUtilEvaluateIrradianceVolumeDiffuseIrradianceFromL1SH(
         RadianceR,
         RadianceG,
         RadianceB,
@@ -1053,9 +1053,9 @@ bool FspUtilTryEvaluateIrradianceVolumeDiffuseIrradiance(
 // Finest Cascadeの単一セルを参照し、Diffuse/IBL用のSkyVisibilityを評価する。
 // 戻り値は正規化Cos畳み込み済みの無次元可視性係数で、PI除算は不要。
 // ワールド位置からセルを検索し、最近傍セルのIBL可視性を評価する。
-bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
+bool VspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float OutSkyVisibility)
@@ -1063,8 +1063,8 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
     OutSkyVisibility = 0.0;
 
     uint CascadeIndex = 0u;
-    uint CellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspUtilTryGetFinestCascadeCellFromWorldPos(
+    uint CellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspUtilTryGetFinestCascadeCellFromWorldPos(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -1077,7 +1077,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    if (!FspUtilTryLoadIrradianceVolumeL1SH(
+    if (!VspUtilTryLoadIrradianceVolumeL1SH(
         IrradianceVolumeSH,
         GridParams,
         CellIndex,
@@ -1089,16 +1089,16 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityIbl(
         return false;
     }
 
-    OutSkyVisibility = FspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
+    OutSkyVisibility = VspUtilEvaluateIrradianceVolumeSkyVisibilityIblFromL1SH(
         SkyVisibility,
         NormalWs);
     return true;
 }
 
 // ワールド位置周辺8セルを補間し、Radianceを評価する。
-bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
+bool VspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float3 OutRadiance)
@@ -1108,7 +1108,7 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
     int3 BaseCellCoord;
     float3 CellFraction;
     uint CascadeIndex = 0u;
-    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
+    if (!VspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -1122,7 +1122,7 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
+    VspUtilLoadIrradianceVolumeL1SHCascadeBlended(
         IrradianceVolumeSH,
         GridParams,
         WorldPositionWs,
@@ -1136,10 +1136,10 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
         RadianceG,
         RadianceB);
 
-    const float4 ShBasis = FspUtilEvaluateL1ShBasis(normalize(NormalWs));
-    RadianceR = FspUtilDeconvolveL1SHByClampedCosine(RadianceR);
-    RadianceG = FspUtilDeconvolveL1SHByClampedCosine(RadianceG);
-    RadianceB = FspUtilDeconvolveL1SHByClampedCosine(RadianceB);
+    const float4 ShBasis = VspUtilEvaluateL1ShBasis(normalize(NormalWs));
+    RadianceR = VspUtilDeconvolveL1SHByClampedCosine(RadianceR);
+    RadianceG = VspUtilDeconvolveL1SHByClampedCosine(RadianceG);
+    RadianceB = VspUtilDeconvolveL1SHByClampedCosine(RadianceB);
     OutRadiance = max(
         0.0.xxx,
         float3(
@@ -1152,9 +1152,9 @@ bool FspUtilTryEvaluateIrradianceVolumeRadianceTrilinear(
 // Material用: Finest Cascade内でSH係数をトリリニア補間し、Diffuse IrradianceとIBL SkyVisibilityを同時に評価する。
 // 位置からのCascade探索、境界ディザ、法線正規化、4 signalの3D Texture sampleを一度だけ実行する。
 // Irradiance RGBは書き込み時にclamped-cosine畳み込み済みであり、SkyVisibilityは生のSHをIBL評価時に正規化clamped-cosine基底で評価する。
-bool FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
+bool VspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float3 OutDiffuseIrradiance,
@@ -1166,7 +1166,7 @@ bool FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
     int3 BaseCellCoord;
     float3 CellFraction;
     uint CascadeIndex = 0u;
-    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
+    if (!VspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -1180,7 +1180,7 @@ bool FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
     float4 IrradianceR;
     float4 IrradianceG;
     float4 IrradianceB;
-    FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
+    VspUtilLoadIrradianceVolumeL1SHCascadeBlended(
         IrradianceVolumeSH,
         GridParams,
         WorldPositionWs,
@@ -1195,7 +1195,7 @@ bool FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
         IrradianceB);
 
     const float3 NormalizedNormalWs = normalize(NormalWs);
-    const float4 ShBasis = FspUtilEvaluateL1ShBasis(NormalizedNormalWs);
+    const float4 ShBasis = VspUtilEvaluateL1ShBasis(NormalizedNormalWs);
     OutDiffuseIrradiance = max(
         0.0.xxx,
         float3(
@@ -1203,13 +1203,13 @@ bool FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
             dot(IrradianceG, ShBasis),
             dot(IrradianceB, ShBasis)));
     OutSkyVisibilityIbl = saturate(
-        dot(SkyVisibility, FspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(NormalizedNormalWs)));
+        dot(SkyVisibility, VspUtilEvaluateL1ShBasisWithNormalizedClampedCosine(NormalizedNormalWs)));
     return true;
 }
 // ワールド位置周辺8セルを補間し、指定方向のSkyVisibilityを評価する。Cos畳み込み無し.
-bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
+bool VspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     Texture3D<float4> IrradianceVolumeSH,
-    FInstantRdvFspGridParams GridParams,
+    FInstantRdvVspGridParams GridParams,
     float3 WorldPositionWs,
     float3 NormalWs,
     out float OutSkyVisibility)
@@ -1219,7 +1219,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     int3 BaseCellCoord;
     float3 CellFraction;
     uint CascadeIndex = 0u;
-    if (!FspUtilTryGetFinestCascadeTrilinearCoordinates(
+    if (!VspUtilTryGetFinestCascadeTrilinearCoordinates(
         GridParams,
         WorldPositionWs,
         CascadeIndex,
@@ -1233,7 +1233,7 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
     float4 RadianceR;
     float4 RadianceG;
     float4 RadianceB;
-    FspUtilLoadIrradianceVolumeL1SHCascadeBlended(
+    VspUtilLoadIrradianceVolumeL1SHCascadeBlended(
         IrradianceVolumeSH,
         GridParams,
         WorldPositionWs,
@@ -1248,9 +1248,9 @@ bool FspUtilTryEvaluateIrradianceVolumeSkyVisibilityTrilinear(
         RadianceB);
 
     OutSkyVisibility = saturate(
-        dot(SkyVisibility, FspUtilEvaluateL1ShBasis(normalize(NormalWs))));
+        dot(SkyVisibility, VspUtilEvaluateL1ShBasis(normalize(NormalWs))));
     return true;
 }
 
 
-#endif // INSTANT_RDV_FSP_UTIL_USH
+#endif // INSTANT_RDV_VSP_UTIL_USH

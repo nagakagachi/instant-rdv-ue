@@ -1,7 +1,7 @@
 ﻿/*
     InstantRdvSceneViewExtension.cpp
 
-    UEのSceneViewExtensionへ接続し、BBV/FSPのRenderThread更新、
+    UEのSceneViewExtensionへ接続し、BBV/VSPのRenderThread更新、
     ポストプロセス処理、デバッグ可視化のタイミングを管理する。
 */
 
@@ -87,10 +87,10 @@ INSTANT_RDV_CVAR_BOOL(
     3);
 
 INSTANT_RDV_CVAR_INT(
-    CVarInstantRdvFspVisProbe,
-    TEXT("r.InstantRdv.Fsp.VisProbe"),
+    CVarInstantRdvVspVisProbe,
+    TEXT("r.InstantRdv.Vsp.VisProbe"),
     0,
-    TEXT("Instant-RDV FSP active probe debug mode selector.\n")
+    TEXT("Instant-RDV VSP active probe debug mode selector.\n")
     TEXT("0: Off\n")
     TEXT("1: Active probe liveness\n")
     TEXT("2: Active probe index hash\n")
@@ -111,10 +111,10 @@ INSTANT_RDV_CVAR_INT(
     10);
 
 INSTANT_RDV_CVAR_INT(
-    CVarInstantRdvFspVisIvProbe,
-    TEXT("r.InstantRdv.Fsp.VisIvProbe"),
+    CVarInstantRdvVspVisIvProbe,
+    TEXT("r.InstantRdv.Vsp.VisIvProbe"),
     0,
-    TEXT("Instant-RDV FSP irradiance volume probe debug mode selector.\n")
+    TEXT("Instant-RDV VSP irradiance volume probe debug mode selector.\n")
     TEXT("0: Off\n")
     TEXT("1: IrradianceVolume SH radiance\n")
     TEXT("2: IrradianceVolume SH sky visibility"),
@@ -126,15 +126,15 @@ INSTANT_RDV_CVAR_INT(
     20);
 
 INSTANT_RDV_CVAR_BOOL(
-    CVarInstantRdvFspProbeDebugDepthTest,
-    TEXT("r.InstantRdv.Fsp.ProbeDebugDepthTest"),
+    CVarInstantRdvVspProbeDebugDepthTest,
+    TEXT("r.InstantRdv.Vsp.ProbeDebugDepthTest"),
     1,
-    TEXT("Enable SceneDepth testing for FSP probe debug spheres.\n")
+    TEXT("Enable SceneDepth testing for VSP probe debug spheres.\n")
     TEXT("0: Draw without depth test\n")
     TEXT("1: Respect SceneDepth occlusion"),
     ECVF_RenderThreadSafe,
     TEXT("Debug"),
-    TEXT("FSP probe debug depth test"),
+    TEXT("VSP probe debug depth test"),
     30);
 
 INSTANT_RDV_CVAR_BOOL(
@@ -177,7 +177,7 @@ INSTANT_RDV_CVAR_BOOL(
     CVarInstantRdvUseReducedSurfaceBuffer,
     TEXT("r.InstantRdv.UseReducedSurfaceBuffer"),
     1,
-    TEXT("Select the MainView ReducedSurfaceBuffer path for BBV and FSP.\n")
+    TEXT("Select the MainView ReducedSurfaceBuffer path for BBV and VSP.\n")
     TEXT("0: Legacy full-resolution Depth path\n")
     TEXT("1: ReducedSurfaceBuffer path"),
     ECVF_RenderThreadSafe,
@@ -222,38 +222,38 @@ INSTANT_RDV_CVAR_BOOL(
     120);
 
 INSTANT_RDV_CVAR_BOOL(
-    CVarInstantRdvFspUpdate,
-    TEXT("r.InstantRdv.Fsp.Update"),
+    CVarInstantRdvVspUpdate,
+    TEXT("r.InstantRdv.Vsp.Update"),
     1,
-    TEXT("Frustum Space Probe(FSP) lifecycle / ray trace / SH update の有効化。\n")
+    TEXT("Visible Surface Probe(VSP) lifecycle / ray trace / SH update の有効化。\n")
     TEXT("0: Disabled\n")
     TEXT("1: Enabled after BBV Radiance Resolve"),
     ECVF_RenderThreadSafe,
-    TEXT("FSP"),
-    TEXT("FSP update"),
+    TEXT("VSP"),
+    TEXT("VSP update"),
     0);
 
 INSTANT_RDV_CVAR_BOOL(
-    CVarInstantRdvFspTraceUseProbeOffset,
-    TEXT("r.InstantRdv.Fsp.TraceUseProbeOffset"),
+    CVarInstantRdvVspTraceUseProbeOffset,
+    TEXT("r.InstantRdv.Vsp.TraceUseProbeOffset"),
     1,
-    TEXT("Apply active probe offset to FSP ray trace origins.\n")
+    TEXT("Apply active probe offset to VSP ray trace origins.\n")
     TEXT("0: Trace from owner cell center\n")
     TEXT("1: Trace from offset probe sample position"),
     ECVF_RenderThreadSafe,
-    TEXT("FSP"),
+    TEXT("VSP"),
     TEXT("Trace uses probe offset"),
     30);
 
 INSTANT_RDV_CVAR_BOOL(
-    CVarInstantRdvFspVisProbeUseOffset,
-    TEXT("r.InstantRdv.Fsp.VisProbeUseOffset"),
+    CVarInstantRdvVspVisProbeUseOffset,
+    TEXT("r.InstantRdv.Vsp.VisProbeUseOffset"),
     1,
     TEXT("Apply active probe offset to ActiveProbe debug billboard positions.\n")
     TEXT("0: Draw at owner cell center\n")
     TEXT("1: Draw at offset probe sample position"),
     ECVF_RenderThreadSafe,
-    TEXT("FSP"),
+    TEXT("VSP"),
     TEXT("Probe visualization uses offset"),
     40);
 
@@ -277,7 +277,7 @@ static bool IsRdvEligibleViewFamily_RenderThread(const FSceneViewFamily& ViewFam
 
 static bool IsRdvEligibleView_RenderThread(const FSceneView& View)
 {
-    // RDV/FSPはLumenに近いscene/view-family更新なので、永続的なViewStateを持つ通常Viewだけをowner候補にする。
+    // RDV/VSPはLumenに近いscene/view-family更新なので、永続的なViewStateを持つ通常Viewだけをowner候補にする。
     // SceneCapture/Reflection/Planar/RVT/Offline系は同じSceneViewExtensionへ到達しても、別用途の副次ViewFamilyとして扱う。
     return
         View.bIsViewInfo &&
@@ -341,13 +341,13 @@ bool FInstantRdvSceneViewExtension::TryAcceptViewFamilyForRdv_RenderThread(FRDGB
         FInstantRdvBbvConfig BbvConfig;
         BbvConfig.BbvGridResolution = FIntVector(FMath::Max(Settings.BbvGridResolution.X, 1), FMath::Max(Settings.BbvGridResolution.Y, 1), FMath::Max(Settings.BbvGridResolution.Z, 1));
         BbvConfig.BbvBrickSizeCm = FMath::Max(Settings.BbvBrickSizeCm, 1.0f);
-        FInstantRdvFspConfig FspConfig;
-        FspConfig.ProbeGridResolution = FIntVector(FMath::Max(Settings.ProbeGridResolution.X, 1), FMath::Max(Settings.ProbeGridResolution.Y, 1), FMath::Max(Settings.ProbeGridResolution.Z, 1));
-        FspConfig.ProbeCellSizeCm = FMath::Max(Settings.ProbeCellSizeCm, 1.0f);
-        FspConfig.ProbeCascadeCount = FMath::Max(Settings.ProbeCascadeCount, 1);
-        FspConfig.ProbeCapacity = FMath::Max(Settings.ProbePoolCapacity, 1);
-        FspConfig.VisibleSurfaceCapacity = FMath::Max(Settings.VisibleSurfaceCapacity, 1);
-        BbvSystem = MakeUnique<FInstantRdvBbv>(BbvConfig, FspConfig);
+        FInstantRdvVspConfig VspConfig;
+        VspConfig.ProbeGridResolution = FIntVector(FMath::Max(Settings.ProbeGridResolution.X, 1), FMath::Max(Settings.ProbeGridResolution.Y, 1), FMath::Max(Settings.ProbeGridResolution.Z, 1));
+        VspConfig.ProbeCellSizeCm = FMath::Max(Settings.ProbeCellSizeCm, 1.0f);
+        VspConfig.ProbeCascadeCount = FMath::Max(Settings.ProbeCascadeCount, 1);
+        VspConfig.ProbeCapacity = FMath::Max(Settings.ProbePoolCapacity, 1);
+        VspConfig.VisibleSurfaceCapacity = FMath::Max(Settings.VisibleSurfaceCapacity, 1);
+        BbvSystem = MakeUnique<FInstantRdvBbv>(BbvConfig, VspConfig);
         BbvSystem->Initialize();
         ActiveScene_RenderThread = ViewFamily.Scene;
         ActiveSettingsRevision_RenderThread = RenderSettings->Revision;
@@ -360,7 +360,7 @@ bool FInstantRdvSceneViewExtension::TryAcceptViewFamilyForRdv_RenderThread(FRDGB
     //
     // Reduced/Legacyの選択もこの時点でViewFamily単位に固定する。
     // BasePass前とBeforeDOFの間でRenderThreadSafe CVarが変更されても、同じ更新世代の
-    // BBV Geometry、Radiance、FSPが異なる入力方式を使わないことが重要。
+    // BBV Geometry、Radiance、VSPが異なる入力方式を使わないことが重要。
     bUseReducedSurfaceBufferForAcceptedFamily_RenderThread =
         CVarInstantRdvUseReducedSurfaceBuffer.GetValueOnRenderThread() != 0;
     BbvSystem->BeginFrame_RenderThread(GraphBuilder, *OwnerView);
@@ -565,8 +565,8 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
             const bool bEnableRadianceResolve =
                 bEnableRadianceUpdate &&
                 (CVarInstantRdvBbvRadianceResolve.GetValueOnRenderThread() != 0);
-            // BBV RadianceとFSPは同じowner ViewのDepth/SceneColorを入力にして、ViewFamily内で1回だけ更新する。
-            // FSP ActiveProbeListはここで生成されたCurr世代を、その後のdebug表示が読み取るだけにする。
+            // BBV RadianceとVSPは同じowner ViewのDepth/SceneColorを入力にして、ViewFamily内で1回だけ更新する。
+            // VSP ActiveProbeListはここで生成されたCurr世代を、その後のdebug表示が読み取るだけにする。
             BbvSystem->ExecuteRadianceUpdate(
                 GraphBuilder,
                 View,
@@ -576,24 +576,24 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 bEnableRadianceInjection,
                 bEnableRadianceResolve,
                 bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
-            BbvSystem->ExecuteFspUpdate(
+            BbvSystem->ExecuteVspUpdate(
                 GraphBuilder,
                 View,
                 SceneDepthTexture,
-                CVarInstantRdvFspUpdate.GetValueOnRenderThread() != 0,
-                CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
+                CVarInstantRdvVspUpdate.GetValueOnRenderThread() != 0,
+                CVarInstantRdvVspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
                 bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
             bAcceptedFamilyPostProcessUpdated_RenderThread = true;
         }
 
         const int32 BbvDebugMode = CVarInstantRdvBbvVisDebug.GetValueOnRenderThread();
-        const int32 FspProbeDebugMode = CVarInstantRdvFspVisProbe.GetValueOnRenderThread();
-        const int32 FspIvProbeDebugMode = CVarInstantRdvFspVisIvProbe.GetValueOnRenderThread();
-        const bool bProbeDepthTest = (CVarInstantRdvFspProbeDebugDepthTest.GetValueOnRenderThread() != 0);
+        const int32 VspProbeDebugMode = CVarInstantRdvVspVisProbe.GetValueOnRenderThread();
+        const int32 VspIvProbeDebugMode = CVarInstantRdvVspVisIvProbe.GetValueOnRenderThread();
+        const bool bProbeDepthTest = (CVarInstantRdvVspProbeDebugDepthTest.GetValueOnRenderThread() != 0);
         const float BbvDebugSceneColorBlend = CVarInstantRdvBbvDebugSceneColorBlend.GetValueOnRenderThread();
         const bool bBbvDebugDepthTest = (CVarInstantRdvBbvDebugDepthTest.GetValueOnRenderThread() != 0);
-        const bool bUseProbeTraceOffset = (CVarInstantRdvFspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
-        const bool bUseProbeVisualizationOffset = (CVarInstantRdvFspVisProbeUseOffset.GetValueOnRenderThread() != 0);
+        const bool bUseProbeTraceOffset = (CVarInstantRdvVspTraceUseProbeOffset.GetValueOnRenderThread() != 0);
+        const bool bUseProbeVisualizationOffset = (CVarInstantRdvVspVisProbeUseOffset.GetValueOnRenderThread() != 0);
         if (CanRunDebugVisualize_RenderThread(View))
         {
             BbvSystem->ExecuteDebugVisualize(
@@ -603,8 +603,8 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 SceneColor.Texture,
                 ViewInfo.PreExposure,
                 BbvDebugMode,
-                FspProbeDebugMode,
-                FspIvProbeDebugMode,
+                VspProbeDebugMode,
+                VspIvProbeDebugMode,
                 bProbeDepthTest,
                 BbvDebugSceneColorBlend,
                 bBbvDebugDepthTest,

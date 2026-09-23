@@ -1,4 +1,4 @@
-/*
+﻿/*
     InstantRdvConsoleVariables.cpp
 
     CVar登録マクロから収集したカテゴリとSlate UIメタデータを保持し、
@@ -41,10 +41,10 @@ INSTANT_RDV_CATEGORY(
     100);
 
 INSTANT_RDV_CATEGORY(
-    Fsp,
-    TEXT("FSP"),
-    TEXT("FSP"),
-    TEXT("FSP and ActiveProbe settings."),
+    Vsp,
+    TEXT("VSP"),
+    TEXT("VSP"),
+    TEXT("VSP and ActiveProbe settings."),
     200);
 
 INSTANT_RDV_CATEGORY(

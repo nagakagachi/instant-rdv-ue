@@ -1,14 +1,14 @@
-// ファイル名: fsp_probe_ray_request_cs.usf
+// ファイル名: vsp_probe_ray_request_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
 // ActiveProbeごとにOctMap 6x6方向のray requestを生成する。
 // Requestは probe index と oct cell index を1wordへpackし、後続のtrace/resolveをcounter-drivenにする。
 
-StructuredBuffer<uint> FspActiveProbeListCurr;
-RWStructuredBuffer<uint> RWFspProbeRayRequestBuffer;
+StructuredBuffer<uint> VspActiveProbeListCurr;
+RWStructuredBuffer<uint> RWVspProbeRayRequestBuffer;
 
-uint FspProbePoolElementCount;
+uint VspProbePoolElementCount;
 uint FrameCount;
 
 [numthreads(64, 1, 1)]
@@ -16,27 +16,27 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint ActiveIndex = DispatchThreadId.x;
     const uint ActiveProbeCount = min(
-        FspActiveProbeListCurr[
-            FspActiveProbeCurrentCounterSlot(FrameCount)],
-        FspProbePoolElementCount);
+        VspActiveProbeListCurr[
+            VspActiveProbeCurrentCounterSlot(FrameCount)],
+        VspProbePoolElementCount);
     if (ActiveIndex >= ActiveProbeCount)
     {
         return;
     }
 
-    const uint ProbeIndex = FspActiveProbeListCurr[FspActiveProbeListAddress(ActiveIndex)];
-    if (ProbeIndex >= FspProbePoolElementCount)
+    const uint ProbeIndex = VspActiveProbeListCurr[VspActiveProbeListAddress(ActiveIndex)];
+    if (ProbeIndex >= VspProbePoolElementCount)
     {
         return;
     }
 
     [unroll]
-    for (uint OctCellIndex = 0u; OctCellIndex < kFspRayCountPerProbe; ++OctCellIndex)
+    for (uint OctCellIndex = 0u; OctCellIndex < kVspRayCountPerProbe; ++OctCellIndex)
     {
         // Wave内の出力対象をprefix sumで詰め、共有appendカウンタへのAtomicを
         // laneごとの実行から1 Waveあたり1回へ集約する。将来、probe単位または
         // oct cell単位で方向を間引く場合も、ここではemit条件だけを変更すればよい。
-        const bool bEmitRequest = ProbeIndex < FspProbePoolElementCount;
+        const bool bEmitRequest = ProbeIndex < VspProbePoolElementCount;
         const uint WaveEmitCount = WaveActiveCountBits(bEmitRequest);
         if (WaveEmitCount == 0u)
         {
@@ -47,15 +47,15 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         uint WaveBaseIndex = 0u;
         if (WaveIsFirstLane())
         {
-            InterlockedAdd(RWFspProbeRayRequestBuffer[0], WaveEmitCount, WaveBaseIndex);
+            InterlockedAdd(RWVspProbeRayRequestBuffer[0], WaveEmitCount, WaveBaseIndex);
         }
         WaveBaseIndex = WaveReadLaneFirst(WaveBaseIndex);
 
         if (bEmitRequest)
         {
             const uint RequestIndex = WaveBaseIndex + WaveEmitPrefix;
-            RWFspProbeRayRequestBuffer[RequestIndex + 1u] =
-                FspPackRayRequestKey(ProbeIndex, OctCellIndex);
+            RWVspProbeRayRequestBuffer[RequestIndex + 1u] =
+                VspPackRayRequestKey(ProbeIndex, OctCellIndex);
         }
     }
 }

@@ -1,24 +1,24 @@
-// ファイル名: fsp_pre_update_cs.usf
+// ファイル名: vsp_pre_update_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 #include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
-// 参照InstantRDVのfsp_pre_update_cs相当。
+// 参照InstantRDVのvsp_pre_update_cs相当。
 // SurfaceMask Compactで得たvisible surface cellを処理し、未所有cellにはprobe poolからActiveProbeを割り当てる。
 // 新規・既存を問わず、可視cellのprobe位置は選択中の入力方式で毎フレーム再評価する。
 // そのためLegacy/ReducedSurfaceBufferを実行時に切り替えても、既存probeを破棄せず次の可視更新から再配置できる。
 
-StructuredBuffer<uint> FspVisibleSurfaceList;
-StructuredBuffer<uint> FspVisibleSurfaceSourceTexelList;
+StructuredBuffer<uint> VspVisibleSurfaceList;
+StructuredBuffer<uint> VspVisibleSurfaceSourceTexelList;
 Texture2D<float4> ReducedSurfaceBuffer;
-RWStructuredBuffer<uint> RWFspActiveProbeListCurr;
-RWStructuredBuffer<uint> RWFspProbeFreeStack;
-RWStructuredBuffer<uint> RWFspCellProbeIndex;
-RWStructuredBuffer<uint> RWFspProbePool;
-RWTexture2D<float4> RWFspProbeAtlas;
+RWStructuredBuffer<uint> RWVspActiveProbeListCurr;
+RWStructuredBuffer<uint> RWVspProbeFreeStack;
+RWStructuredBuffer<uint> RWVspCellProbeIndex;
+RWStructuredBuffer<uint> RWVspProbePool;
+RWTexture2D<float4> RWVspProbeAtlas;
 StructuredBuffer<uint> BbvBuffer;
 
-uint FspProbePoolElementCount;
+uint VspProbePoolElementCount;
 uint FrameCount;
 uint bEnableWarmStart;
 uint VisibleSurfaceListCapacity;
@@ -38,7 +38,7 @@ float BbvCellSizeCm;
 float BbvOccupancyInjectionWorldOffsetCm;
 float3 BbvToroidalOffsetCells;
 
-bool FspTryGetReducedSurfaceAnchor(
+bool VspTryGetReducedSurfaceAnchor(
     uint UpdateElementIndex,
     uint GlobalCellIndex,
     uint CascadeIndex,
@@ -57,7 +57,7 @@ bool FspTryGetReducedSurfaceAnchor(
     }
 
     const uint ReducedSurfaceTexelIndex =
-        FspVisibleSurfaceSourceTexelList[UpdateElementIndex + 1u];
+        VspVisibleSurfaceSourceTexelList[UpdateElementIndex + 1u];
     if (ReducedSurfaceTexelIndex >= ReducedWidth * ReducedHeight)
     {
         return false;
@@ -88,8 +88,8 @@ bool FspTryGetReducedSurfaceAnchor(
         float4(SurfacePositionVs, 1.0),
         InvViewMatrix).xyz;
 
-    uint SampleGlobalCellIndex = k_irdv_fsp_invalid_probe_index;
-    if (!FspTryGetGlobalCellIndexFromWorldPos(
+    uint SampleGlobalCellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspTryGetGlobalCellIndexFromWorldPos(
             SurfacePositionWs,
             CascadeIndex,
             SampleGlobalCellIndex) ||
@@ -102,69 +102,69 @@ bool FspTryGetReducedSurfaceAnchor(
     return true;
 }
 
-uint FspPopFreeProbeIndex()
+uint VspPopFreeProbeIndex()
 {
     [loop]
     for (;;)
     {
-        const uint ObservedCount = RWFspProbeFreeStack[0];
+        const uint ObservedCount = RWVspProbeFreeStack[0];
         if (ObservedCount == 0u)
         {
-            return k_irdv_fsp_invalid_probe_index;
+            return k_irdv_vsp_invalid_probe_index;
         }
 
         uint OldValue = 0u;
-        InterlockedCompareExchange(RWFspProbeFreeStack[0], ObservedCount, ObservedCount - 1u, OldValue);
+        InterlockedCompareExchange(RWVspProbeFreeStack[0], ObservedCount, ObservedCount - 1u, OldValue);
         if (OldValue == ObservedCount)
         {
             // CompareExchangeでcount更新に勝ったthreadだけが、このstack slotのprobeを取得できる。
-            return RWFspProbeFreeStack[ObservedCount];
+            return RWVspProbeFreeStack[ObservedCount];
         }
     }
 }
 
-void FspPushCurrActiveProbeIndex(uint ProbeIndex)
+void VspPushCurrActiveProbeIndex(uint ProbeIndex)
 {
     uint ActiveListIndex = 0u;
     InterlockedAdd(
-        RWFspActiveProbeListCurr[
-            FspActiveProbeCurrentCounterSlot(FrameCount)],
+        RWVspActiveProbeListCurr[
+            VspActiveProbeCurrentCounterSlot(FrameCount)],
         1u,
         ActiveListIndex);
-    if (ActiveListIndex < FspProbePoolElementCount)
+    if (ActiveListIndex < VspProbePoolElementCount)
     {
-        RWFspActiveProbeListCurr[FspActiveProbeListAddress(ActiveListIndex)] = ProbeIndex;
+        RWVspActiveProbeListCurr[VspActiveProbeListAddress(ActiveListIndex)] = ProbeIndex;
     }
 }
 
-void FspCopyProbeAtlas(uint DstProbeIndex, uint SrcProbeIndex)
+void VspCopyProbeAtlas(uint DstProbeIndex, uint SrcProbeIndex)
 {
     [unroll]
-    for (uint OctIndex = 0u; OctIndex < kFspRayCountPerProbe; ++OctIndex)
+    for (uint OctIndex = 0u; OctIndex < kVspRayCountPerProbe; ++OctIndex)
     {
-        RWFspProbeAtlas[FspProbeAtlasAddress(DstProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))] =
-            RWFspProbeAtlas[FspProbeAtlasAddress(SrcProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))];
+        RWVspProbeAtlas[VspProbeAtlasAddress(DstProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))] =
+            RWVspProbeAtlas[VspProbeAtlasAddress(SrcProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))];
     }
 }
 
-bool FspTryFindNearestWarmStartProbe(
+bool VspTryFindNearestWarmStartProbe(
     float3 SamplePositionWs,
     uint DstCascadeIndex,
     uint DstProbeIndex,
     out uint OutProbeIndex)
 {
-    OutProbeIndex = k_irdv_fsp_invalid_probe_index;
-    const uint CascadeCount = FspEffectiveCascadeCount();
+    OutProbeIndex = k_irdv_vsp_invalid_probe_index;
+    const uint CascadeCount = VspEffectiveCascadeCount();
     float BestDistanceSq = 3.402823466e+38;
     [loop]
     for (uint CascadeOffset = 0u; CascadeOffset < CascadeCount - DstCascadeIndex; ++CascadeOffset)
     {
         const uint SrcCascadeIndex = DstCascadeIndex + CascadeOffset;
-        const float CellSize = FspCascadeCellSizeCm(SrcCascadeIndex);
-        const float3 GridMin = FspCascadeGridMinPositionWs(SrcCascadeIndex);
+        const float CellSize = VspCascadeCellSizeCm(SrcCascadeIndex);
+        const float3 GridMin = VspCascadeGridMinPositionWs(SrcCascadeIndex);
         const float3 ContinuousCoord = (SamplePositionWs - GridMin) / max(CellSize, 0.001) - 0.5.xxx;
         const int3 CenterCoord = int3(floor(ContinuousCoord));
-        const int3 Resolution = int3(FspGridResolutionX, FspGridResolutionY, FspGridResolutionZ);
+        const int3 Resolution = int3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ);
 
         [loop]
         for (int Z = -1; Z <= 1; ++Z)
@@ -179,21 +179,21 @@ bool FspTryFindNearestWarmStartProbe(
                         continue;
                     }
 
-                    const uint LocalCellIndex = FspPhysicalCellCoordToLocalIndex(
-                        FspLinearToPhysicalCoord(LogicalCoord, SrcCascadeIndex));
-                    const uint SrcGlobalCellIndex = FspEncodeGlobalCellIndex(
+                    const uint LocalCellIndex = VspPhysicalCellCoordToLocalIndex(
+                        VspLinearToPhysicalCoord(LogicalCoord, SrcCascadeIndex));
+                    const uint SrcGlobalCellIndex = VspEncodeGlobalCellIndex(
                         SrcCascadeIndex,
                         LocalCellIndex);
-                    const uint SrcProbeIndex = RWFspCellProbeIndex[SrcGlobalCellIndex];
-                    if (SrcProbeIndex == k_irdv_fsp_invalid_probe_index ||
-                        SrcProbeIndex >= FspProbePoolElementCount ||
+                    const uint SrcProbeIndex = RWVspCellProbeIndex[SrcGlobalCellIndex];
+                    if (SrcProbeIndex == k_irdv_vsp_invalid_probe_index ||
+                        SrcProbeIndex >= VspProbePoolElementCount ||
                         SrcProbeIndex == DstProbeIndex)
                     {
                         continue;
                     }
 
-                    const FInstantRdvFspProbePoolData SrcData =
-                        FspLoadProbePoolData(RWFspProbePool, SrcProbeIndex);
+                    const FInstantRdvVspProbePoolData SrcData =
+                        VspLoadProbePoolData(RWVspProbePool, SrcProbeIndex);
                     if (SrcData.OwnerCellIndex != SrcGlobalCellIndex ||
                         SrcData.LastUpdateFrame == 0u)
                     {
@@ -201,9 +201,9 @@ bool FspTryFindNearestWarmStartProbe(
                     }
 
                     const float3 SourcePositionWs =
-                        FspCalcCellCenterWs(SrcCascadeIndex, LocalCellIndex) +
-                        FspDecodeProbeOffset(SrcData.ProbeOffsetV3) *
-                        FspProbeMaxOffsetDistanceCm(SrcCascadeIndex);
+                        VspCalcCellCenterWs(SrcCascadeIndex, LocalCellIndex) +
+                        VspDecodeProbeOffset(SrcData.ProbeOffsetV3) *
+                        VspProbeMaxOffsetDistanceCm(SrcCascadeIndex);
                     const float3 Delta = SourcePositionWs - SamplePositionWs;
                     const float DistanceSq = dot(Delta, Delta);
                     if (DistanceSq < BestDistanceSq)
@@ -215,7 +215,7 @@ bool FspTryFindNearestWarmStartProbe(
             }
         }
 
-        if (OutProbeIndex != k_irdv_fsp_invalid_probe_index)
+        if (OutProbeIndex != k_irdv_vsp_invalid_probe_index)
         {
             return true;
         }
@@ -223,34 +223,34 @@ bool FspTryFindNearestWarmStartProbe(
     return false;
 }
 
-bool FspTrySeedProbeFromNearestActiveProbe(
+bool VspTrySeedProbeFromNearestActiveProbe(
     float3 SamplePositionWs,
     uint DstCascadeIndex,
     uint DstProbeIndex)
 {
-    uint SrcProbeIndex = k_irdv_fsp_invalid_probe_index;
-    if (FspTryFindNearestWarmStartProbe(
+    uint SrcProbeIndex = k_irdv_vsp_invalid_probe_index;
+    if (VspTryFindNearestWarmStartProbe(
         SamplePositionWs,
         DstCascadeIndex,
         DstProbeIndex,
         SrcProbeIndex))
     {
-        FspCopyProbeAtlas(DstProbeIndex, SrcProbeIndex);
+        VspCopyProbeAtlas(DstProbeIndex, SrcProbeIndex);
         return true;
     }
     return false;
 }
 
-void FspClearProbeAtlas(uint ProbeIndex)
+void VspClearProbeAtlas(uint ProbeIndex)
 {
     [unroll]
-    for (uint OctIndex = 0u; OctIndex < kFspRayCountPerProbe; ++OctIndex)
+    for (uint OctIndex = 0u; OctIndex < kVspRayCountPerProbe; ++OctIndex)
     {
-        RWFspProbeAtlas[FspProbeAtlasAddress(ProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))] = 0.0.xxxx;
+        RWVspProbeAtlas[VspProbeAtlasAddress(ProbeIndex, uint2(OctIndex % 6u, OctIndex / 6u))] = 0.0.xxxx;
     }
 }
 
-uint FspNativeHashUint32Iq(uint2 Value)
+uint VspNativeHashUint32Iq(uint2 Value)
 {
     Value *= uint2(73333u, 7777u);
     Value ^= uint2(3333777777u, 3333777777u) >> (Value >> 28u);
@@ -258,12 +258,12 @@ uint FspNativeHashUint32Iq(uint2 Value)
     return Product ^ (Product >> 15u);
 }
 
-float FspNativeNoiseFloat2(float2 Value)
+float VspNativeNoiseFloat2(float2 Value)
 {
-    return float(FspNativeHashUint32Iq(asuint(Value))) * 2.3283064365386962890625e-10;
+    return float(VspNativeHashUint32Iq(asuint(Value))) * 2.3283064365386962890625e-10;
 }
 
-bool FspIsProbePositionOccupied(float3 PositionWs)
+bool VspIsProbePositionOccupied(float3 PositionWs)
 {
     return BbvReadFineVoxelOccupancyAtWorldPos(
         BbvBuffer,
@@ -274,7 +274,7 @@ bool FspIsProbePositionOccupied(float3 PositionWs)
         int3(BbvToroidalOffsetCells));
 }
 
-float3 FspRelocateProbeNative(
+float3 VspRelocateProbeNative(
     float3 CellCenterWs,
     float3 PreviousProbeOffset,
     float MaxProbeOffsetDistanceCm,
@@ -297,7 +297,7 @@ float3 FspRelocateProbeNative(
                 CellCenterWs +
                 DirectionToCamera *
                 (MaxProbeOffsetDistanceCm * FrontSamples[SampleIndex]);
-            if (!FspIsProbePositionOccupied(CandidateWs))
+            if (!VspIsProbePositionOccupied(CandidateWs))
             {
                 ProbeSamplePosWs = CandidateWs;
                 bAcceptedVisibleFirst = true;
@@ -313,7 +313,7 @@ float3 FspRelocateProbeNative(
                     PreviousProbeOffset,
                     -MaxProbeOffsetDistanceCm.xxx,
                     MaxProbeOffsetDistanceCm.xxx);
-            if (!FspIsProbePositionOccupied(SeedCandidateWs))
+            if (!VspIsProbePositionOccupied(SeedCandidateWs))
             {
                 ProbeSamplePosWs = SeedCandidateWs;
                 bAcceptedVisibleFirst = true;
@@ -324,7 +324,7 @@ float3 FspRelocateProbeNative(
     if (!bHasSurfaceAnchor || !bAcceptedVisibleFirst)
     {
         bool bFoundNonSolid = false;
-        if (FspIsProbePositionOccupied(ProbeSamplePosWs))
+        if (VspIsProbePositionOccupied(ProbeSamplePosWs))
         {
             const float SeedLengthSq = dot(PreviousProbeOffset, PreviousProbeOffset);
             const float3 PreferredDirection =
@@ -341,7 +341,7 @@ float3 FspRelocateProbeNative(
                         CellCenterWs +
                         PreferredDirection *
                         (MaxProbeOffsetDistanceCm * FrontBiasSamples[SampleIndex]);
-                    if (!FspIsProbePositionOccupied(ProbeSamplePosWs))
+                    if (!VspIsProbePositionOccupied(ProbeSamplePosWs))
                     {
                         bFoundNonSolid = true;
                         break;
@@ -364,14 +364,14 @@ float3 FspRelocateProbeNative(
                         Seed0 ^
                         ((GlobalCellIndex + 1u) * 668265263u + 374761393u);
                     const float3 RandomOffset = float3(
-                        FspNativeNoiseFloat2(float2(GlobalCellIndex, Seed0)),
-                        FspNativeNoiseFloat2(float2(Seed1, GlobalCellIndex)),
-                        FspNativeNoiseFloat2(float2(Seed2, Seed0))) - 0.5.xxx;
+                        VspNativeNoiseFloat2(float2(GlobalCellIndex, Seed0)),
+                        VspNativeNoiseFloat2(float2(Seed1, GlobalCellIndex)),
+                        VspNativeNoiseFloat2(float2(Seed2, Seed0))) - 0.5.xxx;
                     ProbeSamplePosWs =
                         CellCenterWs +
                         RandomOffset *
-                        (FspCascadeCellSizeCm(CascadeIndex) * 0.4);
-                    if (!FspIsProbePositionOccupied(ProbeSamplePosWs))
+                        (VspCascadeCellSizeCm(CascadeIndex) * 0.4);
+                    if (!VspIsProbePositionOccupied(ProbeSamplePosWs))
                     {
                         break;
                     }
@@ -391,27 +391,27 @@ float3 FspRelocateProbeNative(
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint ListIndex = DispatchThreadId.x;
-    const uint VisibleCellCount = min(FspVisibleSurfaceList[0], VisibleSurfaceListCapacity);
+    const uint VisibleCellCount = min(VspVisibleSurfaceList[0], VisibleSurfaceListCapacity);
     if (ListIndex >= VisibleCellCount)
     {
         return;
     }
 
-    const uint GlobalCellIndex = FspVisibleSurfaceList[ListIndex + 1u];
-    if (GlobalCellIndex >= FspTotalCellCount())
+    const uint GlobalCellIndex = VspVisibleSurfaceList[ListIndex + 1u];
+    if (GlobalCellIndex >= VspTotalCellCount())
     {
         return;
     }
 
     uint CascadeIndex = 0u;
     uint LocalCellIndex = 0u;
-    if (!FspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
+    if (!VspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
     {
         return;
     }
 
-    const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
-    const float MaxProbeOffsetDistanceCm = FspProbeMaxOffsetDistanceCm(CascadeIndex);
+    const float3 CellCenterWs = VspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+    const float MaxProbeOffsetDistanceCm = VspProbeMaxOffsetDistanceCm(CascadeIndex);
     float3 ProbeSamplePosWs = CellCenterWs;
     if (bUseReducedSurfaceBuffer != 0u)
     {
@@ -419,7 +419,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         // cell indexとsource texelの対応を崩すと別surfaceの法線で再配置されるため、必ずpaired listとして読む。
         float3 SurfacePositionWs = 0.0.xxx;
         float3 SurfaceNormalWs = 0.0.xxx;
-        if (!FspTryGetReducedSurfaceAnchor(
+        if (!VspTryGetReducedSurfaceAnchor(
             ListIndex,
             GlobalCellIndex,
             CascadeIndex,
@@ -445,7 +445,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 (SurfaceClearance * ClearanceScale[CandidateIndex]);
             const float3 CandidateOffset = CandidateWs - CellCenterWs;
             if (any(abs(CandidateOffset) > MaxProbeOffsetDistanceCm.xxx) ||
-                FspIsProbePositionOccupied(CandidateWs))
+                VspIsProbePositionOccupied(CandidateWs))
             {
                 continue;
             }
@@ -461,26 +461,26 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     // ReducedSurfaceのprovenanceと法線側候補を検証してからpoolを消費する。
-    uint ProbeIndex = RWFspCellProbeIndex[GlobalCellIndex];
+    uint ProbeIndex = RWVspCellProbeIndex[GlobalCellIndex];
     bool bNewProbe = false;
-    if (ProbeIndex == k_irdv_fsp_invalid_probe_index)
+    if (ProbeIndex == k_irdv_vsp_invalid_probe_index)
     {
-        ProbeIndex = FspPopFreeProbeIndex();
-        if (ProbeIndex == k_irdv_fsp_invalid_probe_index || ProbeIndex >= FspProbePoolElementCount)
+        ProbeIndex = VspPopFreeProbeIndex();
+        if (ProbeIndex == k_irdv_vsp_invalid_probe_index || ProbeIndex >= VspProbePoolElementCount)
         {
             return;
         }
 
-        RWFspCellProbeIndex[GlobalCellIndex] = ProbeIndex;
-        FspPushCurrActiveProbeIndex(ProbeIndex);
+        RWVspCellProbeIndex[GlobalCellIndex] = ProbeIndex;
+        VspPushCurrActiveProbeIndex(ProbeIndex);
         bNewProbe = true;
     }
-    else if (ProbeIndex >= FspProbePoolElementCount)
+    else if (ProbeIndex >= VspProbePoolElementCount)
     {
         return;
     }
 
-    FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(RWFspProbePool, ProbeIndex);
+    FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(RWVspProbePool, ProbeIndex);
     if (bNewProbe)
     {
         Data.ProbeOffsetV3 = 0u;
@@ -490,8 +490,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     if (bUseReducedSurfaceBuffer == 0u)
     {
         const float3 PrevProbeOffset =
-            FspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
-        ProbeSamplePosWs = FspRelocateProbeNative(
+            VspDecodeProbeOffset(Data.ProbeOffsetV3) * MaxProbeOffsetDistanceCm;
+        ProbeSamplePosWs = VspRelocateProbeNative(
             CellCenterWs,
             PrevProbeOffset,
             MaxProbeOffsetDistanceCm,
@@ -503,24 +503,24 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     {
         // 同じCascadeを優先し、無ければ上位Cascadeの近傍ActiveProbeからAtlasを引き継ぐ。
         if (bEnableWarmStart != 0u &&
-            !FspTrySeedProbeFromNearestActiveProbe(
+            !VspTrySeedProbeFromNearestActiveProbe(
             ProbeSamplePosWs,
             CascadeIndex,
             ProbeIndex))
         {
-            FspClearProbeAtlas(ProbeIndex);
+            VspClearProbeAtlas(ProbeIndex);
         }
     }
 
     // 保存するのは world 距離そのものではなく、最大移動距離で正規化した offset。
     // これにより cascade cell size が変わっても同じ意味で decode できる。
     const float3 NormalizedProbeOffset = clamp((ProbeSamplePosWs - CellCenterWs) / MaxProbeOffsetDistanceCm, -1.0.xxx, 1.0.xxx);
-    Data.ProbeOffsetV3 = FspEncodeProbeOffset(NormalizedProbeOffset);
+    Data.ProbeOffsetV3 = VspEncodeProbeOffset(NormalizedProbeOffset);
     Data.OwnerCellIndex = GlobalCellIndex;
     Data.LastSeenFrame = FrameCount;
     Data.Reserved0 = 0u;
     Data.Reserved1 = 0u;
     Data.Reserved2 = 0u;
     Data.Reserved3 = 0u;
-    FspStoreProbePoolData(RWFspProbePool, ProbeIndex, Data);
+    VspStoreProbePoolData(RWVspProbePool, ProbeIndex, Data);
 }

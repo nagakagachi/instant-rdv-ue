@@ -13,7 +13,7 @@
   - ReducedSurface経路は現在もcandidate texelごとにglobal atomic appendを試行する。
   - D3D12参照実装とのGPU時間、atomic競合、可視cell数を比較して移植可否を決める。
 
-- [ ] FSP ProbePoolのstride差を解消または文書化する。
+- [ ] VSP ProbePoolのstride差を解消または文書化する。
   - UEは`Reserved3`を含む8 word、D3D12は7個の`uint` fieldである。
   - `Reserved3`の将来用途を確定するか削除し、GPU buffer stride・リソース監査・参照実装との差分を一致させる。
 
@@ -27,21 +27,21 @@
 
 ## RDGとresource lifetime
 
-- [ ] FSP traceとIrradianceVolume更新の実行phaseをPostProcessからBBV更新phaseへ移す可否を検証する。
-  - SceneDepth、BBV、Material Radiance、ReducedSurface、FSP永続resource、SceneColor依存を明示する。
+- [ ] VSP traceとIrradianceVolume更新の実行phaseをPostProcessからBBV更新phaseへ移す可否を検証する。
+  - SceneDepth、BBV、Material Radiance、ReducedSurface、VSP永続resource、SceneColor依存を明示する。
   - 多View、初回抽出、debug、material samplingを含めてRDG read/write順序を検証する。
 
-- [ ] graph内だけで完結するFSP作業resourceをtransient RDG resource化できるか評価する。
+- [ ] graph内だけで完結するVSP作業resourceをtransient RDG resource化できるか評価する。
   - 対象候補はVisibleSurfaceリスト、source texelリスト、ProbeRayRequest、ProbeRayResult。
   - CellProbeIndex、ProbePool、FreeStack、Active Probeリスト、ProbeAtlas、IrradianceVolumeは永続resourceとして維持する。
 
 - [ ] 永続resourceのready状態を堅牢化する。
   - ReducedSurfaceBufferはpooled textureの有効性とextentを確認してから再登録している。
-  - BBV/FSPのbuffer・ProbeAtlas・IrradianceVolumeは、現在も`bRenderInitialized`を前提に直接`RegisterExternal*`している。
+  - BBV/VSPのbuffer・ProbeAtlas・IrradianceVolumeは、現在も`bRenderInitialized`を前提に直接`RegisterExternal*`している。
   - 各pooled texture/bufferの有効性を確認し、不足時は依存resource set全体を再構築または無効化する。
 
 - [ ] 解像度・容量変更時のresource set再確保を同期部分で確定する。
-  - Setting Actorのrevision検知により、FSP grid解像度、Cascade数、Probe容量、VisibleSurface容量を変更してBBV/FSPを再生成できる。
+  - Setting Actorのrevision検知により、VSP grid解像度、Cascade数、Probe容量、VisibleSurface容量を変更してBBV/VSPを再生成できる。
   - 現在の再生成は`TryAcceptViewFamilyForRdv_RenderThread`で行われる。同期部分で構成変更を確定し、RenderThreadでは確定済みresource setを安全に切り替える構造へ移す。
   - viewport依存のReducedSurface再確保、旧resource setの解放、複数Sceneの切替も同じ寿命契約で検証する。
 

@@ -1,0 +1,141 @@
+// ファイル名: vsp_begin_update_cs.usf
+#include "/Engine/Public/Platform.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
+
+// 参照InstantRDVのvsp_begin_update_cs相当。
+// 前フレームのActiveProbeを走査し、まだ有効なprobeだけをCurrリストへ引き継ぐ。
+// 無効化条件は「owner cell不整合」「toroidal移動で物理slotが別world領域になった」「一定期間未観測」。
+
+StructuredBuffer<uint> VspActiveProbeListPrev;
+RWStructuredBuffer<uint> RWVspActiveProbeListCurr;
+RWStructuredBuffer<uint> RWVspProbeFreeStack;
+RWStructuredBuffer<uint> RWVspCellProbeIndex;
+RWStructuredBuffer<uint> RWVspProbePool;
+RWStructuredBuffer<uint> RWVspProbeRayRequestBuffer;
+RWStructuredBuffer<uint> RWVspProbeRayResultBuffer;
+RWTexture3D<float4> RWVspIrradianceVolumeSHTexture;
+
+uint VspProbePoolElementCount;
+uint FrameCount;
+
+static const uint kVspStaleFrameThreshold = 120u;
+
+// FreeStackは [0]=count, [1..count]=probe index のLIFO。
+// GPU上で複数threadがprobeを返却するためatomic addで末尾へ積む。
+void VspPushFreeProbeIndex(uint ProbeIndex)
+{
+    uint OldCount = 0u;
+    InterlockedAdd(RWVspProbeFreeStack[0], 1u, OldCount);
+    const uint WriteIndex = OldCount + 1u;
+    if (WriteIndex <= VspProbePoolElementCount)
+    {
+        RWVspProbeFreeStack[WriteIndex] = ProbeIndex;
+    }
+}
+
+void VspPushCurrActiveProbeIndex(uint ProbeIndex)
+{
+    uint ActiveListIndex = 0u;
+    InterlockedAdd(
+        RWVspActiveProbeListCurr[
+            VspActiveProbeCurrentCounterSlot(FrameCount)],
+        1u,
+        ActiveListIndex);
+    if (ActiveListIndex < VspProbePoolElementCount)
+    {
+        RWVspActiveProbeListCurr[VspActiveProbeListAddress(ActiveListIndex)] = ProbeIndex;
+    }
+}
+
+void VspClearIrradianceVolumeCell(uint CellIndex)
+{
+    VspStoreIrradianceVolumePackedCoefficients(
+        RWVspIrradianceVolumeSHTexture,
+        CellIndex,
+        0.0.xxxx,
+        0.0.xxxx,
+        0.0.xxxx,
+        0.0.xxxx);
+}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    const uint Index = DispatchThreadId.x;
+    if (Index == 0u)
+    {
+        // 使用中のCurrent counterはPreUpdateがappendするため触らない。
+        // 反対側の未使用slotだけを先行clearし、同一counterへのreset/append Raceを避ける。
+        RWVspActiveProbeListCurr[
+            VspActiveProbeCurrentCounterSlot(FrameCount) ^ 1u] = 0u;
+    }
+
+    const uint PrevActiveProbeCount = min(
+        VspActiveProbeListPrev[
+            VspActiveProbePreviousCounterSlot(FrameCount)],
+        VspProbePoolElementCount);
+    if (Index >= PrevActiveProbeCount)
+    {
+        return;
+    }
+
+    const uint ProbeIndex = VspActiveProbeListPrev[VspActiveProbeListAddress(Index)];
+    if (ProbeIndex >= VspProbePoolElementCount)
+    {
+        return;
+    }
+
+    FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(RWVspProbePool, ProbeIndex);
+    const uint OwnerCellIndex = Data.OwnerCellIndex;
+    bool bInvalidate = OwnerCellIndex == k_irdv_vsp_invalid_probe_index || OwnerCellIndex >= VspTotalCellCount();
+    if (!bInvalidate && RWVspCellProbeIndex[OwnerCellIndex] != ProbeIndex)
+    {
+        bInvalidate = true;
+    }
+    if (!bInvalidate)
+    {
+        uint CascadeIndex = 0u;
+        uint LocalCellIndex = 0u;
+        if (!VspDecodeGlobalCellIndex(OwnerCellIndex, CascadeIndex, LocalCellIndex))
+        {
+            bInvalidate = true;
+        }
+        else
+        {
+            // Toroidal gridが動いた場合、同じ物理local indexが表すworld領域が変わる。
+            // 参照実装と同様に「前フレームslotが現在grid範囲外へ押し出されたか」でprobeを破棄する。
+            const int3 Resolution = int3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ);
+            const int3 PhysicalCoord = int3(VspLocalCellIndexToCoord(LocalCellIndex));
+            const int3 PrevLinearCoord = ((PhysicalCoord - VspCascadePrevToroidalOffset(CascadeIndex)) % Resolution + Resolution) % Resolution;
+            const int3 CurrLinearCoordInPrevSlot = PrevLinearCoord - VspCascadeMoveCellDelta(CascadeIndex);
+            bInvalidate = any(CurrLinearCoordInPrevSlot < 0) || any(CurrLinearCoordInPrevSlot >= Resolution);
+        }
+    }
+
+    const uint FrameAge = FrameCount - Data.LastSeenFrame;
+    const bool bStale = (!bInvalidate) && (FrameAge > kVspStaleFrameThreshold);
+    if (!bInvalidate && !bStale)
+    {
+        // 生存probeはCurrリストへコピーされ、後続のray request/SH更新の入力になる。
+        VspPushCurrActiveProbeIndex(ProbeIndex);
+        return;
+    }
+
+    // 破棄時はcell ownershipとIrradianceVolumeを同時に消す。
+    // 古いSHを残すとActiveProbeが無いcellに過去のGIが残るため、owner cellだけ明示クリアする。
+    if (OwnerCellIndex != k_irdv_vsp_invalid_probe_index && OwnerCellIndex < VspTotalCellCount() && RWVspCellProbeIndex[OwnerCellIndex] == ProbeIndex)
+    {
+        RWVspCellProbeIndex[OwnerCellIndex] = k_irdv_vsp_invalid_probe_index;
+        VspClearIrradianceVolumeCell(OwnerCellIndex);
+    }
+
+    Data.OwnerCellIndex = k_irdv_vsp_invalid_probe_index;
+    Data.ProbeOffsetV3 = 0u;
+    Data.LastUpdateFrame = 0u;
+    Data.Reserved0 = 0u;
+    Data.Reserved1 = 0u;
+    Data.Reserved2 = 0u;
+    Data.Reserved3 = 0u;
+    VspStoreProbePoolData(RWVspProbePool, ProbeIndex, Data);
+    VspPushFreeProbeIndex(ProbeIndex);
+}

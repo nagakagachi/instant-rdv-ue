@@ -1,15 +1,15 @@
-// ファイル名: fsp_init_pool_cs.usf
-// FSP probe pool / free stack 初期化シェーダ。
+// ファイル名: vsp_init_pool_cs.usf
+// VSP probe pool / free stack 初期化シェーダ。
 // Probe容量とDenseセル数を分離し、有限poolからfree stack経由で割り当てる。
 // CellProbeIndexはcell -> probe ownership、ProbePoolはprobe -> owner/offset/frame情報を保持する。
 #include "/Engine/Public/Platform.ush"
 
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
-RWStructuredBuffer<uint> RWFspProbeFreeStack; // [0] = count, [1..N] = free indices
-RWStructuredBuffer<uint> RWFspCellProbeIndex;
-RWStructuredBuffer<uint> RWFspProbePool;
-RWTexture3D<float4> RWFspIrradianceVolumeSHTexture;
+RWStructuredBuffer<uint> RWVspProbeFreeStack; // [0] = count, [1..N] = free indices
+RWStructuredBuffer<uint> RWVspCellProbeIndex;
+RWStructuredBuffer<uint> RWVspProbePool;
+RWTexture3D<float4> RWVspIrradianceVolumeSHTexture;
 uint ProbePoolElementCount;
 uint TotalCellCount;
 
@@ -19,9 +19,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     uint idx = DispatchThreadId.x;
     if (idx < TotalCellCount)
     {
-        RWFspCellProbeIndex[idx] = k_irdv_fsp_invalid_probe_index;
-        FspStoreIrradianceVolumePackedCoefficients(
-            RWFspIrradianceVolumeSHTexture,
+        RWVspCellProbeIndex[idx] = k_irdv_vsp_invalid_probe_index;
+        VspStoreIrradianceVolumePackedCoefficients(
+            RWVspIrradianceVolumeSHTexture,
             idx,
             0.0.xxxx,
             0.0.xxxx,
@@ -34,9 +34,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     // LIFO になるように逆順で格納する。初回popが0番probeになり、debug時の対応を追いやすい。
-    RWFspProbeFreeStack[1 + idx] = ProbePoolElementCount - 1u - idx;
-    FInstantRdvFspProbePoolData Data;
-    Data.OwnerCellIndex = k_irdv_fsp_invalid_probe_index;
+    RWVspProbeFreeStack[1 + idx] = ProbePoolElementCount - 1u - idx;
+    FInstantRdvVspProbePoolData Data;
+    Data.OwnerCellIndex = k_irdv_vsp_invalid_probe_index;
     Data.ProbeOffsetV3 = 0u;
     Data.LastSeenFrame = 0u;
     Data.Reserved0 = 0u;
@@ -44,11 +44,11 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     Data.Reserved1 = 0u;
     Data.Reserved2 = 0u;
     Data.Reserved3 = 0u;
-    FspStoreProbePoolData(RWFspProbePool, idx, Data);
+    VspStoreProbePoolData(RWVspProbePool, idx, Data);
 
     // thread 0がcountを設定する。次passからの参照はRDGの依存で保証する。
     if (idx == 0u)
     {
-        RWFspProbeFreeStack[0] = ProbePoolElementCount;
+        RWVspProbeFreeStack[0] = ProbePoolElementCount;
     }
 }

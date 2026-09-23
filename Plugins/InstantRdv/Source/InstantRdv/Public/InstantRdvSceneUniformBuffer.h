@@ -13,23 +13,23 @@
     Material CustomNode内で
 
         Scene.InstantRdvParam.TestColor;
-        Scene.InstantRdvParam.FspIrradianceVolumeSH;
+        Scene.InstantRdvParam.VspIrradianceVolumeSH;
 
     のようにSceneUniformBufferメンバとしてアクセス可能になる。
 */
 BEGIN_SHADER_PARAMETER_STRUCT(FInstantRdvSceneUniformBufferParams, )
-    SHADER_PARAMETER(uint32, FspEnabled)
-    SHADER_PARAMETER(uint32, FspGridResolutionX)
-    SHADER_PARAMETER(uint32, FspGridResolutionY)
-    SHADER_PARAMETER(uint32, FspGridResolutionZ)
-    SHADER_PARAMETER(uint32, FspCascadeCount)
-    SHADER_PARAMETER(uint32, FspIrradianceVolumeCellCount)
-    SHADER_PARAMETER(float, FspCellSizeCm)
-    SHADER_PARAMETER(uint32, FspCascadeDitherInterpolation)
-    SHADER_PARAMETER(uint32, FspTrilinearInterpolation)
-    SHADER_PARAMETER(FVector3f, FspGridCenterPositionWs)
-    SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, FspIrradianceVolumeSH)
-    SHADER_PARAMETER_SAMPLER(SamplerState, FspIrradianceVolumeSampler)
+    SHADER_PARAMETER(uint32, VspEnabled)
+    SHADER_PARAMETER(uint32, VspGridResolutionX)
+    SHADER_PARAMETER(uint32, VspGridResolutionY)
+    SHADER_PARAMETER(uint32, VspGridResolutionZ)
+    SHADER_PARAMETER(uint32, VspCascadeCount)
+    SHADER_PARAMETER(uint32, VspIrradianceVolumeCellCount)
+    SHADER_PARAMETER(float, VspCellSizeCm)
+    SHADER_PARAMETER(uint32, VspCascadeDitherInterpolation)
+    SHADER_PARAMETER(uint32, VspTrilinearInterpolation)
+    SHADER_PARAMETER(FVector3f, VspGridCenterPositionWs)
+    SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, VspIrradianceVolumeSH)
+    SHADER_PARAMETER_SAMPLER(SamplerState, VspIrradianceVolumeSampler)
     SHADER_PARAMETER(uint32, BbvEnabled)
     SHADER_PARAMETER(uint32, BbvGridResolutionX)
     SHADER_PARAMETER(uint32, BbvGridResolutionY)

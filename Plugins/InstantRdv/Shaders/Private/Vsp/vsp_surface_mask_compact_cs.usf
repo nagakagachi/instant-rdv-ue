@@ -3,23 +3,23 @@
 
 #include "/Engine/Public/Platform.ush"
 
-StructuredBuffer<uint> FspSurfaceCellMask;
-RWStructuredBuffer<uint> RWFspVisibleSurfaceList;
+StructuredBuffer<uint> VspSurfaceCellMask;
+RWStructuredBuffer<uint> RWVspVisibleSurfaceList;
 
-uint FspTotalCellCount;
-uint FspVisibleSurfaceListCapacity;
+uint VspTotalCellCount;
+uint VspVisibleSurfaceListCapacity;
 
 [numthreads(128, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    const uint MaskWordCount = (FspTotalCellCount + 31u) / 32u;
+    const uint MaskWordCount = (VspTotalCellCount + 31u) / 32u;
     const uint MaskWordIndex = DispatchThreadId.x;
     if (MaskWordIndex >= MaskWordCount)
     {
         return;
     }
 
-    const uint MaskBits = FspSurfaceCellMask[MaskWordIndex];
+    const uint MaskBits = VspSurfaceCellMask[MaskWordIndex];
     if (MaskBits == 0u)
     {
         return;
@@ -27,12 +27,12 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     const uint BitCount = countbits(MaskBits);
     uint AppendBaseIndex = 0u;
-    InterlockedAdd(RWFspVisibleSurfaceList[0], BitCount, AppendBaseIndex);
+    InterlockedAdd(RWVspVisibleSurfaceList[0], BitCount, AppendBaseIndex);
 
     uint WritableCount = 0u;
-    if (AppendBaseIndex < FspVisibleSurfaceListCapacity)
+    if (AppendBaseIndex < VspVisibleSurfaceListCapacity)
     {
-        WritableCount = min(BitCount, FspVisibleSurfaceListCapacity - AppendBaseIndex);
+        WritableCount = min(BitCount, VspVisibleSurfaceListCapacity - AppendBaseIndex);
     }
     // 予約countは単調増加。消費側は容量で制限し、予約領域を再利用しない。
 
@@ -43,9 +43,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         const uint BitIndex = firstbitlow(RemainingBits);
         RemainingBits &= RemainingBits - 1u;
         const uint GlobalCellIndex = MaskWordIndex * 32u + BitIndex;
-        if (GlobalCellIndex < FspTotalCellCount && LocalRank < WritableCount)
+        if (GlobalCellIndex < VspTotalCellCount && LocalRank < WritableCount)
         {
-            RWFspVisibleSurfaceList[AppendBaseIndex + LocalRank + 1u] = GlobalCellIndex;
+            RWVspVisibleSurfaceList[AppendBaseIndex + LocalRank + 1u] = GlobalCellIndex;
         }
         ++LocalRank;
     }

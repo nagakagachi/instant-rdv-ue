@@ -1,11 +1,11 @@
-// Depth surfaceが所有するFSP cellを1bit/cellのmaskへ注入する。
+// Depth surfaceが所有するVSP cellを1bit/cellのmaskへ注入する。
 // Native InstantRDVと同じく、Wave内で同じuint wordを指すbitをまとめてAtomicOrを削減する。
 
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
 Texture2D<float> SceneDepthTexture;
-RWStructuredBuffer<uint> RWFspSurfaceCellMask;
+RWStructuredBuffer<uint> RWVspSurfaceCellMask;
 
 uint DepthSizeX;
 uint DepthSizeY;
@@ -41,7 +41,7 @@ uint FirstLaneFromBallot(uint4 BallotMask)
     return firstbitlow(BallotMask.w) + 96u;
 }
 
-void FspInjectSurfaceCellMaskWave(bool bHasCell, uint GlobalCellIndex)
+void VspInjectSurfaceCellMaskWave(bool bHasCell, uint GlobalCellIndex)
 {
     const uint WordIndex = bHasCell ? (GlobalCellIndex >> 5u) : 0u;
     const uint BitMask = bHasCell ? (1u << (GlobalCellIndex & 31u)) : 0u;
@@ -55,7 +55,7 @@ void FspInjectSurfaceCellMaskWave(bool bHasCell, uint GlobalCellIndex)
         const uint MergedMask = WaveActiveBitOr(bSameWord ? BitMask : 0u);
         if (WaveGetLaneIndex() == LeaderLane)
         {
-            InterlockedOr(RWFspSurfaceCellMask[LeaderWordIndex], MergedMask);
+            InterlockedOr(RWVspSurfaceCellMask[LeaderWordIndex], MergedMask);
         }
         PendingLanes &= ~SameWordLanes;
     }
@@ -88,15 +88,15 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         }
     }
 
-    uint2 OwnerCellIndices = k_irdv_fsp_invalid_probe_index.xx;
+    uint2 OwnerCellIndices = k_irdv_vsp_invalid_probe_index.xx;
     const uint OwnerCellCount = bHasSurface
-        ? FspGetSurfaceOwnerCells(WorldPos, OwnerCellIndices)
+        ? VspGetSurfaceOwnerCells(WorldPos, OwnerCellIndices)
         : 0u;
     [unroll]
     for (uint OwnerIndex = 0u; OwnerIndex < 2u; ++OwnerIndex)
     {
         const bool bHasOwnerCell = OwnerIndex < OwnerCellCount;
-        FspInjectSurfaceCellMaskWave(
+        VspInjectSurfaceCellMaskWave(
             bHasOwnerCell,
             bHasOwnerCell ? OwnerCellIndices[OwnerIndex] : 0u);
     }

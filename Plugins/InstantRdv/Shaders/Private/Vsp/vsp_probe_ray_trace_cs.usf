@@ -1,31 +1,31 @@
-// ファイル名: fsp_probe_ray_trace_cs.usf
+// ファイル名: vsp_probe_ray_trace_cs.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
-// FSPプローブレイのトレースパス。
+// VSPプローブレイのトレースパス。
 // RayRequestBufferに積まれたActiveProbeのOctMap方向だけをBBVへtraceする。
-// 全cell x 全方向ではなく、ActiveProbe由来のrequest数でdispatchする点がFSPのレイ数削減の要。
+// 全cell x 全方向ではなく、ActiveProbe由来のrequest数でdispatchする点がVSPのレイ数削減の要。
 
-StructuredBuffer<uint> FspProbeRayRequestBuffer;
-RWStructuredBuffer<uint> RWFspProbeRayResultBuffer;
-StructuredBuffer<uint> FspProbePool;
+StructuredBuffer<uint> VspProbeRayRequestBuffer;
+RWStructuredBuffer<uint> RWVspProbeRayResultBuffer;
+StructuredBuffer<uint> VspProbePool;
 StructuredBuffer<uint> BbvBuffer;
 uint BrickDataBaseOffset;
 
-uint FspProbePoolElementCount;
+uint VspProbePoolElementCount;
 uint BbvGridResolutionX;
 uint BbvGridResolutionY;
 uint BbvGridResolutionZ;
 float3 BbvGridMinPositionWs;
 float BbvCellSizeCm;
 float3 BbvToroidalOffsetCells;
-float FspTraceDistanceCm;
+float VspTraceDistanceCm;
 uint FrameCount;
 uint bUseProbeTraceOffset;
 
 #include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
-float FspHash01(uint Seed)
+float VspHash01(uint Seed)
 {
     // 参照実装はOctMap cell内ジッタで、低解像度OctMapの中心rayが軸/折り返し線へ固定されるのを避けている。
     // UE側も1 cell = 1 rayの構造は維持し、cell内だけを小さく揺らしてDDAの境界固定missを防ぐ。
@@ -37,44 +37,44 @@ float FspHash01(uint Seed)
     return float(Seed & 0x00ffffffu) / 16777216.0;
 }
 
-[numthreads(k_irdv_fsp_ray_linear_thread_group_size, 1, 1)]
+[numthreads(k_irdv_vsp_ray_linear_thread_group_size, 1, 1)]
 void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     const uint RequestIndex = DispatchThreadId.x;
-    const uint RequestCount = min(FspProbeRayRequestBuffer[0], FspProbePoolElementCount * kFspRayCountPerProbe);
+    const uint RequestCount = min(VspProbeRayRequestBuffer[0], VspProbePoolElementCount * kVspRayCountPerProbe);
     if (RequestIndex >= RequestCount)
     {
         return;
     }
 
-    const uint PackedKey = FspProbeRayRequestBuffer[RequestIndex + 1u];
-    const uint ProbeIndex = FspUnpackRayRequestProbeIndex(PackedKey);
-    const uint OctCellIndex = FspUnpackRayRequestOctCellIndex(PackedKey);
+    const uint PackedKey = VspProbeRayRequestBuffer[RequestIndex + 1u];
+    const uint ProbeIndex = VspUnpackRayRequestProbeIndex(PackedKey);
+    const uint OctCellIndex = VspUnpackRayRequestOctCellIndex(PackedKey);
 
     uint HitInfo = 0u;
     bool bEmitResult = false;
-    if (ProbeIndex < FspProbePoolElementCount && OctCellIndex < kFspRayCountPerProbe)
+    if (ProbeIndex < VspProbePoolElementCount && OctCellIndex < kVspRayCountPerProbe)
     {
-        const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+        const FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(VspProbePool, ProbeIndex);
         uint CascadeIndex = 0u;
         uint LocalCellIndex = 0u;
-        if (Data.OwnerCellIndex != k_irdv_fsp_invalid_probe_index && FspDecodeGlobalCellIndex(Data.OwnerCellIndex, CascadeIndex, LocalCellIndex))
+        if (Data.OwnerCellIndex != k_irdv_vsp_invalid_probe_index && VspDecodeGlobalCellIndex(Data.OwnerCellIndex, CascadeIndex, LocalCellIndex))
         {
             // PreUpdateで決めた relocation offset が、そのまま実ray trace originになる。
             // offset 計算と trace 側の decode 規約がずれると、debug では非埋まりでも
             // 実際のtraceだけ埋まる/逆になるため、両者は必ず同一距離規約を共有する。
-            const float3 ProbeOffset = FspDecodeProbeOffset(Data.ProbeOffsetV3) * FspProbeMaxOffsetDistanceCm(CascadeIndex);
-            const float3 ProbeBasePositionWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+            const float3 ProbeOffset = VspDecodeProbeOffset(Data.ProbeOffsetV3) * VspProbeMaxOffsetDistanceCm(CascadeIndex);
+            const float3 ProbeBasePositionWs = VspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
             const float3 ProbePositionWs = ProbeBasePositionWs + ((bUseProbeTraceOffset != 0u) ? ProbeOffset : 0.0.xxx);
-            const uint2 OctCellId = uint2(OctCellIndex % k_irdv_fsp_probe_octmap_width, OctCellIndex / k_irdv_fsp_probe_octmap_width);
+            const uint2 OctCellId = uint2(OctCellIndex % k_irdv_vsp_probe_octmap_width, OctCellIndex / k_irdv_vsp_probe_octmap_width);
             const float2 Jitter01 = float2(
-                FspHash01(ProbeIndex * 1664525u + OctCellIndex * 1013904223u + FrameCount * 131u),
-                FspHash01(ProbeIndex * 22695477u + OctCellIndex * 1103515245u + FrameCount * 73u));
+                VspHash01(ProbeIndex * 1664525u + OctCellIndex * 1013904223u + FrameCount * 131u),
+                VspHash01(ProbeIndex * 22695477u + OctCellIndex * 1103515245u + FrameCount * 73u));
             const float2 OctUv = clamp(
-                (float2(OctCellId) + 0.5.xx + (Jitter01 - 0.5.xx)) / float(k_irdv_fsp_probe_octmap_width),
+                (float2(OctCellId) + 0.5.xx + (Jitter01 - 0.5.xx)) / float(k_irdv_vsp_probe_octmap_width),
                 1.0e-4.xx,
                 (1.0 - 1.0e-4).xx);
-            const float3 RayDirWs = FspOctDecode(OctUv);
+            const float3 RayDirWs = VspOctDecode(OctUv);
 
             // BBV側のbitmask/brick dataを参照して、最初に当たったbrickだけをresolveへ渡す。
             // 参照実装の詳細なhit payloadに比べ、現段階ではradiance取得に必要なbrick indexを保持する。
@@ -88,7 +88,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                 BrickDataBaseOffset,
                 ProbePositionWs,
                 RayDirWs,
-                FspTraceDistanceCm,
+                VspTraceDistanceCm,
                 false,
                 uint3(BbvGridResolutionX, BbvGridResolutionY, BbvGridResolutionZ),
                 BbvCellSizeCm,
@@ -116,7 +116,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     uint WaveBaseIndex = 0u;
     if (WaveIsFirstLane())
     {
-        InterlockedAdd(RWFspProbeRayResultBuffer[0], WaveEmitCount, WaveBaseIndex);
+        InterlockedAdd(RWVspProbeRayResultBuffer[0], WaveEmitCount, WaveBaseIndex);
     }
     WaveBaseIndex = WaveReadLaneFirst(WaveBaseIndex);
 
@@ -124,8 +124,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     {
         // ResultBufferも [0]=count、[1..]=stride付きpayload。
         const uint ResultIndex = WaveBaseIndex + WaveEmitPrefix;
-        const uint ResultWordOffset = 1u + ResultIndex * k_irdv_fsp_ray_result_data_stride;
-        RWFspProbeRayResultBuffer[ResultWordOffset + 0u] = PackedKey;
-        RWFspProbeRayResultBuffer[ResultWordOffset + 1u] = HitInfo;
+        const uint ResultWordOffset = 1u + ResultIndex * k_irdv_vsp_ray_result_data_stride;
+        RWVspProbeRayResultBuffer[ResultWordOffset + 0u] = PackedKey;
+        RWVspProbeRayResultBuffer[ResultWordOffset + 1u] = HitInfo;
     }
 }

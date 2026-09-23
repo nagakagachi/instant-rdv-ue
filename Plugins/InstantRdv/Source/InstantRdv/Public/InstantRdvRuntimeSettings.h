@@ -24,19 +24,19 @@ struct INSTANTRDV_API FInstantRdvLevelSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|BBV", meta = (ClampMin = "1.0", Units = "cm"))
     float BbvBrickSizeCm = InstantRdvDefaults::BbvBrickSizeCm;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|VSP", meta = (ClampMin = "1"))
     FIntVector ProbeGridResolution = InstantRdvDefaults::ProbeGridResolution;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1.0", Units = "cm"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|VSP", meta = (ClampMin = "1.0", Units = "cm"))
     float ProbeCellSizeCm = InstantRdvDefaults::ProbeCellSizeCm;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1", ClampMax = "16"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|VSP", meta = (ClampMin = "1", ClampMax = "16"))
     int32 ProbeCascadeCount = static_cast<int32>(InstantRdvDefaults::ProbeCascadeCount);
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|VSP", meta = (ClampMin = "1"))
     int32 ProbePoolCapacity = static_cast<int32>(InstantRdvDefaults::ProbePoolCapacity);
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|FSP", meta = (ClampMin = "1"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "InstantRDV|VSP", meta = (ClampMin = "1"))
     int32 VisibleSurfaceCapacity = static_cast<int32>(InstantRdvDefaults::VisibleSurfaceCapacity);
 
 

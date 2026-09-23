@@ -24,18 +24,18 @@ void InitializeInstantRdvSceneUniformBufferDefaults(FInstantRdvSceneUniformBuffe
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyFloat4Texture), FLinearColor::Transparent);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyUintBuffer), 0u);
 
-    ShaderParams.FspEnabled = 0u;
-    ShaderParams.FspGridResolutionX = 0u;
-    ShaderParams.FspGridResolutionY = 0u;
-    ShaderParams.FspGridResolutionZ = 0u;
-    ShaderParams.FspCascadeCount = 0u;
-    ShaderParams.FspIrradianceVolumeCellCount = 0u;
-    ShaderParams.FspCellSizeCm = 0.0f;
-    ShaderParams.FspCascadeDitherInterpolation = 1u;
-    ShaderParams.FspTrilinearInterpolation = 1u;
-    ShaderParams.FspGridCenterPositionWs = FVector3f::ZeroVector;
-    ShaderParams.FspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Texture);
-    ShaderParams.FspIrradianceVolumeSampler =
+    ShaderParams.VspEnabled = 0u;
+    ShaderParams.VspGridResolutionX = 0u;
+    ShaderParams.VspGridResolutionY = 0u;
+    ShaderParams.VspGridResolutionZ = 0u;
+    ShaderParams.VspCascadeCount = 0u;
+    ShaderParams.VspIrradianceVolumeCellCount = 0u;
+    ShaderParams.VspCellSizeCm = 0.0f;
+    ShaderParams.VspCascadeDitherInterpolation = 1u;
+    ShaderParams.VspTrilinearInterpolation = 1u;
+    ShaderParams.VspGridCenterPositionWs = FVector3f::ZeroVector;
+    ShaderParams.VspIrradianceVolumeSH = GraphBuilder.CreateSRV(DummyFloat4Texture);
+    ShaderParams.VspIrradianceVolumeSampler =
         TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
     ShaderParams.BbvEnabled = 0u;
     ShaderParams.BbvGridResolutionX = 0u;

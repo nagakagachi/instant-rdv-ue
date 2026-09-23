@@ -1,4 +1,4 @@
-/*
+﻿/*
     InstantRdvConsoleVariables.h
 
     Instant-RDVのCVar登録とSlateデバッグUIメタデータを結び付ける公開定義。
@@ -19,12 +19,12 @@
 
     CVar登録例:
       INSTANT_RDV_CVAR_FLOAT(
-          CVarInstantRdvFspRelocationOffsetScale,
-          TEXT("r.InstantRdv.Fsp.RelocationOffsetScale"),
+          CVarInstantRdvVspRelocationOffsetScale,
+          TEXT("r.InstantRdv.Vsp.RelocationOffsetScale"),
           0.9f,
           TEXT("ActiveProbe relocation scale."),
           ECVF_RenderThreadSafe,
-          TEXT("FSP"),
+          TEXT("VSP"),
           TEXT("Relocation offset scale"),
           0.0f,
           1.5f,
@@ -32,10 +32,10 @@
 
     カテゴリ登録例:
       INSTANT_RDV_CATEGORY(
-          Fsp,
-          TEXT("FSP"),
-          TEXT("FSP"),
-          TEXT("FSP and ActiveProbe settings."),
+          Vsp,
+          TEXT("VSP"),
+          TEXT("VSP"),
+          TEXT("VSP and ActiveProbe settings."),
           200);
 
     CVar追加手順:

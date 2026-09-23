@@ -1,5 +1,8 @@
 /*
     instant_rdv_common.ush
+    RDV: Raster Derived Voxel.
+    BBV: Bitmask Brick Voxel.
+    VSP: Visible Surface Probe.
 */
 
 #if !defined(INSTANT_RDV_COMMON_USH)
@@ -20,46 +23,46 @@
 #define k_irdv_bbv_radiance_accum_component_count 4u
 
 
-// FSP無効probe index.
-#define k_irdv_fsp_invalid_probe_index 0xffffffffu
+// VSP無効probe index.
+#define k_irdv_vsp_invalid_probe_index 0xffffffffu
 
-// FSP probeあたりのOctahedralMap Atlas解像度.
-#define k_irdv_fsp_probe_octmap_width 6u
-// Material評価を含むFSP Cascade走査の上限。現行実装は5 Cascadeまでを対象とする。
-#define k_irdv_fsp_max_cascade_count 5u
-// FSP レイトレース結果格納バッファのエレメント単位のu32数.
-#define k_irdv_fsp_ray_result_data_stride 2u
+// VSP probeあたりのOctahedralMap Atlas解像度.
+#define k_irdv_vsp_probe_octmap_width 6u
+// Material評価を含むVSP Cascade走査の上限。現行実装は5 Cascadeまでを対象とする。
+#define k_irdv_vsp_max_cascade_count 5u
+// VSP レイトレース結果格納バッファのエレメント単位のu32数.
+#define k_irdv_vsp_ray_result_data_stride 2u
 
-// FSP IrradianceVolumeはSkyVisibilityとIrradiance RGBを4つの3Dサブボリュームへ格納する。
+// VSP IrradianceVolumeはSkyVisibilityとIrradiance RGBを4つの3Dサブボリュームへ格納する。
 // 各RGBAはL1 SHの4係数(Y00, Y1-1, Y10, Y1+1)に対応する。
-#define k_irdv_fsp_irradiance_volume_sh_texture_count 4u
-#define k_irdv_fsp_irradiance_volume_sky_visibility_texture_index 0u
-#define k_irdv_fsp_irradiance_volume_irradiance_r_texture_index 1u
-#define k_irdv_fsp_irradiance_volume_irradiance_g_texture_index 2u
-#define k_irdv_fsp_irradiance_volume_irradiance_b_texture_index 3u
+#define k_irdv_vsp_irradiance_volume_sh_texture_count 4u
+#define k_irdv_vsp_irradiance_volume_sky_visibility_texture_index 0u
+#define k_irdv_vsp_irradiance_volume_irradiance_r_texture_index 1u
+#define k_irdv_vsp_irradiance_volume_irradiance_g_texture_index 2u
+#define k_irdv_vsp_irradiance_volume_irradiance_b_texture_index 3u
 // Toroidal境界のハードウェアTrilinear補間用に、各サブボリュームの正側へTexelを1層追加する。
-#define k_irdv_fsp_irradiance_volume_guard_texel_count 1u
+#define k_irdv_vsp_irradiance_volume_guard_texel_count 1u
 
 // MainView ReducedSurfaceBufferの空間縮小率。4x4のJitter sampleを巡回する。
 #define k_irdv_reduced_surface_buffer_downscale 4u
 
-// FSP CellのVisibleMark用一時バッファの1Cellあたりのu32数.
+// VSP CellのVisibleMark用一時バッファの1Cellあたりのu32数.
 
 
-// Fspのレイリクエスト, レイトレースのCSのスレッドグループサイズ.
-#define k_irdv_fsp_ray_linear_thread_group_size 128u
-// FspのProbe更新のCSのスレッドグループサイズ.
-#define k_irdv_fsp_probe_update_thread_group_size 64u
+// Vspのレイリクエスト, レイトレースのCSのスレッドグループサイズ.
+#define k_irdv_vsp_ray_linear_thread_group_size 128u
+// VspのProbe更新のCSのスレッドグループサイズ.
+#define k_irdv_vsp_probe_update_thread_group_size 64u
 
 
-// ProbePool Elementのu32換算個数 == (sizeof(FInstantRdvFspProbePoolData)/sizeof(uint)).
-#define k_irdv_fsp_probe_pool_data_u32_count 8u
+// ProbePool Elementのu32換算個数 == (sizeof(FInstantRdvVspProbePoolData)/sizeof(uint)).
+#define k_irdv_vsp_probe_pool_data_u32_count 8u
 #if !defined(__cplusplus)
-// FSP ActiveProbe lifecycle用のprobe poolエントリ.
-// C++側のStructuredBufferはByteAddressBufferとしてk_irdv_fsp_probe_pool_data_u32_countエントリで確保されるため,
-// k_irdv_fsp_probe_pool_data_u32_countとメンバ数==構造体サイズが一致するようにします.
+// VSP ActiveProbe lifecycle用のprobe poolエントリ.
+// C++側のStructuredBufferはByteAddressBufferとしてk_irdv_vsp_probe_pool_data_u32_countエントリで確保されるため,
+// k_irdv_vsp_probe_pool_data_u32_countとメンバ数==構造体サイズが一致するようにします.
 // 
-struct FInstantRdvFspProbePoolData
+struct FInstantRdvVspProbePoolData
 {
     uint OwnerCellIndex;
     uint ProbeOffsetV3;

@@ -4,18 +4,18 @@
 #ifndef INSTANT_RDV_MATERIAL_USH
 #define INSTANT_RDV_MATERIAL_USH
 
-#include "/InstantRdvShaders/Private/fsp_util.ush"
+#include "/InstantRdvShaders/Private/vsp_util.ush"
 
 // Material Scene UniformからIrradianceVolume評価に必要なグリッド状態を構築する。
-FInstantRdvFspGridParams InstantRdvMaterialGetFspGridParams()
+FInstantRdvVspGridParams InstantRdvMaterialGetVspGridParams()
 {
-    FInstantRdvFspGridParams GridParams = (FInstantRdvFspGridParams)0;
-    GridParams.GridResolutionX = Scene.InstantRdvParam.FspGridResolutionX;
-    GridParams.GridResolutionY = Scene.InstantRdvParam.FspGridResolutionY;
-    GridParams.GridResolutionZ = Scene.InstantRdvParam.FspGridResolutionZ;
-    GridParams.CascadeCount = Scene.InstantRdvParam.FspCascadeCount;
-    GridParams.CellSizeCm = Scene.InstantRdvParam.FspCellSizeCm;
-    GridParams.GridCenterPositionWs = Scene.InstantRdvParam.FspGridCenterPositionWs;
+    FInstantRdvVspGridParams GridParams = (FInstantRdvVspGridParams)0;
+    GridParams.GridResolutionX = Scene.InstantRdvParam.VspGridResolutionX;
+    GridParams.GridResolutionY = Scene.InstantRdvParam.VspGridResolutionY;
+    GridParams.GridResolutionZ = Scene.InstantRdvParam.VspGridResolutionZ;
+    GridParams.CascadeCount = Scene.InstantRdvParam.VspCascadeCount;
+    GridParams.CellSizeCm = Scene.InstantRdvParam.VspCellSizeCm;
+    GridParams.GridCenterPositionWs = Scene.InstantRdvParam.VspGridCenterPositionWs;
     return GridParams;
 }
 
@@ -30,15 +30,15 @@ bool InstantRdvMaterialTryEvaluateIndirectLighting(
     out float OutSkyVisibilityIbl)
 {
     OutDiffuseIrradiance = 0.0.xxx;
-    OutSkyVisibilityIbl = Scene.InstantRdvParam.FspEnabled == 0u ? 1.0 : 0.0;
-    if (Scene.InstantRdvParam.FspEnabled == 0u)
+    OutSkyVisibilityIbl = Scene.InstantRdvParam.VspEnabled == 0u ? 1.0 : 0.0;
+    if (Scene.InstantRdvParam.VspEnabled == 0u)
     {
         return false;
     }
 
-    return FspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
-        Scene.InstantRdvParam.FspIrradianceVolumeSH,
-        InstantRdvMaterialGetFspGridParams(),
+    return VspUtilTryEvaluateIrradianceVolumeIndirectLightingTrilinear(
+        Scene.InstantRdvParam.VspIrradianceVolumeSH,
+        InstantRdvMaterialGetVspGridParams(),
         WorldPositionWs,
         NormalWs,
         OutDiffuseIrradiance,

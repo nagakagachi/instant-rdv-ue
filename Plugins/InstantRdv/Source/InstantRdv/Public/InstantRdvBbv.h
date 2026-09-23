@@ -1,5 +1,8 @@
 ﻿/*
     InstantRdvBbv.h
+    RDV: Raster Derived Voxel.
+    BBV: Bitmask Brick Voxel.
+    VSP: Visible Surface Probe.
 */
 
 #pragma once
@@ -16,7 +19,7 @@ class FRDGTexture;
 class FSceneView;
 class FSceneUniformBuffer;
 class FRDGPooledTexture;
-class FInstantRdvFsp;
+class FInstantRdvVsp;
 class FInstantRdvSceneUniformBufferParams;
 
 struct FInstantRdvBbvConfig
@@ -31,7 +34,7 @@ struct FInstantRdvBbvConfig
     uint32 GetOptionalDataElementCount() const;
     uint32 GetRadianceAccumDataElementCount() const;
 };
-struct FInstantRdvFspConfig
+struct FInstantRdvVspConfig
 {
     FIntVector ProbeGridResolution = InstantRdvDefaults::ProbeGridResolution;
     float ProbeCellSizeCm = InstantRdvDefaults::ProbeCellSizeCm;
@@ -39,11 +42,11 @@ struct FInstantRdvFspConfig
     // Denseセル数とは独立した全カスケード共通のSparse容量。
     uint32 ProbeCapacity = InstantRdvDefaults::ProbePoolCapacity;
     uint32 VisibleSurfaceCapacity = InstantRdvDefaults::VisibleSurfaceCapacity;
-    uint32 GetRayCapacity() const { return ProbeCapacity * k_irdv_fsp_probe_octmap_width * k_irdv_fsp_probe_octmap_width; }
+    uint32 GetRayCapacity() const { return ProbeCapacity * k_irdv_vsp_probe_octmap_width * k_irdv_vsp_probe_octmap_width; }
     uint32 GetAtlasTileWidth() const { return FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::CeilToInt(FMath::Sqrt(static_cast<float>(ProbeCapacity))))); }
 
-    uint32 GetFspCellCount() const;
-    uint32 GetFspTotalCellCount() const;
+    uint32 GetVspCellCount() const;
+    uint32 GetVspTotalCellCount() const;
 };
 
 
@@ -96,13 +99,13 @@ class FInstantRdvBbv final
 {
 public:
 
-    FInstantRdvBbv(const FInstantRdvBbvConfig& InBbvConfig, const FInstantRdvFspConfig& InFspConfig);
+    FInstantRdvBbv(const FInstantRdvBbvConfig& InBbvConfig, const FInstantRdvVspConfig& InVspConfig);
 
     // 初期化/解放 (Editor/Device 初期化タイミングで呼ぶ)
     void Initialize();
 
     // RDV永続リソースをそのフレームのRDGへ接続し、BBVの全体フレーム状態を1つ進める。
-    // FSPのActiveProbe世代は実際にFSP更新を実行したときだけ進むため、SceneViewExtension側で選んだ
+    // VSPのActiveProbe世代は実際にVSP更新を実行したときだけ進むため、SceneViewExtension側で選んだ
     // 代表ViewFamily/Viewにつき1回だけ呼ぶこと。View単位callbackから複数回呼ぶとライフサイクルが破綻する。
     void BeginFrame_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InView);
 
@@ -129,8 +132,8 @@ public:
         FRDGTexture* SceneColorTexture,
         float SceneColorPreExposure,
         int32 BbvDebugMode,
-        int32 FspProbeDebugMode,
-        int32 FspIvProbeDebugMode,
+        int32 VspProbeDebugMode,
+        int32 VspIvProbeDebugMode,
         bool bProbeDepthTest,
         float BbvDebugSceneColorBlend,
         bool bBbvDebugDepthTest,
@@ -149,13 +152,13 @@ public:
         bool bEnableRadianceResolve,
         bool bUseReducedSurfaceBuffer);
 
-    // Frustum Space Probe(FSP) 初期更新。
-    // 参照実装のScreenSpacePass相当で可視Surface Cellを収集し、BBV resolved radianceをFSP cellへ写す。
-    void ExecuteFspUpdate(
+    // Visible Surface Probe(VSP) 初期更新。
+    // 参照実装のScreenSpacePass相当で可視Surface Cellを収集し、BBV resolved radianceをVSP cellへ写す。
+    void ExecuteVspUpdate(
         FRDGBuilder& GraphBuilder,
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
-        bool bEnableFspUpdate,
+        bool bEnableVspUpdate,
         bool bUseProbeTraceOffset,
         bool bUseReducedSurfaceBuffer);
 
@@ -191,36 +194,36 @@ private:
             FPersistentRdgPooledBufferSet RadianceAccumBuffer;
         };
         // Inner.
-        struct FFspState
+        struct FVspState
         {
             FToroidalGrid TrGrid{};
-            // FSPは参照InstantRDVと同じくtoroidal grid移動量で古いphysical slotを無効化する。
+            // VSPは参照InstantRDVと同じくtoroidal grid移動量で古いphysical slotを無効化する。
             // 前フレームのgrid centerを保持し、BeginUpdate shaderへ渡してslotの押し出し判定に使う。
             FVector CurrentGridCenterPositionWs = FVector::ZeroVector;
             FVector PreviousGridCenterPositionWs = FVector::ZeroVector;
 
-            // FspCellProbeIndexBuffer:
+            // VspCellProbeIndexBuffer:
             //   global cell index -> owning active probe index。未所有はinvalid probe index。
-            // FspVisibleSurfaceListBuffer:
+            // VspVisibleSurfaceListBuffer:
             //   [0]=count, [1..]=depth surfaceから選ばれたowner cell index。
-            FPersistentRdgPooledBufferSet FspCellProbeIndexBuffer;
-            FPersistentRdgPooledBufferSet FspVisibleSurfaceListBuffer;
-            FPersistentRdgPooledBufferSet FspVisibleSurfaceSourceTexelListBuffer;
-            // ProbePool/FreeStack/ActiveListは参照FSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
+            FPersistentRdgPooledBufferSet VspCellProbeIndexBuffer;
+            FPersistentRdgPooledBufferSet VspVisibleSurfaceListBuffer;
+            FPersistentRdgPooledBufferSet VspVisibleSurfaceSourceTexelListBuffer;
+            // ProbePool/FreeStack/ActiveListは参照VSPのActiveProbe lifecycleをGPU上で回すための永続buffer。
             // ActiveProbeList固有のレイアウト。各物理Bufferのword 0/1を世代交代counter、
             // word 2以降をProbe index listとして使用する。他のcounter bufferはword 0のみを
             // counterとして使用するため、ActiveProbeListを単一counter前提で扱わないこと。
             // これによりGPUフレーム重複時もreset中のcounterを別世代のappendが上書きしない。
-            FPersistentRdgPooledBufferSet FspProbePoolBuffer;
-            FPersistentRdgPooledBufferSet FspProbeFreeStackBuffer;
-            FPersistentRdgPooledBufferSet FspActiveProbeListBuffers[2];
+            FPersistentRdgPooledBufferSet VspProbePoolBuffer;
+            FPersistentRdgPooledBufferSet VspProbeFreeStackBuffer;
+            FPersistentRdgPooledBufferSet VspActiveProbeListBuffers[2];
             // ProbeAtlasはActiveProbeごとの6x6 OctMap、IrradianceVolumeは全CascadeをZ方向へ連結した3D Texture。
-            FPersistentRdgPooledTextureSet FspProbeAtlas;
-            FPersistentRdgPooledBufferSet FspProbeRayRequestBuffer;
-            FPersistentRdgPooledBufferSet FspProbeRayResultBuffer;
-            FPersistentRdgPooledTextureSet FspIrradianceVolumeSHTexture;
+            FPersistentRdgPooledTextureSet VspProbeAtlas;
+            FPersistentRdgPooledBufferSet VspProbeRayRequestBuffer;
+            FPersistentRdgPooledBufferSet VspProbeRayResultBuffer;
+            FPersistentRdgPooledTextureSet VspIrradianceVolumeSHTexture;
             FPersistentRdgPooledTextureSet ReducedSurfaceBuffer;
-            uint32 FspUpdateFrameCount = 0;
+            uint32 VspUpdateFrameCount = 0;
         };
 
 
@@ -228,13 +231,13 @@ private:
         uint32  FrameCount = 0;
 
         FBbvState bbv{};
-        FFspState fsp{};
+        FVspState vsp{};
     };
 
     struct FConfig
     {
         FInstantRdvBbvConfig    bbv{};
-        FInstantRdvFspConfig    fsp{};
+        FInstantRdvVspConfig    vsp{};
     };
     FConfig                 Config;
     FSystemState            SystemState;

@@ -1,11 +1,11 @@
-// ファイル名: fsp_probe_billboard.usf
-// FSP ActiveProbe / IrradianceVolumeのプローブ球デバッグ描画。
-// 各FSP cellを1インスタンス相当のcamera-facing quadとして描き、pixel shaderで球面に見せる。
+// ファイル名: vsp_probe_billboard.usf
+// VSP ActiveProbe / IrradianceVolumeのプローブ球デバッグ描画。
+// 各VSP cellを1インスタンス相当のcamera-facing quadとして描き、pixel shaderで球面に見せる。
 // ActiveProbe debugではCVarに応じて cell center / offset probe sample position を切り替え、
 // IrradianceVolume debugでは常にcell centerを描画する。
 
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 #include "/InstantRdvShaders/Private/bbv_trace_util.ush"
 
 float4x4 ViewMatrix;
@@ -17,7 +17,7 @@ float DebugProbeRadiusCm;
 uint GridResolutionX;
 uint GridResolutionY;
 uint GridResolutionZ;
-uint FspProbePoolElementCount;
+uint VspProbePoolElementCount;
 uint FrameCount;
 uint DebugMode;
 uint bUseProbeVisualizationOffset;
@@ -29,10 +29,10 @@ float3 BbvToroidalOffsetCells;
 float BbvCellSizeCm;
 float3 BbvGridMinPositionWs;
 
-StructuredBuffer<uint> FspCellProbeIndex;
-StructuredBuffer<uint> FspProbePool;
-Texture2D<float4> FspProbeAtlas;
-Texture3D<float4> FspIrradianceVolumeSHTexture;
+StructuredBuffer<uint> VspCellProbeIndex;
+StructuredBuffer<uint> VspProbePool;
+Texture2D<float4> VspProbeAtlas;
+Texture3D<float4> VspIrradianceVolumeSHTexture;
 StructuredBuffer<uint> BbvBuffer;
 uint BrickDataBaseOffset;
 
@@ -48,23 +48,23 @@ struct VS_OUTPUT
     float3 RelocatedProbeSamplePosWs : TEXCOORD6;
 };
 
-bool FspTryGetActiveProbeForCell(out uint OutProbeIndex, out FInstantRdvFspProbePoolData OutData, uint GlobalCellIndex)
+bool VspTryGetActiveProbeForCell(out uint OutProbeIndex, out FInstantRdvVspProbePoolData OutData, uint GlobalCellIndex)
 {
-    OutProbeIndex = k_irdv_fsp_invalid_probe_index;
-    OutData = (FInstantRdvFspProbePoolData)0;
-    if (GlobalCellIndex >= FspTotalCellCount())
+    OutProbeIndex = k_irdv_vsp_invalid_probe_index;
+    OutData = (FInstantRdvVspProbePoolData)0;
+    if (GlobalCellIndex >= VspTotalCellCount())
     {
         return false;
     }
 
-    const uint ProbeIndex = FspCellProbeIndex[GlobalCellIndex];
-    if (ProbeIndex == k_irdv_fsp_invalid_probe_index || ProbeIndex >= FspProbePoolElementCount)
+    const uint ProbeIndex = VspCellProbeIndex[GlobalCellIndex];
+    if (ProbeIndex == k_irdv_vsp_invalid_probe_index || ProbeIndex >= VspProbePoolElementCount)
     {
         return false;
     }
 
     // CellProbeIndexだけでは古いownershipが残る可能性があるため、ProbePool側のOwnerCellIndexでも検証する。
-    const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, ProbeIndex);
+    const FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(VspProbePool, ProbeIndex);
     if (Data.OwnerCellIndex != GlobalCellIndex)
     {
         return false;
@@ -102,25 +102,25 @@ VS_OUTPUT MainVS(uint VertexId : SV_VertexID)
 
     uint CascadeIndex = 0u;
     uint LocalCellIndex = 0u;
-    if (!FspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
+    if (!VspDecodeGlobalCellIndex(GlobalCellIndex, CascadeIndex, LocalCellIndex))
     {
         Out.Pos = 0.0.xxxx;
-        Out.ProbeIndex = k_irdv_fsp_invalid_probe_index;
+        Out.ProbeIndex = k_irdv_vsp_invalid_probe_index;
         return Out;
     }
 
-    uint ProbeIndex = k_irdv_fsp_invalid_probe_index;
-    FInstantRdvFspProbePoolData ProbeData = (FInstantRdvFspProbePoolData)0;
-    const bool bActiveProbe = FspTryGetActiveProbeForCell(ProbeIndex, ProbeData, GlobalCellIndex);
+    uint ProbeIndex = k_irdv_vsp_invalid_probe_index;
+    FInstantRdvVspProbePoolData ProbeData = (FInstantRdvVspProbePoolData)0;
+    const bool bActiveProbe = VspTryGetActiveProbeForCell(ProbeIndex, ProbeData, GlobalCellIndex);
     const bool bIrradianceVolumeDebug = DebugMode == 9u || DebugMode == 10u;
-    const bool bHasVolumeSH = FspIrradianceVolumeHasValidSH(FspIrradianceVolumeSHTexture, GlobalCellIndex);
-    // FspCalcCellCenterWsはtoroidal物理indexから現在のworld-aligned cell centerへ戻す。
+    const bool bHasVolumeSH = VspIrradianceVolumeHasValidSH(VspIrradianceVolumeSHTexture, GlobalCellIndex);
+    // VspCalcCellCenterWsはtoroidal物理indexから現在のworld-aligned cell centerへ戻す。
     // ここがずれるとprobe球がカメラ追従に見えるため、更新パスと同じhelperを使う。
-    const float3 CellCenterWs = FspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
-    // ProbeOffset は FSP の本質的な relocation 結果。
+    const float3 CellCenterWs = VspCalcCellCenterWs(CascadeIndex, LocalCellIndex);
+    // ProbeOffset は VSP の本質的な relocation 結果。
     // Debug球も trace も同じ encoded offset を読むことで、
     // 「どこにprobeが置かれ、どこからrayが飛ぶか」を同じ基準で観察できる。
-    const float3 ProbeOffset = bActiveProbe ? FspDecodeProbeOffset(ProbeData.ProbeOffsetV3) * FspProbeMaxOffsetDistanceCm(CascadeIndex) : 0.0.xxx;
+    const float3 ProbeOffset = bActiveProbe ? VspDecodeProbeOffset(ProbeData.ProbeOffsetV3) * VspProbeMaxOffsetDistanceCm(CascadeIndex) : 0.0.xxx;
     const float3 ProbeSamplePosWs = CellCenterWs + ProbeOffset;
     const float3 ProbePosWs = bIrradianceVolumeDebug
         ? CellCenterWs
@@ -152,7 +152,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     }
 
     const bool bIrradianceVolumeDebug = DebugMode == 9u || DebugMode == 10u;
-    if ((!bIrradianceVolumeDebug) && Input.ProbeIndex == k_irdv_fsp_invalid_probe_index)
+    if ((!bIrradianceVolumeDebug) && Input.ProbeIndex == k_irdv_vsp_invalid_probe_index)
     {
         discard;
     }
@@ -168,7 +168,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     float4 Color = float4(NormalWs * 0.5 + 0.5, 1.0);
     if (DebugMode == 0u)
     {
-        const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, Input.ProbeIndex);
+        const FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(VspProbePool, Input.ProbeIndex);
         Color = (Data.LastSeenFrame == FrameCount) ? float4(0.2, 1.0, 0.3, 1.0) : float4(1.0, 0.85, 0.2, 1.0);
     }
     else if (DebugMode == 1u)
@@ -178,7 +178,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     }
     else if (DebugMode == 2u)
     {
-        const FInstantRdvFspProbePoolData Data = FspLoadProbePoolData(FspProbePool, Input.ProbeIndex);
+        const FInstantRdvVspProbePoolData Data = VspLoadProbePoolData(VspProbePool, Input.ProbeIndex);
         const float AgeNorm = saturate(float(FrameCount - Data.LastSeenFrame) / 30.0);
         Color = lerp(float4(0.2, 1.0, 0.3, 1.0), float4(1.0, 0.2, 0.1, 1.0), AgeNorm);
     }
@@ -186,7 +186,7 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     {
         uint CascadeIndex = 0u;
         uint LocalCellIndex = 0u;
-        FspDecodeGlobalCellIndex(CellIndex, CascadeIndex, LocalCellIndex);
+        VspDecodeGlobalCellIndex(CellIndex, CascadeIndex, LocalCellIndex);
         const float H = frac(float(CascadeIndex) * 0.38196601125);
         Color = float4(H, frac(H * 1.71), frac(H * 2.37), 1.0);
     }
@@ -194,8 +194,8 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     {
         // OctMap表示は球面normalをoct encodeしてatlas texelを参照する。
         // DebugModeは4がRadiance、5がSkyVisibility。
-        const uint2 OctCellId = min(uint2(FspOctEncode(NormalWs) * float(k_irdv_fsp_probe_octmap_width)), uint2(k_irdv_fsp_probe_octmap_width - 1u, k_irdv_fsp_probe_octmap_width - 1u));
-        const float4 Atlas = FspProbeAtlas.Load(int3(FspProbeAtlasAddress(Input.ProbeIndex, OctCellId), 0));
+        const uint2 OctCellId = min(uint2(VspOctEncode(NormalWs) * float(k_irdv_vsp_probe_octmap_width)), uint2(k_irdv_vsp_probe_octmap_width - 1u, k_irdv_vsp_probe_octmap_width - 1u));
+        const float4 Atlas = VspProbeAtlas.Load(int3(VspProbeAtlasAddress(Input.ProbeIndex, OctCellId), 0));
         if (DebugMode == 4u)
         {
             const float3 Mapped = Atlas.rgb / (1.0.xxx + Atlas.rgb);
@@ -211,9 +211,9 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     {
         // デバッグ表示では、格納された入射Radiance SHの指定方向評価をそのまま表示する。
         // ライティング用のDiffuse Irradiance評価（Cos畳み込み済み）とは意図的に分けている。
-        const float3 Radiance = FspUtilEvaluateIrradianceVolumeRadianceAtCell(
-            FspIrradianceVolumeSHTexture,
-            FspGetGridParams(),
+        const float3 Radiance = VspUtilEvaluateIrradianceVolumeRadianceAtCell(
+            VspIrradianceVolumeSHTexture,
+            VspGetGridParams(),
             CellIndex,
             NormalWs);
         const float3 Mapped = Radiance / (1.0.xxx + Radiance);
@@ -274,9 +274,9 @@ float4 MainPS(VS_OUTPUT Input) : SV_Target0
     {
         // デバッグ表示では、SkyVisibility SHの指定方向評価を表示する。
         // IBL可視性として使う場合は、正規化Cos畳み込み版のAPIを利用する。
-        Color = FspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
-            FspIrradianceVolumeSHTexture,
-            FspGetGridParams(),
+        Color = VspUtilEvaluateIrradianceVolumeSkyVisibilityAtCell(
+            VspIrradianceVolumeSHTexture,
+            VspGetGridParams(),
             CellIndex,
             NormalWs).xxxx;
     }

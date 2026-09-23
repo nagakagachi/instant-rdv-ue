@@ -1,13 +1,13 @@
-// ファイル名: fsp_surface_detect_reduced_cs.usf
-// ReducedSurfaceBufferからFSPの可視セルと、対応する元テクセルを抽出する。
+// ファイル名: vsp_surface_detect_reduced_cs.usf
+// ReducedSurfaceBufferからVSPの可視セルと、対応する元テクセルを抽出する。
 
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
 Texture2D<float4> ReducedSurfaceBuffer;
-RWStructuredBuffer<uint> RWFspSurfaceCellMask;
-RWStructuredBuffer<uint> RWFspVisibleSurfaceList;
-RWStructuredBuffer<uint> RWFspVisibleSurfaceSourceTexelList;
+RWStructuredBuffer<uint> RWVspSurfaceCellMask;
+RWStructuredBuffer<uint> RWVspVisibleSurfaceList;
+RWStructuredBuffer<uint> RWVspVisibleSurfaceSourceTexelList;
 
 uint SourceDepthSizeX;
 uint SourceDepthSizeY;
@@ -20,7 +20,7 @@ float4x4 ProjectionMatrix;
 
 void AppendSurfaceCell(uint GlobalCellIndex, uint ReducedSurfaceTexelIndex)
 {
-    if (GlobalCellIndex >= FspTotalCellCount())
+    if (GlobalCellIndex >= VspTotalCellCount())
     {
         return;
     }
@@ -29,7 +29,7 @@ void AppendSurfaceCell(uint GlobalCellIndex, uint ReducedSurfaceTexelIndex)
     const uint MaskBit = 1u << (GlobalCellIndex & 31u);
     uint PreviousMask = 0u;
     InterlockedOr(
-        RWFspSurfaceCellMask[MaskWordIndex],
+        RWVspSurfaceCellMask[MaskWordIndex],
         MaskBit,
         PreviousMask);
     if ((PreviousMask & MaskBit) != 0u)
@@ -38,11 +38,11 @@ void AppendSurfaceCell(uint GlobalCellIndex, uint ReducedSurfaceTexelIndex)
     }
 
     uint ListIndex = 0u;
-    InterlockedAdd(RWFspVisibleSurfaceList[0], 1u, ListIndex);
+    InterlockedAdd(RWVspVisibleSurfaceList[0], 1u, ListIndex);
     if (ListIndex < VisibleSurfaceListCapacity)
     {
-        RWFspVisibleSurfaceList[ListIndex + 1u] = GlobalCellIndex;
-        RWFspVisibleSurfaceSourceTexelList[ListIndex + 1u] =
+        RWVspVisibleSurfaceList[ListIndex + 1u] = GlobalCellIndex;
+        RWVspVisibleSurfaceSourceTexelList[ListIndex + 1u] =
             ReducedSurfaceTexelIndex;
     }
     // 超過予約は書かず、消費側で容量に制限する。
@@ -81,9 +81,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         float4(SurfacePosVs, 1.0),
         InvViewMatrix).xyz;
 
-    uint2 OwnerCellIndices = k_irdv_fsp_invalid_probe_index.xx;
+    uint2 OwnerCellIndices = k_irdv_vsp_invalid_probe_index.xx;
     const uint OwnerCellCount =
-        FspGetSurfaceOwnerCells(SurfacePosWs, OwnerCellIndices);
+        VspGetSurfaceOwnerCells(SurfacePosWs, OwnerCellIndices);
     const uint ReducedSurfaceTexelIndex =
         DispatchThreadId.x + DispatchThreadId.y * Width;
     [unroll]

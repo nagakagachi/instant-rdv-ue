@@ -1,7 +1,7 @@
-// ファイル名: fsp_counter_indirect_arg_build_cs.usf
+// ファイル名: vsp_counter_indirect_arg_build_cs.usf
 #include "/Engine/Public/Platform.ush"
 
-// FSP各リストの指定counter slotから DispatchIndirect 用のgroup countを作る。
+// VSP各リストの指定counter slotから DispatchIndirect 用のgroup countを作る。
 // 参照InstantRDV同様、ActiveProbe数やRayRequest数に比例したdispatchにして全cell全ray実行を避ける。
 // ActiveProbeListだけはCounterSlot=0/1を切り替え、VisibleSurface/RayRequest/RayResultなどはCounterSlot=0固定。
 

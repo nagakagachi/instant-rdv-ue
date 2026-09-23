@@ -1,20 +1,20 @@
-// ファイル名: fsp_debug_text_ps.usf
+// ファイル名: vsp_debug_text_ps.usf
 #include "/Engine/Public/Platform.ush"
-#include "/InstantRdvShaders/Private/Fsp/fsp_state.ush"
+#include "/InstantRdvShaders/Private/Vsp/vsp_state.ush"
 
-// FSPデバッグ用カウンタ表示。
+// VSPデバッグ用カウンタ表示。
 // GPU counterをCPU readbackせず画面に出すため、数値部分だけ簡易7セグメントで描く。
 // ラベルはC++側のAddDrawCanvasPassでUE標準文字列として描画する。
 
-StructuredBuffer<uint> FspVisibleSurfaceList;
-StructuredBuffer<uint> FspActiveProbeListCurr;
-StructuredBuffer<uint> FspProbeRayRequestBuffer;
-StructuredBuffer<uint> FspProbeRayResultBuffer;
-StructuredBuffer<uint> FspProbeFreeStack;
+StructuredBuffer<uint> VspVisibleSurfaceList;
+StructuredBuffer<uint> VspActiveProbeListCurr;
+StructuredBuffer<uint> VspProbeRayRequestBuffer;
+StructuredBuffer<uint> VspProbeRayResultBuffer;
+StructuredBuffer<uint> VspProbeFreeStack;
 
 uint ViewRectSizeX;
 uint ViewRectSizeY;
-uint FspProbePoolElementCount;
+uint VspProbePoolElementCount;
 uint VisibleSurfaceListCapacity;
 uint ActiveProbeFrameCount;
 
@@ -91,24 +91,24 @@ uint GetCounterValue(uint Row)
 {
     if (Row == 0u)
     {
-        return min(FspVisibleSurfaceList[0], VisibleSurfaceListCapacity);
+        return min(VspVisibleSurfaceList[0], VisibleSurfaceListCapacity);
     }
     if (Row == 1u)
     {
         return min(
-            FspActiveProbeListCurr[
-                FspActiveProbeCurrentCounterSlot(ActiveProbeFrameCount)],
-            FspProbePoolElementCount);
+            VspActiveProbeListCurr[
+                VspActiveProbeCurrentCounterSlot(ActiveProbeFrameCount)],
+            VspProbePoolElementCount);
     }
     if (Row == 2u)
     {
-        return min(FspProbeRayRequestBuffer[0], FspProbePoolElementCount * 36u);
+        return min(VspProbeRayRequestBuffer[0], VspProbePoolElementCount * 36u);
     }
     if (Row == 3u)
     {
-        return min(FspProbeRayResultBuffer[0], FspProbePoolElementCount * 36u);
+        return min(VspProbeRayResultBuffer[0], VspProbePoolElementCount * 36u);
     }
-    return min(FspProbeFreeStack[0], FspProbePoolElementCount);
+    return min(VspProbeFreeStack[0], VspProbePoolElementCount);
 }
 
 float3 GetCounterColor(uint Row)

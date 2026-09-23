@@ -1,0 +1,514 @@
+// ファイル名: vsp_state.ush
+#ifndef INSTANT_RDV_VSP_STATE_USH
+#define INSTANT_RDV_VSP_STATE_USH
+
+#include "/InstantRdvShaders/Private/vsp_util.ush"
+
+// InstantRDV参照実装のVSPは「論理グリッド座標」と「物理(toroidal)格納座標」を分ける。
+// Buffer上のcell indexは物理座標ベースで安定させ、カメラ移動時はtoroidal offsetだけを進めることで
+// Probeがカメラに完全追従せず、ワールドにアラインした配置を維持する。
+static const uint kVspRayCountPerProbe = k_irdv_vsp_probe_octmap_width * k_irdv_vsp_probe_octmap_width;
+static const uint kVspRayRequestOctCellBits = 8u;
+static const uint kVspRayRequestOctCellMask = (1u << kVspRayRequestOctCellBits) - 1u;
+// ActiveProbeList専用のレイアウト。他のVSP counter bufferは[0]がcounterでpayloadは[1]から始まる。
+// ActiveProbeListだけはGPU世代をまたぐreset/append Raceを避けるため、word 0/1を交互利用する。
+static const uint kVspActiveProbeCounterSlotCount = 2u;
+static const uint kVspActiveProbeListDataOffset = 2u;
+
+uint VspActiveProbeCurrentCounterSlot(uint UpdateFrameCount)
+{
+    // UE側のVspUpdateFrameCountは0始まり。物理BufferがCurrentになるたびにcounter slotを交互利用する。
+    return (UpdateFrameCount >> 1u) & (kVspActiveProbeCounterSlotCount - 1u);
+}
+
+uint VspActiveProbePreviousCounterSlot(uint UpdateFrameCount)
+{
+    // 初回フレームはPrevious listが未使用なので、初期clear済みslot 0を読む。
+    if (UpdateFrameCount == 0u)
+    {
+        return 0u;
+    }
+    return ((UpdateFrameCount - 1u) >> 1u) & (kVspActiveProbeCounterSlotCount - 1u);
+}
+
+uint VspActiveProbeListAddress(uint ActiveProbeIndex)
+{
+    return ActiveProbeIndex + kVspActiveProbeListDataOffset;
+}
+
+uint VspGridResolutionX;
+uint VspGridResolutionY;
+uint VspGridResolutionZ;
+uint VspCascadeCount;
+float VspCellSizeCm;
+float VspRelocationOffsetScale;
+float3 VspGridCenterPositionWs;
+float3 VspPrevGridCenterPositionWs;
+
+FInstantRdvVspGridParams VspGetGridParams()
+{
+    FInstantRdvVspGridParams Params = (FInstantRdvVspGridParams)0;
+    Params.GridResolutionX = VspGridResolutionX;
+    Params.GridResolutionY = VspGridResolutionY;
+    Params.GridResolutionZ = VspGridResolutionZ;
+    Params.CascadeCount = VspCascadeCount;
+    Params.CellSizeCm = VspCellSizeCm;
+    Params.GridCenterPositionWs = VspGridCenterPositionWs;
+    Params.PrevGridCenterPositionWs = VspPrevGridCenterPositionWs;
+    return Params;
+}
+
+uint VspCellCountPerCascade()
+{
+    return VspGridResolutionX * VspGridResolutionY * VspGridResolutionZ;
+}
+
+// シェーダ側で処理するCascade数を共通上限へ正規化する。
+uint VspEffectiveCascadeCount()
+{
+    return min(VspCascadeCount, k_irdv_vsp_max_cascade_count);
+}
+
+uint VspTotalCellCount()
+{
+    return VspCellCountPerCascade() * max(VspEffectiveCascadeCount(), 1u);
+}
+
+uint VspEncodeGlobalCellIndex(uint CascadeIndex, uint LocalCellIndex)
+{
+    return CascadeIndex * VspCellCountPerCascade() + LocalCellIndex;
+}
+
+bool VspDecodeGlobalCellIndex(uint GlobalCellIndex, out uint OutCascadeIndex, out uint OutLocalCellIndex)
+{
+    const uint CellCountPerCascade = VspCellCountPerCascade();
+    OutCascadeIndex = 0u;
+    OutLocalCellIndex = 0u;
+    if (CellCountPerCascade == 0u || GlobalCellIndex >= VspTotalCellCount())
+    {
+        return false;
+    }
+
+    OutCascadeIndex = GlobalCellIndex / CellCountPerCascade;
+    OutLocalCellIndex = GlobalCellIndex - OutCascadeIndex * CellCountPerCascade;
+    return OutCascadeIndex < VspEffectiveCascadeCount();
+}
+
+uint3 VspLocalCellIndexToCoord(uint LocalCellIndex)
+{
+    const uint Slice = VspGridResolutionX * VspGridResolutionY;
+    const uint Z = LocalCellIndex / Slice;
+    const uint Rem = LocalCellIndex - Z * Slice;
+    const uint Y = Rem / VspGridResolutionX;
+    const uint X = Rem - Y * VspGridResolutionX;
+    return uint3(X, Y, Z);
+}
+
+uint VspPhysicalCellCoordToLocalIndex(uint3 PhysicalCoord)
+{
+    return PhysicalCoord.x + PhysicalCoord.y * VspGridResolutionX + PhysicalCoord.z * VspGridResolutionX * VspGridResolutionY;
+}
+
+float VspCascadeCellSizeCm(uint CascadeIndex)
+{
+    return VspCellSizeCm * exp2(float(CascadeIndex));
+}
+
+float VspProbeMaxOffsetDistanceCm(uint CascadeIndex)
+{
+    // VSP probe offset は「見た目のデバッグ球を少しずらすための値」ではなく、
+    // ActiveProbe の実サンプル位置そのものを cell center から再配置するための重要パラメータ。
+    // 参照実装では cascade cell size に対する比率で最大移動距離を決め、
+    // PreUpdate / RayTrace / DebugVisualize の全経路で同じ距離規約を共有している。
+    // UE側も world unit が cm である点だけを保ったまま、この規約をそのまま使う。
+    return VspCascadeCellSizeCm(CascadeIndex) * VspRelocationOffsetScale;
+}
+
+int3 VspCascadeCenterCellIdFromPosition(uint CascadeIndex, float3 CenterPositionWs)
+{
+    const float CellSize = VspCascadeCellSizeCm(CascadeIndex);
+    // 参照InstantRDVのToroidalGridUpdater::UpdateGridと同じく、cascade中心をcell単位へ量子化する。
+    return int3(floor(CenterPositionWs / max(CellSize, 0.001)));
+}
+
+int3 VspCascadeCenterCellId(uint CascadeIndex)
+{
+    return VspCascadeCenterCellIdFromPosition(CascadeIndex, VspGridCenterPositionWs);
+}
+
+int3 VspCascadePrevCenterCellId(uint CascadeIndex)
+{
+    return VspCascadeCenterCellIdFromPosition(CascadeIndex, VspPrevGridCenterPositionWs);
+}
+
+int3 VspCascadeToroidalOffset(uint CascadeIndex)
+{
+    const int3 Resolution = int3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ);
+    const int3 CenterCellId = VspCascadeCenterCellId(CascadeIndex);
+    return ((CenterCellId % Resolution) + Resolution) % Resolution;
+}
+
+int3 VspCascadePrevToroidalOffset(uint CascadeIndex)
+{
+    const int3 Resolution = int3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ);
+    const int3 CenterCellId = VspCascadePrevCenterCellId(CascadeIndex);
+    return ((CenterCellId % Resolution) + Resolution) % Resolution;
+}
+
+int3 VspCascadeMoveCellDelta(uint CascadeIndex)
+{
+    return VspCascadeCenterCellId(CascadeIndex) - VspCascadePrevCenterCellId(CascadeIndex);
+}
+
+float3 VspCascadeGridMinPositionWs(uint CascadeIndex)
+{
+    const float CellSize = VspCascadeCellSizeCm(CascadeIndex);
+    const float3 Extent = float3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ) * CellSize;
+    return float3(VspCascadeCenterCellId(CascadeIndex)) * CellSize - Extent * 0.5.xxx;
+}
+
+int3 VspPhysicalToLinearCoord(uint3 PhysicalCoord, uint CascadeIndex)
+{
+    const int3 Resolution = int3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ);
+    return PhysicalToLogicalGridCoord(int3(PhysicalCoord), VspCascadeToroidalOffset(CascadeIndex), uint3(Resolution));
+}
+
+uint3 VspLinearToPhysicalCoord(int3 LinearCoord, uint CascadeIndex)
+{
+    return LogicalToPhysicalGridCoord(LinearCoord, VspCascadeToroidalOffset(CascadeIndex), uint3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ));
+}
+
+float3 VspCalcCellCenterWs(uint CascadeIndex, uint LocalCellIndex)
+{
+    const float CellSize = VspCascadeCellSizeCm(CascadeIndex);
+    // LocalCellIndexは物理格納座標なので、現在のtoroidal offsetで論理座標へ戻してからworld位置にする。
+    const int3 LinearCoord = VspPhysicalToLinearCoord(VspLocalCellIndexToCoord(LocalCellIndex), CascadeIndex);
+    return VspCascadeGridMinPositionWs(CascadeIndex) + (float3(LinearCoord) + 0.5.xxx) * CellSize;
+}
+
+bool VspTryGetGlobalCellIndexFromWorldPos(float3 WorldPos, uint CascadeIndex, out uint OutGlobalCellIndex)
+{
+    OutGlobalCellIndex = k_irdv_vsp_invalid_probe_index;
+    const float CellSize = VspCascadeCellSizeCm(CascadeIndex);
+    const int3 LinearCoord = int3(floor((WorldPos - VspCascadeGridMinPositionWs(CascadeIndex)) / max(CellSize, 0.001)));
+    if (any(LinearCoord < 0) ||
+        LinearCoord.x >= int(VspGridResolutionX) ||
+        LinearCoord.y >= int(VspGridResolutionY) ||
+        LinearCoord.z >= int(VspGridResolutionZ))
+    {
+        return false;
+    }
+
+    // World位置から求めた論理座標を、Bufferアクセス用の物理(toroidal)座標へ変換してglobal cell index化する。
+    OutGlobalCellIndex = VspEncodeGlobalCellIndex(CascadeIndex, VspPhysicalCellCoordToLocalIndex(VspLinearToPhysicalCoord(LinearCoord, CascadeIndex)));
+    return true;
+}
+
+bool VspTryGetFinestCascadeCellFromWorldPos(float3 WorldPos, out uint OutCascadeIndex, out uint OutGlobalCellIndex)
+{
+    OutCascadeIndex = 0u;
+    OutGlobalCellIndex = k_irdv_vsp_invalid_probe_index;
+
+    [unroll]
+    for (uint CascadeIndex = 0u;
+         CascadeIndex < k_irdv_vsp_max_cascade_count;
+         ++CascadeIndex)
+    {
+        if (CascadeIndex >= VspEffectiveCascadeCount())
+        {
+            break;
+        }
+        uint CellIndex = k_irdv_vsp_invalid_probe_index;
+        if (VspTryGetGlobalCellIndexFromWorldPos(WorldPos, CascadeIndex, CellIndex))
+        {
+            OutCascadeIndex = CascadeIndex;
+            OutGlobalCellIndex = CellIndex;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+float VspCalcCascadeBoundaryDitherRate(float3 WorldPos, uint CascadeIndex)
+{
+    if ((CascadeIndex + 1u) >= VspEffectiveCascadeCount())
+    {
+        return 0.0;
+    }
+
+    const float CellSize = VspCascadeCellSizeCm(CascadeIndex);
+    const float CoarseCellSize = VspCascadeCellSizeCm(CascadeIndex + 1u);
+    const float3 GridMin = VspCascadeGridMinPositionWs(CascadeIndex);
+    const float3 GridMax = GridMin + float3(VspGridResolutionX, VspGridResolutionY, VspGridResolutionZ) * CellSize;
+    const float3 DistToMin = WorldPos - GridMin;
+    const float3 DistToMax = GridMax - WorldPos;
+    const float BoundaryDist = min(min(DistToMin.x, DistToMax.x), min(min(DistToMin.y, DistToMax.y), min(DistToMin.z, DistToMax.z)));
+    const float DitherWidth = max(CoarseCellSize, CellSize);
+    const float DitherRate = 1.0 - saturate(BoundaryDist / max(DitherWidth, 1.0e-5));
+    if (DitherRate <= 0.0)
+    {
+        return 0.0;
+    }
+
+    uint CoarseCellIndex = k_irdv_vsp_invalid_probe_index;
+    return VspTryGetGlobalCellIndexFromWorldPos(WorldPos, CascadeIndex + 1u, CoarseCellIndex) ? DitherRate : 0.0;
+}
+
+uint VspGetSurfaceOwnerCells(float3 WorldPos, out uint2 OutGlobalCellIndices)
+{
+    OutGlobalCellIndices = k_irdv_vsp_invalid_probe_index.xx;
+
+    uint OwnerCascadeIndex = 0u;
+    uint OwnerCellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspTryGetFinestCascadeCellFromWorldPos(WorldPos, OwnerCascadeIndex, OwnerCellIndex))
+    {
+        return 0u;
+    }
+
+    OutGlobalCellIndices.x = OwnerCellIndex;
+    // Cascade境界付近だけ次cascadeにもowner cellを作る。参照実装のboundary dither相当で、
+    // 遠方cascadeへの接続を保ちつつ、通常はfinest cascadeだけをActiveProbe候補にする。
+    if (VspCalcCascadeBoundaryDitherRate(WorldPos, OwnerCascadeIndex) <= 0.0)
+    {
+        return 1u;
+    }
+
+    uint CoarseCellIndex = k_irdv_vsp_invalid_probe_index;
+    if (!VspTryGetGlobalCellIndexFromWorldPos(WorldPos, OwnerCascadeIndex + 1u, CoarseCellIndex))
+    {
+        return 1u;
+    }
+
+    OutGlobalCellIndices.y = CoarseCellIndex;
+    return 2u;
+}
+
+uint VspProbePoolDataAddress(uint ProbeIndex, uint WordIndex)
+{
+	return ProbeIndex * k_irdv_vsp_probe_pool_data_u32_count + WordIndex;
+}
+
+FInstantRdvVspProbePoolData VspLoadProbePoolData(StructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex)
+{
+    FInstantRdvVspProbePoolData Data;
+    Data.OwnerCellIndex = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 0u)];
+    Data.ProbeOffsetV3 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 1u)];
+    Data.LastSeenFrame = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 2u)];
+    Data.Reserved0 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 3u)];
+    Data.LastUpdateFrame = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 4u)];
+    Data.Reserved1 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 5u)];
+    Data.Reserved2 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 6u)];
+    Data.Reserved3 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 7u)];
+    return Data;
+}
+
+FInstantRdvVspProbePoolData VspLoadProbePoolData(RWStructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex)
+{
+    FInstantRdvVspProbePoolData Data;
+    Data.OwnerCellIndex = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 0u)];
+    Data.ProbeOffsetV3 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 1u)];
+    Data.LastSeenFrame = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 2u)];
+    Data.Reserved0 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 3u)];
+    Data.LastUpdateFrame = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 4u)];
+    Data.Reserved1 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 5u)];
+    Data.Reserved2 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 6u)];
+    Data.Reserved3 = ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 7u)];
+    return Data;
+}
+
+void VspStoreProbePoolData(RWStructuredBuffer<uint> ProbePoolBuffer, uint ProbeIndex, FInstantRdvVspProbePoolData Data)
+{
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 0u)] = Data.OwnerCellIndex;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 1u)] = Data.ProbeOffsetV3;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 2u)] = Data.LastSeenFrame;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 3u)] = Data.Reserved0;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 4u)] = Data.LastUpdateFrame;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 5u)] = Data.Reserved1;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 6u)] = Data.Reserved2;
+    ProbePoolBuffer[VspProbePoolDataAddress(ProbeIndex, 7u)] = Data.Reserved3;
+}
+
+float3 VspDecodeProbeOffset(uint Encoded)
+{
+    const uint SignBits = (Encoded >> 27u) & 0x7u;
+    const uint X = (Encoded >> 18u) & 0x1ffu;
+    const uint Y = (Encoded >> 9u) & 0x1ffu;
+    const uint Z = Encoded & 0x1ffu;
+    float3 Offset = float3(X, Y, Z) / 511.0.xxx;
+    Offset *= select(
+        bool3((SignBits & 0x4u) != 0u, (SignBits & 0x2u) != 0u, (SignBits & 0x1u) != 0u),
+        -1.0.xxx,
+        1.0.xxx);
+    return Offset;
+}
+
+uint VspEncodeProbeOffset(float3 Offset)
+{
+    Offset = clamp(Offset, -1.0.xxx, 1.0.xxx);
+    const uint SignBits =
+        ((Offset.x < 0.0 ? 1u : 0u) << 2u) |
+        ((Offset.y < 0.0 ? 1u : 0u) << 1u) |
+        ((Offset.z < 0.0 ? 1u : 0u) << 0u);
+    const uint3 Fixed = uint3(abs(Offset) * 511.0.xxx + 0.5.xxx);
+    return (SignBits << 27u) |
+        ((Fixed.x & 0x1ffu) << 18u) |
+        ((Fixed.y & 0x1ffu) << 9u) |
+        (Fixed.z & 0x1ffu);
+}
+
+uint VspProbeAtlasTileWidth;
+
+uint2 VspProbeAtlasAddress(uint ProbeIndex, uint2 OctCellId)
+{
+    return uint2(ProbeIndex % VspProbeAtlasTileWidth, ProbeIndex / VspProbeAtlasTileWidth) * k_irdv_vsp_probe_octmap_width + OctCellId;
+}
+
+uint3 VspIrradianceVolumeTextureCoord(uint CellIndex, uint TextureIndex)
+{
+    const uint CellCountPerCascade = VspCellCountPerCascade();
+    const uint CascadeIndex = CellIndex / CellCountPerCascade;
+    const uint LocalCellIndex = CellIndex - CascadeIndex * CellCountPerCascade;
+    const uint3 PhysicalCoord = VspLocalCellIndexToCoord(LocalCellIndex);
+    const uint TextureSliceDepth =
+        VspGridResolutionZ + k_irdv_vsp_irradiance_volume_guard_texel_count;
+    return uint3(
+        PhysicalCoord.xy,
+        CascadeIndex * TextureSliceDepth * k_irdv_vsp_irradiance_volume_sh_texture_count +
+            TextureIndex * TextureSliceDepth + PhysicalCoord.z);
+}
+
+void VspStoreIrradianceVolumeSignal(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    uint TextureIndex,
+    float4 Value)
+{
+    const uint CellCountPerCascade = VspCellCountPerCascade();
+    const uint CascadeIndex = CellIndex / CellCountPerCascade;
+    const uint LocalCellIndex = CellIndex - CascadeIndex * CellCountPerCascade;
+    const uint3 PhysicalCoord = VspLocalCellIndexToCoord(LocalCellIndex);
+    const uint TextureSliceDepth =
+        VspGridResolutionZ + k_irdv_vsp_irradiance_volume_guard_texel_count;
+    const uint TextureZOffset =
+        CascadeIndex * TextureSliceDepth * k_irdv_vsp_irradiance_volume_sh_texture_count +
+        TextureIndex * TextureSliceDepth;
+
+    // 正側Guardには物理座標0の値を複製する。辺と角も複製し、Linear Clampの8点補間を成立させる。
+    const uint DuplicateX = PhysicalCoord.x == 0u ? 1u : 0u;
+    const uint DuplicateY = PhysicalCoord.y == 0u ? 1u : 0u;
+    const uint DuplicateZ = PhysicalCoord.z == 0u ? 1u : 0u;
+    [unroll]
+    for (uint Z = 0u; Z <= DuplicateZ; ++Z)
+    {
+        [unroll]
+        for (uint Y = 0u; Y <= DuplicateY; ++Y)
+        {
+            [unroll]
+            for (uint X = 0u; X <= DuplicateX; ++X)
+            {
+                const uint3 StoreCoord = uint3(
+                    X == 0u ? PhysicalCoord.x : VspGridResolutionX,
+                    Y == 0u ? PhysicalCoord.y : VspGridResolutionY,
+                    TextureZOffset + (Z == 0u ? PhysicalCoord.z : VspGridResolutionZ));
+                IrradianceVolume[StoreCoord] = Value;
+            }
+        }
+    }
+}
+
+void VspStoreIrradianceVolumeSignals(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    float4 SkyVisibility,
+    float4 IrradianceR,
+    float4 IrradianceG,
+    float4 IrradianceB)
+{
+    VspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 0u, SkyVisibility);
+    VspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 1u, IrradianceR);
+    VspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 2u, IrradianceG);
+    VspStoreIrradianceVolumeSignal(IrradianceVolume, CellIndex, 3u, IrradianceB);
+}
+
+void VspStoreIrradianceVolumePackedCoefficients(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    float4 C0,
+    float4 C1,
+    float4 C2,
+    float4 C3)
+{
+    VspStoreIrradianceVolumeSignals(
+        IrradianceVolume,
+        CellIndex,
+        float4(C0.r, C1.r, C2.r, C3.r),
+        float4(C0.g, C1.g, C2.g, C3.g),
+        float4(C0.b, C1.b, C2.b, C3.b),
+        float4(C0.a, C1.a, C2.a, C3.a));
+}
+
+void VspLoadIrradianceVolumePackedCoefficientsRw(
+    RWTexture3D<float4> IrradianceVolume,
+    uint CellIndex,
+    out float4 C0,
+    out float4 C1,
+    out float4 C2,
+    out float4 C3)
+{
+    const float4 SkyVisibility = IrradianceVolume[VspIrradianceVolumeTextureCoord(CellIndex, 0u)];
+    const float4 IrradianceR = IrradianceVolume[VspIrradianceVolumeTextureCoord(CellIndex, 1u)];
+    const float4 IrradianceG = IrradianceVolume[VspIrradianceVolumeTextureCoord(CellIndex, 2u)];
+    const float4 IrradianceB = IrradianceVolume[VspIrradianceVolumeTextureCoord(CellIndex, 3u)];
+    C0 = float4(SkyVisibility.x, IrradianceR.x, IrradianceG.x, IrradianceB.x);
+    C1 = float4(SkyVisibility.y, IrradianceR.y, IrradianceG.y, IrradianceB.y);
+    C2 = float4(SkyVisibility.z, IrradianceR.z, IrradianceG.z, IrradianceB.z);
+    C3 = float4(SkyVisibility.w, IrradianceR.w, IrradianceG.w, IrradianceB.w);
+}
+
+uint VspPackRayRequestKey(uint ProbeIndex, uint OctCellIndex)
+{
+    return (ProbeIndex << kVspRayRequestOctCellBits) | (OctCellIndex & kVspRayRequestOctCellMask);
+}
+
+uint VspUnpackRayRequestProbeIndex(uint PackedKey)
+{
+    return PackedKey >> kVspRayRequestOctCellBits;
+}
+
+uint VspUnpackRayRequestOctCellIndex(uint PackedKey)
+{
+    return PackedKey & kVspRayRequestOctCellMask;
+}
+
+float3 VspOctDecode(float2 Uv)
+{
+    float2 F = Uv * 2.0 - 1.0;
+    float3 N = float3(F.x, F.y, 1.0 - abs(F.x) - abs(F.y));
+    const float T = saturate(-N.z);
+    N.xy += select(N.xy >= 0.0, -T.xx, T.xx);
+    return normalize(N);
+}
+
+float2 VspOctEncode(float3 N)
+{
+    N /= max(abs(N.x) + abs(N.y) + abs(N.z), 1.0e-6);
+    float2 Enc = N.xy;
+    if (N.z < 0.0)
+    {
+        Enc = (1.0 - abs(Enc.yx)) * select(Enc.xy >= 0.0, 1.0.xx, -1.0.xx);
+    }
+    return Enc * 0.5 + 0.5;
+}
+
+float4 VspEvaluateL1ShBasis(float3 Dir)
+{
+    return VspUtilEvaluateL1ShBasis(Dir);
+}
+
+bool VspIrradianceVolumeHasValidSH(Texture3D<float4> SHTexture, uint CellIndex)
+{
+    return VspUtilIrradianceVolumeHasValidSH(SHTexture, VspGetGridParams(), CellIndex);
+}
+
+#endif // INSTANT_RDV_VSP_STATE_USH
