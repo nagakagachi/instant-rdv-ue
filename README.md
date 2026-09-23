@@ -27,7 +27,7 @@ RdvGI enabled and disabled in the Unreal Engine sample scene:
 
 ## InstantRDV: GPU voxel scene construction from rasterization
 
-Conventional voxelization requires an additional geometry rasterization pass or CPU-to-GPU transfer of scene data. InstantRDV uses the DepthBuffer already generated during main-view rendering. It reconstructs world-space surface positions from depth and updates BBV with compute shaders. No additional geometry pass or CPU-side voxel build is required. The current implementation uses MainView input only.
+Conventional voxelization requires an additional geometry rasterization pass or CPU-to-GPU transfer of scene data. InstantRDV uses the DepthBuffer already generated during MainView rendering. It reconstructs world-space surface positions from depth and updates BBV with compute shaders. No additional geometry pass or CPU-side voxel build is required. The current demo implementation uses MainView input only.
 
 The design is not restricted to the MainView DepthBuffer. Any raster output that can reconstruct world-space surface positions can update BBV, including ShadowMaps, GBuffer data, and custom surface caches.
 
@@ -140,7 +140,7 @@ Both CVars default to enabled. The Settings Actor defaults for `Enabled` and `Gi
 
 ## Implementation notes
 
-- Main-view injection/removal, radiance update, VSP update, and the reduced-surface path can be observed independently through CVars.
+- MainView injection/removal, radiance update, VSP update, and the reduced-surface path can be observed independently through CVars.
 - VSP manages the probe pool, active probe list, ray request/result data, probe atlas, and IrradianceVolume as GPU resources.
 - VSP retains GPU resources while GI is disabled.
 - BrickRadiance outside MainView is not updated. High-radiance bricks remain after they move off-screen.
@@ -155,3 +155,6 @@ Both CVars default to enabled. The Settings Actor defaults for `Enabled` and `Gi
 | VSP cell size | `200 cm` |
 | VSP cascade count | `5` |
 | Sparse probe pool | `8192` probes shared across cascades |
+## License
+
+MIT. See [LICENSE](LICENSE).
