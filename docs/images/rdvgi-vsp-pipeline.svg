@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520">
+  <rect width="1600" height="520" fill="#ffffff"/>
+  <style>
+    .title{font:600 24px Arial,sans-serif;fill:#1f2933}.number{font:600 16px Arial,sans-serif;fill:#ffffff}.label{font:600 17px Arial,sans-serif;fill:#1f2933}.small{font:14px Arial,sans-serif;fill:#4b5563}.box{fill:#f8fafc;stroke:#6b7280;stroke-width:2}.line{stroke:#374151;stroke-width:2;fill:none}.accent{fill:#2563a6}.accent-light{fill:#dbeafe}
+  </style>
+  <text x="52" y="56" class="title">RdvGI: Visible Surface Probe update</text>
+  <text x="52" y="84" class="small">Visible surface samples drive sparse probe updates, BBV tracing, and volume evaluation.</text>
+
+  <rect x="45" y="160" width="225" height="206" class="box"/><circle cx="76" cy="191" r="17" class="accent"/><text x="71" y="197" class="number">1</text><text x="67" y="235" class="label">DepthBuffer</text><text x="67" y="266" class="small">visible surface depth</text><text x="67" y="289" class="small">and surface attributes</text>
+  <path d="M270 263 H310" class="line"/><path d="M298 254 L310 263 L298 272" class="line"/>
+
+  <rect x="310" y="160" width="225" height="206" class="box"/><circle cx="341" cy="191" r="17" class="accent"/><text x="336" y="197" class="number">2</text><text x="332" y="235" class="label">Spawn active probes</text><text x="332" y="258" class="label">on visible surfaces</text><text x="332" y="286" class="small">allocate or reuse</text><text x="332" y="307" class="small">pool entries</text>
+  <path d="M535 263 H575" class="line"/><path d="M563 254 L575 263 L563 272" class="line"/>
+
+  <rect x="575" y="160" width="225" height="206" class="box"/><circle cx="606" cy="191" r="17" class="accent"/><text x="601" y="197" class="number">3</text><text x="597" y="235" class="label">Trace BBV rays from</text><text x="597" y="258" class="label">active probes</text><text x="597" y="289" class="small">octahedral ray directions</text>
+  <path d="M800 263 H840" class="line"/><path d="M828 254 L840 263 L828 272" class="line"/>
+
+  <rect x="840" y="160" width="225" height="206" class="box"/><circle cx="871" cy="191" r="17" class="accent"/><text x="866" y="197" class="number">4</text><text x="862" y="235" class="label">Update active-probe</text><text x="862" y="258" class="label">octahedral maps</text><text x="862" y="289" class="small">radiance + sky visibility</text>
+  <path d="M1065 263 H1105" class="line"/><path d="M1093 254 L1105 263 L1093 272" class="line"/>
+
+  <rect x="1105" y="160" width="225" height="206" class="box"/><circle cx="1136" cy="191" r="17" class="accent"/><text x="1131" y="197" class="number">5</text><text x="1127" y="235" class="label">Update L1 SH</text><text x="1127" y="258" class="label">Irradiance Volume</text><text x="1127" y="289" class="small">cascade propagation</text>
+  <path d="M1330 263 H1370" class="line"/><path d="M1358 254 L1370 263 L1358 272" class="line"/>
+
+  <rect x="1370" y="160" width="185" height="206" class="accent-light" stroke="#2563a6" stroke-width="2"/><circle cx="1401" cy="191" r="17" class="accent"/><text x="1396" y="197" class="number">6</text><text x="1392" y="235" class="label">Sample GI in</text><text x="1392" y="258" class="label">surface shader</text><text x="1392" y="286" class="small">trilinear volume</text><text x="1392" y="307" class="small">sample</text>
+  <text x="52" y="444" class="small">Probe relocation is applied before ray tracing. Material evaluation reads irradiance and sky visibility from the cascade volume.</text>
+</svg>

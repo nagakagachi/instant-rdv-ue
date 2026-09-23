@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620">
+  <rect width="1600" height="620" fill="#ffffff"/>
+  <style>.title{font:600 22px Arial,sans-serif;fill:#1f2933}.label{font:16px Arial,sans-serif;fill:#374151}.small{font:14px Arial,sans-serif;fill:#4b5563}.line{stroke:#374151;stroke-width:2;fill:none}.grid{stroke:#9ca3af;stroke-width:1;fill:none}.boundary{stroke:#111827;stroke-width:4;fill:none}.surface{stroke:#111827;stroke-width:5;fill:none}.blue{fill:#2563a6}</style>
+  <text x="52" y="52" class="title">BBV voxel injection</text>
+  <text x="80" y="110" class="title">DepthBuffer side view</text><text x="80" y="137" class="small">Nearest depth samples are reconstructed as world-space surface positions.</text>
+  <path d="M70 325 H142" class="line"/><path d="M130 316 L142 325 L130 334" class="line"/><text x="54" y="300" class="label">camera</text>
+  <g class="grid" stroke-dasharray="5 5"><path d="M160 182 V480 M200 182 V480 M240 182 V480 M280 182 V480 M320 182 V480 M360 182 V480 M400 182 V480 M440 182 V480"/></g>
+  <path d="M160 430 H200 V390 H240 V350 H280 V350 H320 V310 H360 V270 H400 V270 H440 V230" class="surface"/>
+  <text x="158" y="525" class="label">depth surface</text>
+  <path d="M510 325 H650" class="line"/><path d="M638 316 L650 325 L638 334" class="line"/><text x="535" y="301" class="label">inject occupancy</text>
+  <text x="700" y="110" class="title">BBV brick grid</text><text x="700" y="137" class="small">2D view of adjacent 8 x 8 x 8 bricks. Each block shows one 8 x 8 slice.</text>
+  <rect x="700" y="185" width="720" height="320" class="grid"/>
+  <path d="M720 185 V505 M740 185 V505 M760 185 V505 M780 185 V505 M800 185 V505 M820 185 V505 M840 185 V505 M860 185 V505 M880 185 V505 M900 185 V505 M920 185 V505 M940 185 V505 M960 185 V505 M980 185 V505 M1000 185 V505 M1020 185 V505 M1040 185 V505 M1060 185 V505 M1080 185 V505 M1100 185 V505 M1120 185 V505 M1140 185 V505 M1160 185 V505 M1180 185 V505 M1200 185 V505 M1220 185 V505 M1240 185 V505 M1260 185 V505 M1280 185 V505 M1300 185 V505 M1320 185 V505 M1340 185 V505 M1360 185 V505 M1380 185 V505 M1400 185 V505 M700 205 H1420 M700 225 H1420 M700 245 H1420 M700 265 H1420 M700 285 H1420 M700 305 H1420 M700 325 H1420 M700 345 H1420 M700 365 H1420 M700 385 H1420 M700 405 H1420 M700 425 H1420 M700 445 H1420 M700 465 H1420 M700 485 H1420" class="grid"/>
+  <rect x="860" y="185" width="160" height="160" class="boundary"/><rect x="1020" y="185" width="160" height="160" class="boundary"/><rect x="1180" y="185" width="160" height="160" class="boundary"/>
+  <rect x="860" y="345" width="160" height="160" class="boundary"/><rect x="1020" y="345" width="160" height="160" class="boundary"/><rect x="1180" y="345" width="160" height="160" class="boundary"/>
+  <rect x="1020" y="465" width="20" height="20" class="blue"/><rect x="1040" y="425" width="20" height="20" class="blue"/><rect x="1060" y="385" width="20" height="20" class="blue"/><rect x="1080" y="385" width="20" height="20" class="blue"/><rect x="1100" y="345" width="20" height="20" class="blue"/><rect x="1120" y="305" width="20" height="20" class="blue"/><rect x="1140" y="305" width="20" height="20" class="blue"/><rect x="1160" y="265" width="20" height="20" class="blue"/>
+  <text x="1038" y="548" class="label">selected brick</text><text x="1038" y="574" class="small">8 x 8 x 8 occupancy bits</text>
+</svg>
