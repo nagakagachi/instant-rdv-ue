@@ -45,6 +45,8 @@ BBV voxel occupancy and brick radiance debug views:
 
 BBV groups voxels into bricks so high-frequency geometry and lower-frequency material data can use different representations. Space is divided into a brick grid, and each brick stores voxel occupancy as a bitmask. The grid follows the camera as a ToroidalGrid and uses a dense layout for fast access. In the demo, one brick contains 8x8x8 voxels and is represented by 512 bits. A 64^3-brick grid provides geometry voxel resolution equivalent to 512^3 voxels.
 
+The BBV voxel structure is similar to the bitmask-brick voxel representation presented in GDC 2025's [Global Illumination in 'Once Human': A Hybrid Approach for 16km Open World](https://gdcvault.com/AI/gdc-25/).
+
 BBV also stores lower-frequency data per brick. The demo stores SceneColor-derived radiance as coarse brick radiance and samples it at BBV ray-trace hit locations for RdvGI.
 
 Surfaces reconstructed from DepthBuffer are added to occupancy through voxel **injection**. Areas that are no longer observed after camera movement or coverage changes are removed through **removal**. These incremental updates keep BBV synchronized with the scene in real time.
@@ -72,6 +74,8 @@ BBV supports voxel ray tracing from compute shaders. Ray traversal tests BBV occ
 ## RdvGI: probe-based GI on RDV
 
 RdvGI is a GI implementation that uses BBV ray tracing. Similar to Enshrouded GI and SurfelGI, it updates probes from visible surfaces.
+
+The visible-surface-driven probe update is informed by the Frustum Probe approach presented in [Realtime Global Illumination in Enshrouded](https://www.youtube.com/watch?v=57F1ezwH7Mk).
 
 VSP places and reuses sparse probes from surface cells observed through DepthBuffer. Each probe captures radiance and sky visibility into an octahedral map with BBV ray tracing, then projects the result to L1 spherical harmonics. The projection is propagated into cascaded IrradianceVolumes. Material evaluation trilinearly samples the volume to obtain indirect diffuse irradiance and sky-visibility IBL.
 

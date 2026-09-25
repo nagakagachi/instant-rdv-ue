@@ -46,6 +46,8 @@ BBV の voxel occupancy と brick radiance のデバッグ表示です。
 
 BBV は、ジオメトリ情報を高周波、材質情報を低周波で保持するために、voxel をグループ（brick）単位で管理するデータ構造です。空間を brick grid に分割し、brick 内の voxel occupancy を bitmask として保持します。カメラに追従する ToroidalGrid で管理され、高速なアクセスのために dense なレイアウトを採用しています。デモ実装では 8x8x8 voxel を 1 brick として 512 bit で表現します。64^3 bricks で 512^3 解像度相当のジオメトリ voxel 表現になります。
 
+BBV の voxel データ構造は、GDC 2025 の [Global Illumination in 'Once Human': A Hybrid Approach for 16km Open World](https://gdcvault.com/AI/gdc-25/) で紹介された bitmask brick voxel 表現に類似しています。
+
 ジオメトリ情報よりも低周波の情報として、brick ごとの材質などの情報を追加で保持します。デモ実装では SceneColor 由来の輝度を brick 単位の coarse radiance として格納し、RdvGI のレイトレーシングのヒット位置の輝度としてサンプリングします。
 
 DepthBuffer から復元した surface は voxel **injection** として occupancy に追加します。視点移動および画面上のカバレッジの変化で観測されなくなった領域は **removal** で除去します。BBV はこの逐次更新によってリアルタイムにシーンに追従する voxel scene 表現です。
@@ -74,6 +76,8 @@ BBV は Compute Shader から voxel ray tracing できます。ray traversal は
 ## RdvGI: RDV 上で実装する probe-based GI
 
 RdvGI は BBV ray tracing を使用する GI の実装です。Enshrouded の GI および SurfelGI と同様に、visible surface を起点に probe を更新します。
+
+visible surface を起点とする probe 更新は、[Realtime Global Illumination in Enshrouded](https://www.youtube.com/watch?v=57F1ezwH7Mk) で紹介された Frustum Probe を参考にしています。
 
 VSP は DepthBuffer で観測した surface cell から sparse probe を配置・再利用します。各 probe は BBV ray tracing で octahedral map に radiance と sky visibility を capture し、L1 spherical harmonics へ投影します。投影結果を cascade IrradianceVolume へ伝播・格納します。material evaluation は volume を trilinear sample し、indirect diffuse irradiance と sky visibility IBL を取得します。
 
