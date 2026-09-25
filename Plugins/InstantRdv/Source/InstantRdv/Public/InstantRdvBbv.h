@@ -116,7 +116,7 @@ public:
         bool bUseLiveResources, bool bUseVspResources);
 
     // BBV Geometry 更新（Injection / Removal）本体。
-    void ExecuteGeometryUpdate(
+    FRDGTexture* ExecuteGeometryUpdate(
         FRDGBuilder& GraphBuilder,
         const FSceneView& View,
         FRDGTexture* SceneDepthTexture,
@@ -160,7 +160,8 @@ public:
         FRDGTexture* SceneDepthTexture,
         bool bEnableVspUpdate,
         bool bUseProbeTraceOffset,
-        bool bUseReducedSurfaceBuffer);
+        bool bUseReducedSurfaceBuffer,
+        FRDGTexture* GeometryReducedSurfaceTexture);
 
 private:
 

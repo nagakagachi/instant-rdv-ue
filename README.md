@@ -91,15 +91,15 @@ ActiveProbe and IrradianceVolume debug views:
 
 ## GPU update flow
 
-InstantRDV uses one selected MainView as input. BBV geometry updates run before BasePass. BrickRadiance and VSP update after lighting and before tonemapping. The latter updates once for one owner view in a ViewFamily.
+InstantRDV uses one selected MainView as input. BBV geometry and VSP updates run before BasePass. BrickRadiance updates after lighting and before tonemapping. Each update runs once for one owner view in a ViewFamily.
 
 1. **Toroidal BBV tracking**: The BBV grid moves with the camera. Bricks entering the grid are cleared.
 2. **Surface sample construction**: World-space surface positions are reconstructed from MainView SceneDepth. The ReducedSurface path stores depth, normal, and normal confidence as low-resolution surface samples shared by geometry, BrickRadiance, and VSP updates.
 3. **Incremental geometry update**: Surface samples inject BBV voxels. Removal clears voxels remaining in front of the current depth surface. Injection aggregates updates to the same occupancy word with Wave Intrinsics before atomic operations.
-4. **BrickRadiance update**: SceneColor after lighting and before tonemapping is associated with occupancy surfaces. Coarse radiance accumulated and averaged per brick becomes the hit radiance for later BBV ray tracing.
-5. **Visible Surface Probe update**: Visible surfaces are mapped to VSP cells and only visible cells are compacted. Required probes are allocated from the probe pool, and probe origins are relocated with surface anchors and BBV ray tracing.
-6. **Probe capture**: Each active probe traces 6x6 octahedral ray directions through BBV occupancy. Hits provide brick radiance; misses provide sky visibility. Both are written to the ActiveProbe octahedral map. Work scales with active probes and ray requests rather than the full grid.
-7. **IrradianceVolume update**: Octahedral maps are integrated into L1 SH and update the IrradianceVolume at probe owner cells. Nearby SH values are checkerboard-propagated into cells without probes.
+4. **Visible Surface Probe update**: Visible surfaces are mapped to VSP cells and only visible cells are compacted. Required probes are allocated from the probe pool, and probe origins are relocated with surface anchors and BBV ray tracing.
+5. **Probe capture**: Each active probe traces 6x6 octahedral ray directions through BBV occupancy. Hits read BrickRadiance from the previous frame; misses provide sky visibility. Both are written to the ActiveProbe octahedral map. Work scales with active probes and ray requests rather than the full grid.
+6. **IrradianceVolume update**: Octahedral maps are integrated into L1 SH and update the IrradianceVolume at probe owner cells. Nearby SH values are checkerboard-propagated into cells without probes.
+7. **BrickRadiance update**: SceneColor after lighting and before tonemapping is associated with occupancy surfaces. Coarse radiance accumulated and averaged per brick becomes the hit radiance for the next frame's VSP ray resolve.
 
 Material shaders evaluate the cascaded IrradianceVolume independently from the update passes. After cascade selection and boundary dithering, L1 SH is evaluated with the surface normal to obtain diffuse irradiance and sky-visibility IBL.
 
@@ -107,7 +107,7 @@ Material shaders evaluate the cascaded IrradianceVolume independently from the u
 
 ### Overview
 
-InstantRDV is implemented as an Unreal Engine plugin using `FSceneViewExtensionBase`. It adds BBV geometry updates through the pre-BasePass callback and performs BrickRadiance and VSP updates in the `BeforeDOF` post-processing pass. Material Functions sample the GPU resources maintained by the plugin.
+InstantRDV is implemented as an Unreal Engine plugin using `FSceneViewExtensionBase`. It adds BBV geometry and VSP updates through the pre-BasePass callback, then performs BrickRadiance updates in the `BeforeDOF` post-processing pass. Material Functions sample the GPU resources maintained by the plugin.
 
 ### Debug menu
 

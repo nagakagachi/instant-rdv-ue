@@ -321,7 +321,7 @@ void FInstantRdvSceneViewExtension::ResetAcceptedViewFamilyState_RenderThread()
     AcceptedViewFamily_RenderThread = nullptr;
     UpdateOwnerView_RenderThread = nullptr;
     bUseReducedSurfaceBufferForAcceptedFamily_RenderThread = true;
-    bAcceptedFamilyPostProcessUpdated_RenderThread = false;
+    bAcceptedFamilyVspUpdated_RenderThread = false;
 }
 
 bool FInstantRdvSceneViewExtension::TryAcceptViewFamilyForRdv_RenderThread(FRDGBuilder& GraphBuilder, const FSceneViewFamily& ViewFamily)
@@ -415,8 +415,8 @@ bool FInstantRdvSceneViewExtension::IsRdvUpdateView_RenderThread(const FSceneVie
 bool FInstantRdvSceneViewExtension::CanRunDebugVisualize_RenderThread(const FSceneView& View) const
 {
     // Debug描画はRDV lifecycleを書き換えない読み取り専用。
-    // owner ViewのBeforeDOF更新が完了していない場合は、古い/未接続リソースを読むので抑止する。
-    return IsAcceptedViewFamily_RenderThread(View.Family) && bAcceptedFamilyPostProcessUpdated_RenderThread;
+    // owner ViewのVSP更新が完了していない場合は、古い/未接続リソースを読むので抑止する。
+    return IsAcceptedViewFamily_RenderThread(View.Family) && bAcceptedFamilyVspUpdated_RenderThread;
 }
 
 bool FInstantRdvSceneViewExtension::IsRdvFamilyAlreadyUpdated_RenderThread(const FSceneViewFamily& ViewFamily) const
@@ -476,13 +476,29 @@ void FInstantRdvSceneViewExtension::ExecuteBbvGeometryUpdate_RenderThread(FRDGBu
     const bool bEnableMainViewUpdate = (CVarInstantRdvBbvMainViewUpdate.GetValueOnRenderThread() != 0);
     const bool bEnableMainViewGeometryInjection = bEnableMainViewUpdate && (CVarInstantRdvBbvMainViewInjection.GetValueOnRenderThread() != 0);
     const bool bEnableMainViewGeometryRemoval = bEnableMainViewUpdate && (CVarInstantRdvBbvMainViewRemoval.GetValueOnRenderThread() != 0);
-    BbvSystem->ExecuteGeometryUpdate(
+    FRDGTextureRef ReducedSurfaceTexture = BbvSystem->ExecuteGeometryUpdate(
         GraphBuilder,
         View,
         SceneDepthTexture,
         bEnableMainViewGeometryInjection,
         bEnableMainViewGeometryRemoval,
         bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
+
+    // Match the reference implementation: VSP uses the current BBV geometry and
+    // the previous frame's BrickRadiance. The current SceneColor is injected later.
+    const bool bEnableVspUpdate =
+        ActiveLevelSettings_RenderThread.bGiEnabled &&
+        CVarInstantRdvGiEnable.GetValueOnRenderThread() != 0 &&
+        CVarInstantRdvVspUpdate.GetValueOnRenderThread() != 0;
+    BbvSystem->ExecuteVspUpdate(
+        GraphBuilder,
+        View,
+        SceneDepthTexture,
+        bEnableVspUpdate,
+        CVarInstantRdvVspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
+        bUseReducedSurfaceBufferForAcceptedFamily_RenderThread,
+        ReducedSurfaceTexture);
+    bAcceptedFamilyVspUpdated_RenderThread = true;
 }
 
 void FInstantRdvSceneViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& GraphBuilder, bool bDepthBufferIsPopulated)
@@ -576,14 +592,6 @@ FScreenPassTexture FInstantRdvSceneViewExtension::BbvBeforeDof_RenderThread(FRDG
                 bEnableRadianceInjection,
                 bEnableRadianceResolve,
                 bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
-            BbvSystem->ExecuteVspUpdate(
-                GraphBuilder,
-                View,
-                SceneDepthTexture,
-                ActiveLevelSettings_RenderThread.bGiEnabled && CVarInstantRdvGiEnable.GetValueOnRenderThread() != 0 && CVarInstantRdvVspUpdate.GetValueOnRenderThread() != 0,
-                CVarInstantRdvVspTraceUseProbeOffset.GetValueOnRenderThread() != 0,
-                bUseReducedSurfaceBufferForAcceptedFamily_RenderThread);
-            bAcceptedFamilyPostProcessUpdated_RenderThread = true;
         }
 
         const int32 BbvDebugMode = CVarInstantRdvBbvVisDebug.GetValueOnRenderThread();

@@ -93,15 +93,15 @@ ActiveProbe と IrradianceVolume のデバッグ表示です。
 
 ## GPU 更新フロー
 
-InstantRDV の更新は選択した MainView を入力とします。BBV のジオメトリは BasePass 前に更新し、BrickRadiance と VSP は lighting 後かつ tone mapping 前に更新します。後者は同一 ViewFamily の一つの view を入力として 1 回だけ実行します。
+InstantRDV の更新は選択した MainView を入力とします。BBV のジオメトリと VSP は BasePass 前に更新し、BrickRadiance は lighting 後かつ tone mapping 前に更新します。各更新は同一 ViewFamily の一つの owner view を入力として 1 回だけ実行します。
 
 1. **Toroidal BBV の追従**: camera position に応じて BBV grid を移動し、新たに流入した brick を clear します。
 2. **Surface sample の構築**: MainView の SceneDepth から world-space surface position を復元します。ReducedSurface path では depth、normal、normal confidence を低解像度の surface sample として保持します。この sample は geometry、BrickRadiance、VSP の各更新で共有します。
 3. **Geometry の逐次更新**: surface sample を BBV voxel へ injection します。現在の depth surface より手前に残る voxel は removal で除去します。injection は Wave Intrinsics で同一 occupancy word の更新を集約してから atomic 操作を行います。
-4. **BrickRadiance の更新**: lighting 後、tone mapping 前の SceneColor を occupancy surface へ対応付けます。brick ごとに蓄積・平均した coarse radiance は、後段の BBV ray trace の hit radiance になります。
-5. **Visible Surface Probe の更新**: visible surface を VSP cell へ対応付け、可視 cell だけを compact します。probe pool から必要な probe を割り当て、surface anchor と BBV ray tracing で probe origin を relocation します。
-6. **Probe capture**: active probe ごとに 6x6 octahedral directions の ray を生成し、BBV occupancy を trace します。hit は brick radiance、miss は sky visibility として ActiveProbe の octahedral map へ反映します。処理量は grid 全体ではなく active probe と ray request の数で決まります。
-7. **IrradianceVolume の更新**: octahedral map を L1 SH へ積分し、probe owner cell の IrradianceVolume を更新します。probe がない cell には近傍の SH を checkerboard propagation します。
+4. **Visible Surface Probe の更新**: visible surface を VSP cell へ対応付け、可視 cell だけを compact します。probe pool から必要な probe を割り当て、surface anchor と BBV ray tracing で probe origin を relocation します。
+5. **Probe capture**: active probe ごとに 6x6 octahedral directions の ray を生成し、BBV occupancy を trace します。hit では前フレームの BrickRadiance を読み、miss は sky visibility として ActiveProbe の octahedral map へ反映します。処理量は grid 全体ではなく active probe と ray request の数で決まります。
+6. **IrradianceVolume の更新**: octahedral map を L1 SH へ積分し、probe owner cell の IrradianceVolume を更新します。probe がない cell には近傍の SH を checkerboard propagation します。
+7. **BrickRadiance の更新**: lighting 後、tone mapping 前の SceneColor を occupancy surface へ対応付けます。brick ごとに蓄積・平均した coarse radiance は、次フレームの VSP ray resolve における hit radiance になります。
 
 Material shader は更新処理とは別に、cascade IrradianceVolume を trilinear sample します。cascade selection と boundary dither の後、L1 SH を surface normal で評価して diffuse irradiance と sky visibility IBL を取得します。
 
@@ -109,7 +109,7 @@ Material shader は更新処理とは別に、cascade IrradianceVolume を trili
 
 ### 概要
 
-InstantRDV は `FSceneViewExtensionBase` を利用する Unreal Engine プラグインとして実装しています。BBV のジオメトリ更新は BasePass 前のコールバックで実行し、BrickRadiance と VSP の更新は `BeforeDOF` のポストプロセスパスで実行します。Material Function はプラグインが保持する GPU resource をサンプリングします。
+InstantRDV は `FSceneViewExtensionBase` を利用する Unreal Engine プラグインとして実装しています。BBV のジオメトリ更新と VSP 更新は BasePass 前のコールバックで実行し、BrickRadiance の更新は `BeforeDOF` のポストプロセスパスで実行します。Material Function はプラグインが保持する GPU resource をサンプリングします。
 
 ### Debug menu
 

@@ -1304,7 +1304,7 @@ void FInstantRdvBbv::FillSceneUniformBufferParams_RenderThread(
         : OutParams.BbvRadianceAccum;
 }
 
-void FInstantRdvBbv::ExecuteGeometryUpdate(
+FRDGTexture* FInstantRdvBbv::ExecuteGeometryUpdate(
     FRDGBuilder& GraphBuilder,
     const FSceneView& View,
     FRDGTexture* SceneDepthTexture,
@@ -1314,7 +1314,7 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
 {
     if (SceneDepthTexture == nullptr)
     {
-        return;
+        return nullptr;
     }
 
     const uint32 BrickCount = SystemState.bbv.TrGrid.GetCellCount();
@@ -1682,6 +1682,8 @@ void FInstantRdvBbv::ExecuteGeometryUpdate(
         const uint32 GroupX = FMath::DivideAndRoundUp(PerFrameCount, 64u);
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("InstantRdv.BbvElementUpdate"), ERDGPassFlags::Compute, ComputeShader, Parameters, FIntVector(GroupX, 1, 1));
     }
+
+    return ReducedSurfaceTexture;
 }
 
 void FInstantRdvBbv::ExecuteRadianceUpdate(
@@ -1836,7 +1838,8 @@ void FInstantRdvBbv::ExecuteVspUpdate(
     FRDGTexture* SceneDepthTexture,
     bool bEnableVspUpdate,
     bool bUseProbeTraceOffset,
-    bool bUseReducedSurfaceBuffer)
+    bool bUseReducedSurfaceBuffer,
+    FRDGTexture* GeometryReducedSurfaceTexture)
 {
     if (!bEnableVspUpdate || SceneDepthTexture == nullptr || !SystemState.bRenderInitialized)
     {
@@ -1951,15 +1954,11 @@ void FInstantRdvBbv::ExecuteVspUpdate(
         TEXT("InstantRdv.VspSurfaceCellMask"));
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(VspSurfaceCellMaskBuffer), 0u);
 
-    // VSP detectionとPreUpdateは必ず同じローカルRDG textureを共有する。
-    // CVarがReducedを要求していても、Geometry graphからのExtractionが未完了またはサイズ不一致なら
-    // この更新世代全体をLegacy検出へfallbackし、Reduced検出とLegacy relocationの混在を防ぐ。
+    // Geometry update and VSP update share the same current-graph texture.
+    // Do not re-register the pooled texture here: on the initial frame or after a resize,
+    // extraction has not completed and a separately registered handle would be invalid.
     FRDGTextureRef ReducedSurfaceTexture = bUseReducedSurfaceBuffer
-        ? RegisterReducedSurfaceBuffer(
-            GraphBuilder,
-            SystemState.vsp.ReducedSurfaceBuffer.PooledTexture,
-            SystemState.vsp.ReducedSurfaceBuffer.Extent,
-            ReducedExtent)
+        ? GeometryReducedSurfaceTexture
         : nullptr;
     const bool bUseReducedPath = ReducedSurfaceTexture != nullptr;
     if (bUseReducedPath)
